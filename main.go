@@ -348,8 +348,13 @@ func (s *Server) sendToPlayer(playerID int32, data []byte) {
 		return
 	}
 
-	// Block if buffer full → guarantees eventual consistency
-	player.Send <- data
+	// Non‑blocking send; drop the message if the client's buffer is full.
+	// Avoids stalling the entire server when a slow client back‑pressures.
+	select {
+	case player.Send <- data:
+	default:
+		// TODO: increment metric / log dropped message
+	}
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
