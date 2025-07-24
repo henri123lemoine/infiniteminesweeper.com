@@ -16,7 +16,9 @@ import (
 )
 
 const (
-	ChunkSize = 64
+	ChunkSize        = 64
+	SendBufSize      = 4096  // outbound msgs kept per player before back‑pressure
+	MaxRevealsPerMin = 10000 // relaxed flood‑fill budget
 )
 
 type ChunkID struct {
@@ -40,6 +42,9 @@ type Player struct {
 	// Rate limiting for reveals
 	RevealWindowStart time.Time
 	RevealCount       int
+
+	// Suspicion metrics (for admin dashboards, nothing enforced server‑side)
+	SusRevealOverflow int // # of extra reveals processed beyond MaxRevealsPerMin
 }
 
 // TokenBucket for rate limiting seed requests (200/min)
@@ -139,10 +144,10 @@ type Server struct {
 	stateMu sync.RWMutex
 
 	// World state - just what cells are revealed and by whom
-	chunks     map[ChunkID]*ChunkBits    // Which cells are revealed (bitset)
-	cellOwners map[ChunkID]map[int]int32 // bitIndex -> playerID
-	scores     map[int32]uint32          // playerID -> reveal count
-	subs       map[ChunkID]map[int32]chan Reveal
+	chunks     map[ChunkID]*ChunkBits         // Which cells are revealed (bitset)
+	cellOwners map[ChunkID]map[int]int32      // bitIndex -> playerID
+	scores     map[int32]uint32               // playerID -> reveal count
+	subs       map[ChunkID]map[int32]struct{} // who wants reveals for each chunk
 
 	// Players
 	playersMu    sync.RWMutex
@@ -162,7 +167,7 @@ func NewServer() *Server {
 		chunks:       make(map[ChunkID]*ChunkBits),
 		cellOwners:   make(map[ChunkID]map[int]int32),
 		scores:       make(map[int32]uint32),
-		subs:         make(map[ChunkID]map[int32]chan Reveal),
+		subs:         make(map[ChunkID]map[int32]struct{}),
 		players:      make(map[int32]*Player),
 		seedCache:    make(map[ChunkID]uint64),
 		nextPlayerID: 1,
@@ -253,31 +258,19 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 }
 
 func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
-	// Track which players we've already sent to, to avoid duplicates
-	sentTo := make(map[int32]bool)
+	// Caller already holds stateMu (inside reveal())
+	payload := mustJSON(reveal) // marshal once
+	sent := make(map[int32]struct{})
 
-	// Broadcast to 3x3 neighborhood of chunks
 	for dy := int32(-1); dy <= 1; dy++ {
 		for dx := int32(-1); dx <= 1; dx++ {
-			neighborChunk := ChunkID{
-				X: reveal.ChunkID.X + dx,
-				Y: reveal.ChunkID.Y + dy,
-			}
-
-			if subs, exists := s.subs[neighborChunk]; exists {
-				for playerID, ch := range subs {
-					// Skip if we've already sent to this player
-					if sentTo[playerID] {
-						continue
-					}
-					sentTo[playerID] = true
-
-					select {
-					case ch <- reveal:
-					default:
-						// Non-blocking send, drop if channel full
-					}
+			chk := ChunkID{reveal.ChunkID.X + dx, reveal.ChunkID.Y + dy}
+			for pid := range s.subs[chk] {
+				if _, dup := sent[pid]; dup {
+					continue
 				}
+				s.sendToPlayer(pid, payload)
+				sent[pid] = struct{}{}
 			}
 		}
 	}
@@ -287,14 +280,12 @@ func (s *Server) sendToPlayer(playerID int32, data []byte) {
 	s.playersMu.RLock()
 	player, exists := s.players[playerID]
 	s.playersMu.RUnlock()
-
-	if exists {
-		select {
-		case player.Send <- data:
-		default:
-			// Drop if channel full
-		}
+	if !exists {
+		return
 	}
+
+	// Block if buffer full → guarantees eventual consistency
+	player.Send <- data
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -311,7 +302,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	player := &Player{
 		ID:   playerID,
 		Conn: conn,
-		Send: make(chan []byte, 256),
+		Send: make(chan []byte, SendBufSize),
 		TokenBucket: TokenBucket{
 			tokens: 200,
 		},
@@ -364,8 +355,8 @@ func (s *Server) readPump(player *Player) {
 				player.RevealCount = 0
 			}
 
-			if player.RevealCount >= 100 {
-				continue
+			if player.RevealCount >= MaxRevealsPerMin {
+				player.SusRevealOverflow++
 			}
 
 			player.RevealCount++
@@ -430,13 +421,9 @@ func (s *Server) writePump(player *Player) {
 func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	s.stateMu.Lock()
 	if s.subs[chunkID] == nil {
-		s.subs[chunkID] = make(map[int32]chan Reveal)
+		s.subs[chunkID] = make(map[int32]struct{})
 	}
-
-	if _, exists := s.subs[chunkID][playerID]; !exists {
-		s.subs[chunkID][playerID] = make(chan Reveal, 100)
-		go s.handleSubscription(playerID, chunkID, s.subs[chunkID][playerID])
-	}
+	s.subs[chunkID][playerID] = struct{}{}
 
 	// Prepare chunk sync - just revealed cells and their owners
 	chunk, chunkExists := s.chunks[chunkID]
@@ -481,17 +468,6 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	s.sendToPlayer(playerID, mustJSON(msg))
 }
 
-func (s *Server) handleSubscription(playerID int32, chunkID ChunkID, revealCh chan Reveal) {
-	for reveal := range revealCh {
-		data, err := json.Marshal(reveal)
-		if err != nil {
-			continue
-		}
-
-		s.sendToPlayer(playerID, data)
-	}
-}
-
 func (s *Server) removePlayer(playerID int32) {
 	s.playersMu.Lock()
 	player, exists := s.players[playerID]
@@ -503,10 +479,8 @@ func (s *Server) removePlayer(playerID int32) {
 
 	s.stateMu.Lock()
 	for chunkID, subs := range s.subs {
-		if ch, exists := subs[playerID]; exists {
-			close(ch)
+		if _, exists := subs[playerID]; exists {
 			delete(subs, playerID)
-
 			if len(subs) == 0 {
 				delete(s.subs, chunkID)
 			}
