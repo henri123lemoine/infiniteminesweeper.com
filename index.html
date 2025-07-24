@@ -693,7 +693,26 @@
                 setTick(t => t + 1);
               }
             } else if (data.type === 'leaderboard') {
-              setLeaderboard(data.scores || {});
+              // Handle new leaderboard format with entries array
+              if (data.entries) {
+                const scores = {};
+                data.entries.forEach(entry => {
+                  // Parse formatted scores like "5", "1.2k", "1.5M"
+                  let score = entry.score;
+                  if (score.endsWith('k')) {
+                    score = parseFloat(score.slice(0, -1)) * 1000;
+                  } else if (score.endsWith('M')) {
+                    score = parseFloat(score.slice(0, -1)) * 1000000;
+                  } else {
+                    score = parseInt(score) || 0;
+                  }
+                  scores[entry.playerId] = score;
+                });
+                setLeaderboard(scores);
+              } else {
+                // Fallback to old format
+                setLeaderboard(data.scores || {});
+              }
             } else if (data.type === 'seed') {
               const key = `${data.chunkX},${data.chunkY}`;
               seedCache.current.set(key, BigInt(data.seed));

@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"runtime"
+	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -42,6 +44,9 @@ type Player struct {
 	// Rate limiting for reveals
 	RevealWindowStart time.Time
 	RevealCount       int
+
+	// Leaderboard version the player has already received
+	LastLBVersion uint64
 
 	// Suspicion metrics (for admin dashboards, nothing enforced server‑side)
 	SusRevealOverflow int // # of extra reveals processed beyond MaxRevealsPerMin
@@ -149,6 +154,11 @@ type Server struct {
 	scores     map[int32]uint32               // playerID -> reveal count
 	subs       map[ChunkID]map[int32]struct{} // who wants reveals for each chunk
 
+	// --- leaderboard cache ---
+	lbVersion uint64
+	lbJSON    []byte
+	lbDirty   bool
+
 	// Players
 	playersMu    sync.RWMutex
 	players      map[int32]*Player
@@ -201,6 +211,50 @@ func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
 	return seed
 }
 
+// Leaderboard helpers
+
+type lbEntry struct {
+	PlayerID int32  `json:"playerId"`
+	Score    string `json:"score"`
+}
+
+func formatScore(n uint32) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return strconv.Itoa(int(n))
+	}
+}
+
+// Assumes caller holds s.stateMu (write lock)
+func (s *Server) buildLeaderboardUnsafe() {
+	// Collect & sort
+	entries := make([]lbEntry, 0, len(s.scores))
+	for pid, sc := range s.scores {
+		entries = append(entries, lbEntry{PlayerID: pid, Score: formatScore(sc)})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Score > entries[j].Score })
+	if len(entries) > 20 {
+		entries = entries[:20]
+	}
+
+	lb := struct {
+		Type    string    `json:"type"`
+		Version uint64    `json:"version"`
+		Entries []lbEntry `json:"entries"`
+	}{
+		Type:    "leaderboard",
+		Version: s.lbVersion + 1,
+		Entries: entries,
+	}
+
+	s.lbVersion++
+	s.lbJSON = mustJSON(lb)
+}
+
 // Bounds checking for reveal requests
 func (s *Server) isValidCoordinate(x, y int) bool {
 	return x >= 0 && x < ChunkSize && y >= 0 && y < ChunkSize
@@ -240,8 +294,9 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	}
 	s.cellOwners[chunkID][bitIndex] = playerID
 
-	// Update score
+	// Update score & mark leaderboard dirty
 	s.scores[playerID]++
+	s.lbDirty = true
 
 	// Create reveal message
 	reveal := Reveal{
@@ -313,8 +368,17 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.playersMu.Unlock()
 
 	// Send initial leaderboard
-	leaderboard := s.getLeaderboard()
-	s.sendToPlayer(playerID, mustJSON(leaderboard))
+	s.stateMu.Lock()
+	if s.lbJSON == nil {
+		s.buildLeaderboardUnsafe()
+		s.lbDirty = false
+	}
+	lbBytes := s.lbJSON
+	lbVer := s.lbVersion
+	s.stateMu.Unlock()
+
+	s.sendToPlayer(playerID, lbBytes)
+	player.LastLBVersion = lbVer
 
 	// Start goroutines
 	go s.writePump(player)
@@ -491,20 +555,6 @@ func (s *Server) removePlayer(playerID int32) {
 	log.Printf("Player %d disconnected", playerID)
 }
 
-func (s *Server) getLeaderboard() map[string]interface{} {
-	s.stateMu.RLock()
-	scoresCopy := make(map[int32]uint32, len(s.scores))
-	for k, v := range s.scores {
-		scoresCopy[k] = v
-	}
-	s.stateMu.RUnlock()
-
-	return map[string]interface{}{
-		"type":   "leaderboard",
-		"scores": scoresCopy,
-	}
-}
-
 func main() {
 	runtime.GOMAXPROCS(1)
 
@@ -513,20 +563,33 @@ func main() {
 	http.HandleFunc("/ws", server.handleWebSocket)
 	http.Handle("/", http.FileServer(http.Dir("./")))
 
-	// Periodic leaderboard broadcast
+	// Leaderboard broadcast loop (1 s cadence, only on version mismatch)
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 
 		for range ticker.C {
-			leaderboard := server.getLeaderboard()
-			data := mustJSON(leaderboard)
+			// Re‑compute if dirty
+			server.stateMu.Lock()
+			if server.lbDirty || server.lbJSON == nil {
+				server.buildLeaderboardUnsafe()
+				server.lbDirty = false
+			}
+			lbJSON := server.lbJSON
+			lbVer := server.lbVersion
+			server.stateMu.Unlock()
 
+			// Fan‑out only to players with stale version
 			server.playersMu.RLock()
-			for _, player := range server.players {
+			for _, p := range server.players {
+				if p.LastLBVersion == lbVer {
+					continue
+				}
 				select {
-				case player.Send <- data:
+				case p.Send <- lbJSON:
+					p.LastLBVersion = lbVer
 				default:
+					// full buffer; skip, they'll get it next tick
 				}
 			}
 			server.playersMu.RUnlock()
