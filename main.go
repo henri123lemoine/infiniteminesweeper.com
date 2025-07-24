@@ -242,7 +242,10 @@ func (s *Server) buildLeaderboardUnsafe() {
 	for pid, sc := range s.scores {
 		entries = append(entries, lbEntry{PlayerID: pid, Score: formatScore(sc)})
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Score > entries[j].Score })
+	// Sort by the real uint32 score
+	sort.Slice(entries, func(i, j int) bool {
+		return s.scores[entries[i].PlayerID] > s.scores[entries[j].PlayerID]
+	})
 	if len(entries) > 20 {
 		entries = entries[:20]
 	}
