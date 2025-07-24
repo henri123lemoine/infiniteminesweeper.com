@@ -17,22 +17,19 @@ import (
 
 const (
 	ChunkSize = 64
-	MineCount = 20 // percentage of cells that are mines
 )
 
 type ChunkID struct {
-	X, Y int32 // Actually fits in 8 bytes, not 4 as comment claimed
+	X, Y int32
 }
 
 type ChunkBits [64]uint64
 
 type Reveal struct {
-	ChunkID       ChunkID `json:"chunkId"`
-	X             int     `json:"x"`
-	Y             int     `json:"y"`
-	IsMine        bool    `json:"isMine"`
-	AdjacentMines int     `json:"adjacentMines"`
-	PlayerID      int32   `json:"playerId"`
+	ChunkID  ChunkID `json:"chunkId"`
+	X        int     `json:"x"`
+	Y        int     `json:"y"`
+	PlayerID int32   `json:"playerId"`
 }
 
 type Player struct {
@@ -40,7 +37,7 @@ type Player struct {
 	Conn        *websocket.Conn
 	Send        chan []byte
 	TokenBucket TokenBucket
-	// Separate tracking for reveal rate limiting
+	// Rate limiting for reveals
 	RevealWindowStart time.Time
 	RevealCount       int
 }
@@ -138,21 +135,21 @@ func mustJSON(v any) []byte {
 type Server struct {
 	secret []byte
 
-	// Single mutex for all world state to prevent deadlocks
+	// Single mutex for all world state
 	stateMu sync.RWMutex
 
-	// World state - all protected by stateMu
-	chunks     map[ChunkID]*ChunkBits
-	cellOwners map[ChunkID]map[int]int32 // Direct int32 instead of *int32
-	scores     map[int32]uint32
+	// World state - just what cells are revealed and by whom
+	chunks     map[ChunkID]*ChunkBits    // Which cells are revealed (bitset)
+	cellOwners map[ChunkID]map[int]int32 // bitIndex -> playerID
+	scores     map[int32]uint32          // playerID -> reveal count
 	subs       map[ChunkID]map[int32]chan Reveal
 
-	// Players - separate mutex since they have different access patterns
+	// Players
 	playersMu    sync.RWMutex
 	players      map[int32]*Player
 	nextPlayerID int32
 
-	// Seed cache for performance optimization
+	// Seed cache for performance
 	seedCache   map[ChunkID]uint64
 	seedCacheMu sync.RWMutex
 
@@ -199,24 +196,6 @@ func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
 	return seed
 }
 
-func splitmix64(state uint64) uint64 {
-	state += 0x9e3779b97f4a7c15
-	state = (state ^ (state >> 30)) * 0xbf58476d1ce4e5b9
-	state = (state ^ (state >> 27)) * 0x94d049bb133111eb
-	return state ^ (state >> 31)
-}
-
-// Pass seed to avoid repeated HMAC calls
-func (s *Server) isMineWithSeed(seed uint64, x, y int) bool {
-	cellSeed := splitmix64(seed + uint64(y*ChunkSize+x))
-	return (cellSeed % 100) < MineCount
-}
-
-func (s *Server) isMine(chunkID ChunkID, x, y int) bool {
-	seed := s.generateChunkSeed(chunkID)
-	return s.isMineWithSeed(seed, x, y)
-}
-
 // Bounds checking for reveal requests
 func (s *Server) isValidCoordinate(x, y int) bool {
 	return x >= 0 && x < ChunkSize && y >= 0 && y < ChunkSize
@@ -228,7 +207,6 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 		return false
 	}
 
-	// Single lock for all state mutations
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
@@ -248,92 +226,32 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 		return false // Already revealed
 	}
 
-	// Atomic state update - set bit, track ownership, update score all in one critical section
+	// Set the bit (mark as revealed)
 	chunk[wordIndex] |= 1 << bitOffset
 
-	// Track cell ownership
+	// Track who revealed it
 	if s.cellOwners[chunkID] == nil {
 		s.cellOwners[chunkID] = make(map[int]int32)
 	}
-	s.cellOwners[chunkID][bitIndex] = playerID // Direct value, not pointer
+	s.cellOwners[chunkID][bitIndex] = playerID
 
 	// Update score
 	s.scores[playerID]++
 
-	// Calculate mine info with cached seed
-	seed := s.generateChunkSeed(chunkID)
-	isMine := s.isMineWithSeed(seed, x, y)
-	adjacentMines := 0
-	if !isMine {
-		adjacentMines = s.countAdjacentMinesWithSeed(chunkID, x, y, seed)
-	}
-
 	// Create reveal message
 	reveal := Reveal{
-		ChunkID:       chunkID,
-		X:             x,
-		Y:             y,
-		IsMine:        isMine,
-		AdjacentMines: adjacentMines,
-		PlayerID:      playerID,
+		ChunkID:  chunkID,
+		X:        x,
+		Y:        y,
+		PlayerID: playerID,
 	}
 
-	// Broadcast to 3x3 neighborhood (still under stateMu)
+	// Broadcast to 3x3 neighborhood
 	s.broadcastRevealTo3x3(reveal)
 
 	return true
 }
 
-// Optimized version that reuses seeds and avoids repeated HMAC
-func (s *Server) countAdjacentMinesWithSeed(chunkID ChunkID, x, y int, centerSeed uint64) int {
-	count := 0
-	for dy := -1; dy <= 1; dy++ {
-		for dx := -1; dx <= 1; dx++ {
-			if dx == 0 && dy == 0 {
-				continue
-			}
-
-			newX, newY := x+dx, y+dy
-			currentChunk := chunkID
-
-			// Handle cross-chunk boundaries
-			if newX < 0 {
-				currentChunk.X--
-				newX += ChunkSize
-			} else if newX >= ChunkSize {
-				currentChunk.X++
-				newX -= ChunkSize
-			}
-
-			if newY < 0 {
-				currentChunk.Y--
-				newY += ChunkSize
-			} else if newY >= ChunkSize {
-				currentChunk.Y++
-				newY -= ChunkSize
-			}
-
-			var neighborSeed uint64
-			if currentChunk == chunkID {
-				neighborSeed = centerSeed
-			} else {
-				neighborSeed = s.generateChunkSeed(currentChunk)
-			}
-
-			if s.isMineWithSeed(neighborSeed, newX, newY) {
-				count++
-			}
-		}
-	}
-	return count
-}
-
-func (s *Server) countAdjacentMines(chunkID ChunkID, x, y int) int {
-	seed := s.generateChunkSeed(chunkID)
-	return s.countAdjacentMinesWithSeed(chunkID, x, y, seed)
-}
-
-// This now assumes stateMu is already held by caller
 func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
 	// Broadcast to 3x3 neighborhood of chunks
 	for dy := int32(-1); dy <= 1; dy++ {
@@ -356,7 +274,6 @@ func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
 	}
 }
 
-// Helper to safely send to a player
 func (s *Server) sendToPlayer(playerID int32, data []byte) {
 	s.playersMu.RLock()
 	player, exists := s.players[playerID]
@@ -387,7 +304,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Conn: conn,
 		Send: make(chan []byte, 256),
 		TokenBucket: TokenBucket{
-			tokens: 200, // Start with full bucket
+			tokens: 200,
 		},
 		RevealWindowStart: time.Now(),
 		RevealCount:       0,
@@ -395,11 +312,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.players[playerID] = player
 	s.playersMu.Unlock()
 
-	// Send initial leaderboard on connect
+	// Send initial leaderboard
 	leaderboard := s.getLeaderboard()
 	s.sendToPlayer(playerID, mustJSON(leaderboard))
 
-	// Start goroutines for this player
+	// Start goroutines
 	go s.writePump(player)
 	go s.readPump(player)
 
@@ -431,16 +348,15 @@ func (s *Server) readPump(player *Player) {
 				continue
 			}
 
-			// Reveal rate limiting with separate window tracking
+			// Rate limiting
 			now := time.Now()
 			if now.Sub(player.RevealWindowStart) > time.Minute {
-				// Reset window
 				player.RevealWindowStart = now
 				player.RevealCount = 0
 			}
 
 			if player.RevealCount >= 100 {
-				continue // Drop if over limit in current window
+				continue
 			}
 
 			player.RevealCount++
@@ -476,7 +392,7 @@ func (s *Server) readPump(player *Player) {
 			}
 
 			if !player.TokenBucket.Take() {
-				continue // Rate limit exceeded, drop request
+				continue
 			}
 
 			seed := s.generateChunkSeed(ChunkID{msg.ChunkX, msg.ChunkY})
@@ -508,15 +424,12 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 		s.subs[chunkID] = make(map[int32]chan Reveal)
 	}
 
-	// Create buffered channel for this player's subscription
 	if _, exists := s.subs[chunkID][playerID]; !exists {
 		s.subs[chunkID][playerID] = make(chan Reveal, 100)
-
-		// Start a goroutine to handle reveals for this subscription
 		go s.handleSubscription(playerID, chunkID, s.subs[chunkID][playerID])
 	}
 
-	// Prepare chunk sync data while holding the lock
+	// Prepare chunk sync - just revealed cells and their owners
 	chunk, chunkExists := s.chunks[chunkID]
 	owners := s.cellOwners[chunkID]
 	seed := s.generateChunkSeed(chunkID)
@@ -530,14 +443,7 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 				bitOffset := bitIndex % 64
 
 				if chunk[wordIndex]&(1<<bitOffset) != 0 {
-					isMine := s.isMineWithSeed(seed, x, y)
-					adjacentMines := 0
-					if !isMine {
-						adjacentMines = s.countAdjacentMinesWithSeed(chunkID, x, y, seed)
-					}
-
-					// Include proper player attribution
-					var ownerID int32 = 0 // Default for historical cells without tracking
+					var ownerID int32 = 0
 					if owners != nil {
 						if owner, exists := owners[bitIndex]; exists {
 							ownerID = owner
@@ -545,12 +451,10 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 					}
 
 					reveals = append(reveals, Reveal{
-						ChunkID:       chunkID,
-						X:             x,
-						Y:             y,
-						IsMine:        isMine,
-						AdjacentMines: adjacentMines,
-						PlayerID:      ownerID,
+						ChunkID:  chunkID,
+						X:        x,
+						Y:        y,
+						PlayerID: ownerID,
 					})
 				}
 			}
@@ -588,14 +492,12 @@ func (s *Server) removePlayer(playerID int32) {
 	}
 	s.playersMu.Unlock()
 
-	// Clean up subscriptions under proper locking
 	s.stateMu.Lock()
 	for chunkID, subs := range s.subs {
 		if ch, exists := subs[playerID]; exists {
 			close(ch)
 			delete(subs, playerID)
 
-			// Clean up empty subscription maps
 			if len(subs) == 0 {
 				delete(s.subs, chunkID)
 			}
@@ -606,7 +508,6 @@ func (s *Server) removePlayer(playerID int32) {
 	log.Printf("Player %d disconnected", playerID)
 }
 
-// Copy scores map to prevent data races during JSON marshaling
 func (s *Server) getLeaderboard() map[string]interface{} {
 	s.stateMu.RLock()
 	scoresCopy := make(map[int32]uint32, len(s.scores))
@@ -622,7 +523,7 @@ func (s *Server) getLeaderboard() map[string]interface{} {
 }
 
 func main() {
-	runtime.GOMAXPROCS(1) // Single core as specified
+	runtime.GOMAXPROCS(1)
 
 	server := NewServer()
 
@@ -643,7 +544,6 @@ func main() {
 				select {
 				case player.Send <- data:
 				default:
-					// Drop if channel full
 				}
 			}
 			server.playersMu.RUnlock()

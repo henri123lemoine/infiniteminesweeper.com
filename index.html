@@ -140,7 +140,6 @@
 
         // Game state
         const seedCache = useRef(new Map());
-        const processedReveals = useRef(new Set());
         const subscribedChunks = useRef(new Set());
         const pendingSeedRequests = useRef(new Set());
         const revealedCellsRef = useRef(new Map());
@@ -184,8 +183,15 @@
         const worldToChunk = useCallback((worldX, worldY) => {
           const chunkX = Math.floor(worldX / CHUNK);
           const chunkY = Math.floor(worldY / CHUNK);
-          const localX = ((worldX % CHUNK) + CHUNK) % CHUNK;
-          const localY = ((worldY % CHUNK) + CHUNK) % CHUNK;
+
+          // Simpler local coordinate calculation
+          let localX = worldX - (chunkX * CHUNK);
+          let localY = worldY - (chunkY * CHUNK);
+
+          // Ensure positive local coordinates
+          if (localX < 0) localX += CHUNK;
+          if (localY < 0) localY += CHUNK;
+
           return { chunkX, chunkY, localX, localY };
         }, []);
 
@@ -315,39 +321,30 @@
             }
           }
 
-          // Now reveal all cells in the flood fill area
-          const revealPromises = [];
+          // Create optimistic reveals and send to server
           for (const cell of toReveal) {
-            // Create optimistic reveal
             const optimisticReveal = {
               chunkId: { X: cell.chunkX, Y: cell.chunkY },
               x: cell.localX,
               y: cell.localY,
+              playerId: -1,
               isMine: false,
-              adjacentMines: cell.adjacentMines,
-              playerId: -1
+              adjacentMines: cell.adjacentMines
             };
 
             revealedCellsRef.current.set(cell.cellKey, optimisticReveal);
-
-            // Ensure chunk subscription
             ensureChunkSubscription(cell.chunkX, cell.chunkY);
 
-            // Send reveal to server
-            revealPromises.push(
-              ws.send(JSON.stringify({
-                type: 'reveal',
-                chunkX: cell.chunkX,
-                chunkY: cell.chunkY,
-                x: cell.localX,
-                y: cell.localY
-              }))
-            );
+            ws.send(JSON.stringify({
+              type: 'reveal',
+              chunkX: cell.chunkX,
+              chunkY: cell.chunkY,
+              x: cell.localX,
+              y: cell.localY
+            }));
           }
 
-          // Trigger re-render
           setTick(t => t + 1);
-
           return toReveal.size;
         }, [ws, worldToChunk, isMine, countAdjacentMines, ensureSeed, ensureChunkSubscription]);
 
@@ -373,9 +370,9 @@
               chunkId: { X: chunkX, Y: chunkY },
               x: localX,
               y: localY,
+              playerId: -1,
               isMine: true,
-              adjacentMines: 0,
-              playerId: -1
+              adjacentMines: 0
             };
 
             revealedCellsRef.current.set(key, optimisticReveal);
@@ -399,14 +396,13 @@
             const revealedCount = await floodFillReveal(worldX, worldY);
             log(`Flood fill revealed ${revealedCount} cells`);
           } else {
-            // Just reveal this single cell
             const optimisticReveal = {
               chunkId: { X: chunkX, Y: chunkY },
               x: localX,
               y: localY,
+              playerId: -1,
               isMine: false,
-              adjacentMines: adjacent,
-              playerId: -1
+              adjacentMines: adjacent
             };
 
             revealedCellsRef.current.set(key, optimisticReveal);
@@ -430,15 +426,12 @@
           const ctx = canvas.getContext('2d');
           const rect = canvas.getBoundingClientRect();
 
-          // Set canvas size to match display size
           canvas.width = rect.width;
           canvas.height = rect.height;
 
-          // Clear canvas
           ctx.fillStyle = '#ddd';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-          // Calculate visible world bounds
           const startWorldX = Math.floor(viewX / CELL_SIZE);
           const startWorldY = Math.floor(viewY / CELL_SIZE);
           const endWorldX = Math.ceil((viewX + canvas.width) / CELL_SIZE);
@@ -449,14 +442,12 @@
           ctx.lineWidth = 1;
           ctx.beginPath();
 
-          // Vertical lines
           for (let worldX = startWorldX; worldX <= endWorldX; worldX++) {
             const screenX = worldX * CELL_SIZE - viewX;
             ctx.moveTo(screenX, 0);
             ctx.lineTo(screenX, canvas.height);
           }
 
-          // Horizontal lines
           for (let worldY = startWorldY; worldY <= endWorldY; worldY++) {
             const screenY = worldY * CELL_SIZE - viewY;
             ctx.moveTo(0, screenY);
@@ -465,27 +456,28 @@
 
           ctx.stroke();
 
-          // Draw chunk boundaries (thicker lines)
-          ctx.strokeStyle = '#333';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
+        // Removed chunk boundaries for now
+        //   // Draw chunk boundaries
+        //   ctx.strokeStyle = '#333';
+        //   ctx.lineWidth = 2;
+        //   ctx.beginPath();
 
-          const startChunkX = Math.floor(startWorldX / CHUNK);
-          const startChunkY = Math.floor(startWorldY / CHUNK);
-          const endChunkX = Math.ceil(endWorldX / CHUNK);
-          const endChunkY = Math.ceil(endWorldY / CHUNK);
+        //   const startChunkX = Math.floor(startWorldX / CHUNK);
+        //   const startChunkY = Math.floor(startWorldY / CHUNK);
+        //   const endChunkX = Math.ceil(endWorldX / CHUNK);
+        //   const endChunkY = Math.ceil(endWorldY / CHUNK);
 
-          for (let chunkX = startChunkX; chunkX <= endChunkX; chunkX++) {
-            const screenX = chunkX * CHUNK * CELL_SIZE - viewX;
-            ctx.moveTo(screenX, 0);
-            ctx.lineTo(screenX, canvas.height);
-          }
+        //   for (let chunkX = startChunkX; chunkX <= endChunkX; chunkX++) {
+        //     const screenX = chunkX * CHUNK * CELL_SIZE - viewX;
+        //     ctx.moveTo(screenX, 0);
+        //     ctx.lineTo(screenX, canvas.height);
+        //   }
 
-          for (let chunkY = startChunkY; chunkY <= endChunkY; chunkY++) {
-            const screenY = chunkY * CHUNK * CELL_SIZE - viewY;
-            ctx.moveTo(0, screenY);
-            ctx.lineTo(canvas.width, screenY);
-          }
+        //   for (let chunkY = startChunkY; chunkY <= endChunkY; chunkY++) {
+        //     const screenY = chunkY * CHUNK * CELL_SIZE - viewY;
+        //     ctx.moveTo(0, screenY);
+        //     ctx.lineTo(canvas.width, screenY);
+        //   }
 
           ctx.stroke();
 
@@ -550,7 +542,6 @@
           for (let chunkY = startChunkY; chunkY <= endChunkY; chunkY++) {
             for (let chunkX = startChunkX; chunkX <= endChunkX; chunkX++) {
               ensureChunkSubscription(chunkX, chunkY);
-              // Also prefetch seeds
               ensureSeed(chunkX, chunkY).catch(() => {});
             }
           }
@@ -558,7 +549,7 @@
 
         // Mouse event handlers
         const handleMouseDown = useCallback((e) => {
-          if (e.button !== 0) return; // Only left mouse button
+          if (e.button !== 0) return;
 
           setIsDragging(true);
           setDragStart({
@@ -619,8 +610,36 @@
 
               if (Array.isArray(data.reveals)) {
                 for (const cell of data.reveals) {
+                  const seed = BigInt(data.seed);
+                  const cellIsMine = isMine(seed, cell.x, cell.y);
+                  let adjacentMines = 0;
+
+                  if (!cellIsMine) {
+                    // Calculate adjacent mines synchronously since we have the seed
+                    for (let dy = -1; dy <= 1; dy++) {
+                      for (let dx = -1; dx <= 1; dx++) {
+                        if (dx === 0 && dy === 0) continue;
+                        let nx = cell.x + dx;
+                        let ny = cell.y + dy;
+                        let ncx = cell.chunkId.X;
+                        let ncy = cell.chunkId.Y;
+                        if (nx < 0) { ncx--; nx += CHUNK; }
+                        else if (nx >= CHUNK) { ncx++; nx -= CHUNK; }
+                        if (ny < 0) { ncy--; ny += CHUNK; }
+                        else if (ny >= CHUNK) { ncy++; ny -= CHUNK; }
+
+                        const nSeed = seedCache.current.get(`${ncx},${ncy}`);
+                        if (nSeed && isMine(nSeed, nx, ny)) adjacentMines++;
+                      }
+                    }
+                  }
+
                   const cellKey = `${cell.chunkId.X},${cell.chunkId.Y},${cell.x},${cell.y}`;
-                  revealedCellsRef.current.set(cellKey, cell);
+                  revealedCellsRef.current.set(cellKey, {
+                    ...cell,
+                    isMine: cellIsMine,
+                    adjacentMines
+                  });
                 }
                 setTick(t => t + 1);
               }
@@ -630,16 +649,48 @@
                 revealedCellsRef.current.delete(key);
                 setTick(t => t + 1);
               }
-            } else if (data.chunkId && typeof data.x === 'number' && typeof data.y === 'number') {
-              const revealId = `${data.chunkId.X},${data.chunkId.Y},${data.x},${data.y},${data.playerId}`;
-              if (!processedReveals.current.has(revealId)) {
-                processedReveals.current.add(revealId);
-                const key = `${data.chunkId.X},${data.chunkId.Y},${data.x},${data.y}`;
-                const existing = revealedCellsRef.current.get(key);
-                if (!existing || existing.playerId === -1) {
-                  revealedCellsRef.current.set(key, data);
-                  setTick(t => t + 1);
+            } else if (data.chunkId && typeof data.x === 'number' && typeof data.y === 'number' && typeof data.playerId === 'number') {
+              // This is a reveal broadcast from server
+              const cellKey = `${data.chunkId.X},${data.chunkId.Y},${data.x},${data.y}`;
+
+              // Avoid duplicates by checking if we already have this exact reveal
+              const existing = revealedCellsRef.current.get(cellKey);
+              if (existing && existing.playerId === data.playerId) {
+                return; // Skip duplicate
+              }
+
+              // Calculate mine content client-side
+              const seed = seedCache.current.get(`${data.chunkId.X},${data.chunkId.Y}`);
+              if (seed) {
+                const cellIsMine = isMine(seed, data.x, data.y);
+                let adjacentMines = 0;
+
+                if (!cellIsMine) {
+                  // Calculate adjacent mines
+                  for (let dy = -1; dy <= 1; dy++) {
+                    for (let dx = -1; dx <= 1; dx++) {
+                      if (dx === 0 && dy === 0) continue;
+                      let nx = data.x + dx;
+                      let ny = data.y + dy;
+                      let ncx = data.chunkId.X;
+                      let ncy = data.chunkId.Y;
+                      if (nx < 0) { ncx--; nx += CHUNK; }
+                      else if (nx >= CHUNK) { ncx++; nx -= CHUNK; }
+                      if (ny < 0) { ncy--; ny += CHUNK; }
+                      else if (ny >= CHUNK) { ncy++; ny -= CHUNK; }
+
+                      const nSeed = seedCache.current.get(`${ncx},${ncy}`);
+                      if (nSeed && isMine(nSeed, nx, ny)) adjacentMines++;
+                    }
+                  }
                 }
+
+                revealedCellsRef.current.set(cellKey, {
+                  ...data,
+                  isMine: cellIsMine,
+                  adjacentMines
+                });
+                setTick(t => t + 1);
               }
             } else if (data.type === 'leaderboard') {
               setLeaderboard(data.scores || {});
@@ -653,7 +704,7 @@
           return () => {
             websocket.close();
           };
-        }, []);
+        }, [isMine]);
 
         // Subscribe to visible chunks when view changes
         useEffect(() => {
