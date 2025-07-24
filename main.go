@@ -17,7 +17,7 @@ import (
 
 const (
 	ChunkSize = 64
-	MineCount = 10 // 10% of cells are mines (cellSeed % 100 < 10)
+	MineCount = 20 // percentage of cells that are mines
 )
 
 type ChunkID struct {

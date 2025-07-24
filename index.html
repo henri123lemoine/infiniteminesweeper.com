@@ -148,7 +148,7 @@
 
         // Constants
         const CHUNK = 64;
-        const MINE_COUNT = 10;
+        const MINE_COUNT = 20;
         const CELL_SIZE = 20;
 
         // Deterministic helpers
@@ -249,6 +249,108 @@
           }
         }, [ws, connected]);
 
+        // Flood fill reveal for cells with 0 adjacent mines
+        const floodFillReveal = useCallback(async (startWorldX, startWorldY) => {
+          const toReveal = new Set();
+          const visited = new Set();
+          const queue = [{ worldX: startWorldX, worldY: startWorldY }];
+
+          // BFS to find all connected 0-mine cells
+          while (queue.length > 0) {
+            const { worldX, worldY } = queue.shift();
+            const coordKey = `${worldX},${worldY}`;
+
+            if (visited.has(coordKey)) continue;
+            visited.add(coordKey);
+
+            const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
+            const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+
+            // Skip if already revealed
+            if (revealedCellsRef.current.has(cellKey)) continue;
+
+            // Ensure we have the seed for this chunk
+            let seed = seedCache.current.get(`${chunkX},${chunkY}`);
+            if (!seed) {
+              try {
+                seed = await ensureSeed(chunkX, chunkY);
+                if (!seed) continue;
+              } catch {
+                continue;
+              }
+            }
+
+            // Skip if it's a mine
+            if (isMine(seed, localX, localY)) continue;
+
+            // Count adjacent mines
+            const adjacentMines = await countAdjacentMines(chunkX, chunkY, localX, localY);
+
+            // Add to reveal list
+            toReveal.add({
+              worldX,
+              worldY,
+              chunkX,
+              chunkY,
+              localX,
+              localY,
+              adjacentMines,
+              cellKey
+            });
+
+            // If this cell has 0 adjacent mines, add its neighbors to the queue
+            if (adjacentMines === 0) {
+              for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                  if (dx === 0 && dy === 0) continue;
+                  const neighborWorldX = worldX + dx;
+                  const neighborWorldY = worldY + dy;
+                  const neighborCoordKey = `${neighborWorldX},${neighborWorldY}`;
+
+                  if (!visited.has(neighborCoordKey)) {
+                    queue.push({ worldX: neighborWorldX, worldY: neighborWorldY });
+                  }
+                }
+              }
+            }
+          }
+
+          // Now reveal all cells in the flood fill area
+          const revealPromises = [];
+          for (const cell of toReveal) {
+            // Create optimistic reveal
+            const optimisticReveal = {
+              chunkId: { X: cell.chunkX, Y: cell.chunkY },
+              x: cell.localX,
+              y: cell.localY,
+              isMine: false,
+              adjacentMines: cell.adjacentMines,
+              playerId: -1
+            };
+
+            revealedCellsRef.current.set(cell.cellKey, optimisticReveal);
+
+            // Ensure chunk subscription
+            ensureChunkSubscription(cell.chunkX, cell.chunkY);
+
+            // Send reveal to server
+            revealPromises.push(
+              ws.send(JSON.stringify({
+                type: 'reveal',
+                chunkX: cell.chunkX,
+                chunkY: cell.chunkY,
+                x: cell.localX,
+                y: cell.localY
+              }))
+            );
+          }
+
+          // Trigger re-render
+          setTick(t => t + 1);
+
+          return toReveal.size;
+        }, [ws, worldToChunk, isMine, countAdjacentMines, ensureSeed, ensureChunkSubscription]);
+
         // Handle cell click
         const handleCellClick = useCallback(async (worldX, worldY) => {
           if (!ws || !connected) return;
@@ -265,32 +367,60 @@
             if (!seed) return;
           }
 
-          const mine = isMine(seed, localX, localY);
-          let adjacent = 0;
-          if (!mine) {
-            adjacent = await countAdjacentMines(chunkX, chunkY, localX, localY);
+          // If it's a mine, just reveal the single cell
+          if (isMine(seed, localX, localY)) {
+            const optimisticReveal = {
+              chunkId: { X: chunkX, Y: chunkY },
+              x: localX,
+              y: localY,
+              isMine: true,
+              adjacentMines: 0,
+              playerId: -1
+            };
+
+            revealedCellsRef.current.set(key, optimisticReveal);
+            setTick(t => t + 1);
+
+            ws.send(JSON.stringify({
+              type: 'reveal',
+              chunkX,
+              chunkY,
+              x: localX,
+              y: localY
+            }));
+            return;
           }
 
-          const optimisticReveal = {
-            chunkId: { X: chunkX, Y: chunkY },
-            x: localX,
-            y: localY,
-            isMine: mine,
-            adjacentMines: adjacent,
-            playerId: -1
-          };
+          // Check adjacent mines for this cell
+          const adjacent = await countAdjacentMines(chunkX, chunkY, localX, localY);
 
-          revealedCellsRef.current.set(key, optimisticReveal);
-          setTick(t => t + 1);
+          // If it has 0 adjacent mines, do flood fill
+          if (adjacent === 0) {
+            const revealedCount = await floodFillReveal(worldX, worldY);
+            log(`Flood fill revealed ${revealedCount} cells`);
+          } else {
+            // Just reveal this single cell
+            const optimisticReveal = {
+              chunkId: { X: chunkX, Y: chunkY },
+              x: localX,
+              y: localY,
+              isMine: false,
+              adjacentMines: adjacent,
+              playerId: -1
+            };
 
-          ws.send(JSON.stringify({
-            type: 'reveal',
-            chunkX,
-            chunkY,
-            x: localX,
-            y: localY
-          }));
-        }, [ws, connected, worldToChunk, ensureChunkSubscription, isMine, countAdjacentMines]);
+            revealedCellsRef.current.set(key, optimisticReveal);
+            setTick(t => t + 1);
+
+            ws.send(JSON.stringify({
+              type: 'reveal',
+              chunkX,
+              chunkY,
+              x: localX,
+              y: localY
+            }));
+          }
+        }, [ws, connected, worldToChunk, ensureChunkSubscription, isMine, countAdjacentMines, floodFillReveal]);
 
         // Canvas rendering
         const render = useCallback(() => {
@@ -560,7 +690,6 @@
           <div className="game-container">
             <div className="header">
               <div className="status">
-                <h1>Infinite Minesweeper</h1>
                 <div className={`connection-status ${connected ? "connected" : "disconnected"}`}>
                   {connected ? "Connected" : "Disconnected"}
                 </div>
