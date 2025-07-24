@@ -104,6 +104,12 @@ type SubscribeMessage struct {
 	ChunkY int32  `json:"chunkY"`
 }
 
+type UnsubscribeMessage struct {
+	Type   string `json:"type"`
+	ChunkX int32  `json:"chunkX"`
+	ChunkY int32  `json:"chunkY"`
+}
+
 type SeedReq struct {
 	Type   string `json:"type"`
 	ChunkX int32  `json:"chunkX"`
@@ -468,6 +474,13 @@ func (s *Server) readPump(player *Player) {
 			}
 
 			s.sendToPlayer(player.ID, mustJSON(resp))
+
+		case "unsubscribe":
+			var msg UnsubscribeMessage
+			if err := json.Unmarshal(rawMsg, &msg); err != nil {
+				continue
+			}
+			s.unsubscribeFromChunk(player.ID, ChunkID{X: msg.ChunkX, Y: msg.ChunkY})
 		}
 	}
 }
@@ -530,6 +543,19 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	}
 
 	s.sendToPlayer(playerID, mustJSON(msg))
+}
+
+func (s *Server) unsubscribeFromChunk(playerID int32, chunkID ChunkID) {
+	s.stateMu.Lock()
+	if subs, ok := s.subs[chunkID]; ok {
+		if _, exists := subs[playerID]; exists {
+			delete(subs, playerID)
+			if len(subs) == 0 {
+				delete(s.subs, chunkID)
+			}
+		}
+	}
+	s.stateMu.Unlock()
 }
 
 func (s *Server) removePlayer(playerID int32) {

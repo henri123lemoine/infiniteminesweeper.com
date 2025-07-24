@@ -255,6 +255,18 @@
           }
         }, [ws, connected]);
 
+        const ensureChunkUnsubscription = useCallback((chunkX, chunkY) => {
+          const key = `${chunkX},${chunkY}`;
+          if (subscribedChunks.current.has(key) && ws && connected) {
+            subscribedChunks.current.delete(key);
+            ws.send(JSON.stringify({
+              type: 'unsubscribe',
+              chunkX,
+              chunkY
+            }));
+          }
+        }, [ws, connected]);
+
         // Flood fill reveal for cells with 0 adjacent mines
         const floodFillReveal = useCallback(async (startWorldX, startWorldY) => {
           const toReveal = new Set();
@@ -539,13 +551,25 @@
           const endChunkX = Math.ceil(endWorldX / CHUNK) + 1;
           const endChunkY = Math.ceil(endWorldY / CHUNK) + 1;
 
+          const visibleNow = new Set();
+
           for (let chunkY = startChunkY; chunkY <= endChunkY; chunkY++) {
             for (let chunkX = startChunkX; chunkX <= endChunkX; chunkX++) {
+              const key = `${chunkX},${chunkY}`;
+              visibleNow.add(key);
               ensureChunkSubscription(chunkX, chunkY);
               ensureSeed(chunkX, chunkY).catch(() => {});
             }
           }
-        }, [ws, connected, viewX, viewY, ensureChunkSubscription, ensureSeed]);
+
+          // Un‑subscribe chunks that scrolled off (>1 ring outside viewport)
+          subscribedChunks.current.forEach(key => {
+            if (!visibleNow.has(key)) {
+              const [cx, cy] = key.split(',').map(Number);
+              ensureChunkUnsubscription(cx, cy);
+            }
+          });
+        }, [ws, connected, viewX, viewY, ensureChunkSubscription, ensureSeed, ensureChunkUnsubscription]);
 
         // Mouse event handlers
         const handleMouseDown = useCallback((e) => {
@@ -645,8 +669,17 @@
               }
             } else if (data.type === 'revealAck') {
               if (!data.ok) {
+                // Optimistic reveal lost → resync this chunk
                 const key = `${data.chunkId.X},${data.chunkId.Y},${data.x},${data.y}`;
                 revealedCellsRef.current.delete(key);
+
+                // Force a re‑subscribe to get authoritative state
+                ws.send(JSON.stringify({
+                  type: 'subscribe',
+                  chunkX: data.chunkId.X,
+                  chunkY: data.chunkId.Y
+                }));
+
                 setTick(t => t + 1);
               }
             } else if (data.chunkId && typeof data.x === 'number' && typeof data.y === 'number' && typeof data.playerId === 'number') {
