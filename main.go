@@ -253,6 +253,9 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 }
 
 func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
+	// Track which players we've already sent to, to avoid duplicates
+	sentTo := make(map[int32]bool)
+
 	// Broadcast to 3x3 neighborhood of chunks
 	for dy := int32(-1); dy <= 1; dy++ {
 		for dx := int32(-1); dx <= 1; dx++ {
@@ -262,7 +265,13 @@ func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
 			}
 
 			if subs, exists := s.subs[neighborChunk]; exists {
-				for _, ch := range subs {
+				for playerID, ch := range subs {
+					// Skip if we've already sent to this player
+					if sentTo[playerID] {
+						continue
+					}
+					sentTo[playerID] = true
+
 					select {
 					case ch <- reveal:
 					default:
