@@ -1,0 +1,73 @@
+syntax = "proto3";
+package pb;
+option go_package = "infinite-minesweeper/proto";
+
+message ChunkID {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+message Reveal {
+  ChunkID chunkId = 1;
+  int32 x = 2;
+  int32 y = 3;
+  int32 playerId = 4;
+}
+
+message RevealAck {
+  ChunkID chunkId = 1;
+  int32 x = 2;
+  int32 y = 3;
+  bool ok = 4;
+  int32 scorer = 5;
+}
+
+message ChunkSync {
+  ChunkID chunkId = 1;
+  uint64 seed = 2;
+  repeated Reveal reveals = 3;
+}
+
+message SeedReq {
+  int32 chunkX = 1;
+  int32 chunkY = 2;
+}
+
+message SeedResp {
+  int32 chunkX = 1;
+  int32 chunkY = 2;
+  uint64 seed = 3;
+}
+
+message Subscribe {
+  int32 chunkX = 1;
+  int32 chunkY = 2;
+}
+
+message Unsubscribe {
+  int32 chunkX = 1;
+  int32 chunkY = 2;
+}
+
+message LeaderboardEntry {
+  int32 playerId = 1;
+  string score = 2;
+}
+
+message Leaderboard {
+  uint64 version = 1;
+  repeated LeaderboardEntry entries = 2;
+}
+
+message Envelope {
+  oneof msg {
+    SeedReq seedReq = 1;
+    SeedResp seedResp = 2;
+    Subscribe subscribe = 3;
+    Unsubscribe unsubscribe = 4;
+    Reveal reveal = 5;
+    RevealAck revealAck = 6;
+    ChunkSync chunkSync = 7;
+    Leaderboard leaderboard = 8;
+  }
+}
