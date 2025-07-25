@@ -16,7 +16,7 @@
     <style>
       body {
         margin: 0;
-        padding: 20px;
+        padding: 0;
         font-family: Arial, sans-serif;
         background: #f0f0f0;
       }
@@ -28,11 +28,7 @@
       }
 
       .header {
-        background: white;
-        padding: 10px 20px;
-        border-radius: 8px;
-        margin-bottom: 20px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        display: none;
       }
 
       .status {
@@ -44,10 +40,10 @@
       .board-container {
         flex: 1;
         background: white;
-        border-radius: 8px;
+        border-radius: 0;
         overflow: hidden;
         position: relative;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        box-shadow: none;
       }
 
       .canvas-container {
@@ -70,7 +66,8 @@
 
       .coordinates-debug {
         position: absolute;
-        top: 10px;
+        top: auto;
+        bottom: 10px;
         left: 10px;
         background: rgba(0, 0, 0, 0.8);
         color: white;
@@ -84,14 +81,14 @@
 
       .leaderboard {
         position: fixed;
-        top: 20px;
-        right: 20px;
+        top: 10px;
+        right: 10px;
         background: white;
-        padding: 15px;
+        padding: 10px;
         border-radius: 8px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        min-width: 200px;
-        max-height: 300px;
+        min-width: 150px;
+        max-height: 200px;
         overflow-y: auto;
         z-index: 10;
       }
@@ -144,6 +141,24 @@
         const pendingSeedRequests = useRef(new Set());
         const revealedCellsRef = useRef(new Map());
         const [tick, setTick] = useState(0);
+
+        // Leaderboard visibility and number formatting
+        const [leaderboardVisible, setLeaderboardVisible] = useState(true);
+        const toggleLeaderboard = useCallback(() => {
+          setLeaderboardVisible(v => !v);
+        }, []);
+        const formatScore = useCallback((score) => {
+          // Format scores into human‑friendly strings, e.g. 1.2k or 1.5M
+          if (score >= 1000000) {
+            const val = (score / 1000000).toFixed(1).replace(/\.0$/, '');
+            return `${val}M`;
+          }
+          if (score >= 1000) {
+            const val = (score / 1000).toFixed(1).replace(/\.0$/, '');
+            return `${val}k`;
+          }
+          return String(score);
+        }, []);
 
         // Constants
         const CHUNK = 64;
@@ -491,7 +506,7 @@
         //     ctx.lineTo(canvas.width, screenY);
         //   }
 
-          ctx.stroke();
+        //   ctx.stroke();
 
           // Draw revealed cells
           ctx.font = '12px Arial';
@@ -811,6 +826,9 @@
                 <canvas ref={canvasRef} id="game-canvas" />
 
                 <div className="coordinates-debug">
+                  <div className={`connection-status ${connected ? "connected" : "disconnected"}`}>
+                    {connected ? "Connected" : "Disconnected"}
+                  </div>
                   View: ({Math.round(viewX)}, {Math.round(viewY)})<br/>
                   Center: ({centerWorldX}, {centerWorldY})<br/>
                   Chunk: ({centerChunkX}, {centerChunkY})
@@ -819,17 +837,26 @@
             </div>
 
             <div className="leaderboard">
-              <h3>Leaderboard</h3>
-              {topPlayers.length > 0 ? (
-                <ol>
-                  {topPlayers.map(([playerId, score]) => (
-                    <li key={playerId}>
-                      Player {playerId}: {score}
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p>No players yet</p>
+              <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                <h3 style={{margin:0}}>Leaderboard</h3>
+                <button onClick={toggleLeaderboard}>
+                  {leaderboardVisible ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              {leaderboardVisible && (
+                <>
+                  {topPlayers.length > 0 ? (
+                    <ol>
+                      {topPlayers.map(([playerId, score]) => (
+                        <li key={playerId}>
+                          Player {playerId}: {formatScore(score)}
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p>No players yet</p>
+                  )}
+                </>
               )}
             </div>
           </div>
