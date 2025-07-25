@@ -13,6 +13,8 @@
       src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
     ></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/protobufjs/dist/protobuf.min.js"></script>
+    <script src="/messages_pb.js"></script>
     <style>
       body {
         margin: 0;
@@ -119,6 +121,7 @@
 
     <script type="text/babel">
       const { useState, useEffect, useRef, useCallback, useMemo } = React;
+      const PB = $root;
       const DEBUG = false;
       const log = DEBUG ? console.log.bind(console) : () => {};
 
@@ -219,7 +222,10 @@
 
           if (!pendingSeedRequests.current.has(key) && ws && connected) {
             pendingSeedRequests.current.add(key);
-            ws.send(JSON.stringify({ type: 'seed', chunkX: cx, chunkY: cy }));
+            const msg = PB.ClientMessage.encode({
+              seed: { chunkId: { x: cx, y: cy } }
+            }).finish();
+            ws.send(msg);
           }
 
           return new Promise((resolve, reject) => {
@@ -262,11 +268,10 @@
           const key = `${chunkX},${chunkY}`;
           if (!subscribedChunks.current.has(key) && ws && connected) {
             subscribedChunks.current.add(key);
-            ws.send(JSON.stringify({
-              type: 'subscribe',
-              chunkX,
-              chunkY
-            }));
+            const msg = PB.ClientMessage.encode({
+              subscribe: { chunkId: { x: chunkX, y: chunkY } }
+            }).finish();
+            ws.send(msg);
           }
         }, [ws, connected]);
 
@@ -274,11 +279,10 @@
           const key = `${chunkX},${chunkY}`;
           if (subscribedChunks.current.has(key) && ws && connected) {
             subscribedChunks.current.delete(key);
-            ws.send(JSON.stringify({
-              type: 'unsubscribe',
-              chunkX,
-              chunkY
-            }));
+            const msg = PB.ClientMessage.encode({
+              unsubscribe: { chunkId: { x: chunkX, y: chunkY } }
+            }).finish();
+            ws.send(msg);
           }
         }, [ws, connected]);
 
@@ -362,13 +366,14 @@
             revealedCellsRef.current.set(cell.cellKey, optimisticReveal);
             ensureChunkSubscription(cell.chunkX, cell.chunkY);
 
-            ws.send(JSON.stringify({
-              type: 'reveal',
-              chunkX: cell.chunkX,
-              chunkY: cell.chunkY,
-              x: cell.localX,
-              y: cell.localY
-            }));
+            const msg = PB.ClientMessage.encode({
+              reveal: {
+                chunkId: { x: cell.chunkX, y: cell.chunkY },
+                x: cell.localX,
+                y: cell.localY
+              }
+            }).finish();
+            ws.send(msg);
           }
 
           setTick(t => t + 1);
@@ -405,13 +410,10 @@
             revealedCellsRef.current.set(key, optimisticReveal);
             setTick(t => t + 1);
 
-            ws.send(JSON.stringify({
-              type: 'reveal',
-              chunkX,
-              chunkY,
-              x: localX,
-              y: localY
-            }));
+            const msgMine = PB.ClientMessage.encode({
+              reveal: { chunkId: { x: chunkX, y: chunkY }, x: localX, y: localY }
+            }).finish();
+            ws.send(msgMine);
             return;
           }
 
@@ -435,13 +437,10 @@
             revealedCellsRef.current.set(key, optimisticReveal);
             setTick(t => t + 1);
 
-            ws.send(JSON.stringify({
-              type: 'reveal',
-              chunkX,
-              chunkY,
-              x: localX,
-              y: localY
-            }));
+            const msg = PB.ClientMessage.encode({
+              reveal: { chunkId: { x: chunkX, y: chunkY }, x: localX, y: localY }
+            }).finish();
+            ws.send(msg);
           }
         }, [ws, connected, worldToChunk, ensureChunkSubscription, isMine, countAdjacentMines, floodFillReveal]);
 
@@ -639,17 +638,20 @@
             setWs(null);
           };
 
+          websocket.binaryType = 'arraybuffer';
           websocket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
+            const msg = PB.ServerMessage.decode(new Uint8Array(event.data));
+            const data = msg; // easier variable name
 
-            if (data.type === 'chunkSync') {
-              const key = `${data.chunkId.X},${data.chunkId.Y}`;
-              seedCache.current.set(key, BigInt(data.seed));
+            if (data.chunkSync) {
+              const cs = data.chunkSync;
+              const key = `${cs.chunkId.x},${cs.chunkId.y}`;
+              seedCache.current.set(key, BigInt(cs.seed));
               pendingSeedRequests.current.delete(key);
 
-              if (Array.isArray(data.reveals)) {
-                for (const cell of data.reveals) {
-                  const seed = BigInt(data.seed);
+              if (Array.isArray(cs.reveals)) {
+                for (const cell of cs.reveals) {
+                  const seed = BigInt(cs.seed);
                   const cellIsMine = isMine(seed, cell.x, cell.y);
                   let adjacentMines = 0;
 
@@ -660,8 +662,8 @@
                         if (dx === 0 && dy === 0) continue;
                         let nx = cell.x + dx;
                         let ny = cell.y + dy;
-                        let ncx = cell.chunkId.X;
-                        let ncy = cell.chunkId.Y;
+                        let ncx = cell.chunkId.x;
+                        let ncy = cell.chunkId.y;
                         if (nx < 0) { ncx--; nx += CHUNK; }
                         else if (nx >= CHUNK) { ncx++; nx -= CHUNK; }
                         if (ny < 0) { ncy--; ny += CHUNK; }
@@ -673,7 +675,7 @@
                     }
                   }
 
-                  const cellKey = `${cell.chunkId.X},${cell.chunkId.Y},${cell.x},${cell.y}`;
+                  const cellKey = `${cell.chunkId.x},${cell.chunkId.y},${cell.x},${cell.y}`;
                   revealedCellsRef.current.set(cellKey, {
                     ...cell,
                     isMine: cellIsMine,
@@ -682,46 +684,41 @@
                 }
                 setTick(t => t + 1);
               }
-            } else if (data.type === 'revealAck') {
-              if (!data.ok) {
-                // Optimistic reveal lost → resync this chunk
-                const key = `${data.chunkId.X},${data.chunkId.Y},${data.x},${data.y}`;
+            } else if (data.revealAck) {
+              const ack = data.revealAck;
+              if (!ack.ok) {
+                const key = `${ack.chunkId.x},${ack.chunkId.y},${ack.x},${ack.y}`;
                 revealedCellsRef.current.delete(key);
 
-                // Force a re‑subscribe to get authoritative state
-                ws.send(JSON.stringify({
-                  type: 'subscribe',
-                  chunkX: data.chunkId.X,
-                  chunkY: data.chunkId.Y
-                }));
+                const subMsg = PB.ClientMessage.encode({
+                  subscribe: { chunkId: { x: ack.chunkId.x, y: ack.chunkId.y } }
+                }).finish();
+                ws.send(subMsg);
 
                 setTick(t => t + 1);
               }
-            } else if (data.chunkId && typeof data.x === 'number' && typeof data.y === 'number' && typeof data.playerId === 'number') {
-              // This is a reveal broadcast from server
-              const cellKey = `${data.chunkId.X},${data.chunkId.Y},${data.x},${data.y}`;
+            } else if (data.reveal) {
+              const reveal = data.reveal;
+              const cellKey = `${reveal.chunkId.x},${reveal.chunkId.y},${reveal.x},${reveal.y}`;
 
-              // Avoid duplicates by checking if we already have this exact reveal
               const existing = revealedCellsRef.current.get(cellKey);
-              if (existing && existing.playerId === data.playerId) {
-                return; // Skip duplicate
+              if (existing && existing.playerId === reveal.playerId) {
+                return;
               }
 
-              // Calculate mine content client-side
-              const seed = seedCache.current.get(`${data.chunkId.X},${data.chunkId.Y}`);
+              const seed = seedCache.current.get(`${reveal.chunkId.x},${reveal.chunkId.y}`);
               if (seed) {
-                const cellIsMine = isMine(seed, data.x, data.y);
+                const cellIsMine = isMine(seed, reveal.x, reveal.y);
                 let adjacentMines = 0;
 
                 if (!cellIsMine) {
-                  // Calculate adjacent mines
                   for (let dy = -1; dy <= 1; dy++) {
                     for (let dx = -1; dx <= 1; dx++) {
                       if (dx === 0 && dy === 0) continue;
-                      let nx = data.x + dx;
-                      let ny = data.y + dy;
-                      let ncx = data.chunkId.X;
-                      let ncy = data.chunkId.Y;
+                      let nx = reveal.x + dx;
+                      let ny = reveal.y + dy;
+                      let ncx = reveal.chunkId.x;
+                      let ncy = reveal.chunkId.y;
                       if (nx < 0) { ncx--; nx += CHUNK; }
                       else if (nx >= CHUNK) { ncx++; nx -= CHUNK; }
                       if (ny < 0) { ncy--; ny += CHUNK; }
@@ -734,13 +731,38 @@
                 }
 
                 revealedCellsRef.current.set(cellKey, {
-                  ...data,
+                  chunkId: { X: reveal.chunkId.x, Y: reveal.chunkId.y },
+                  x: reveal.x,
+                  y: reveal.y,
+                  playerId: reveal.player_id,
                   isMine: cellIsMine,
                   adjacentMines
                 });
                 setTick(t => t + 1);
               }
-            } else if (data.type === 'leaderboard') {
+            } else if (data.leaderboard) {
+              const lb = data.leaderboard;
+              if (lb.entries) {
+                const scores = {};
+                lb.entries.forEach(entry => {
+                  let score = entry.score;
+                  if (score.endsWith('k')) {
+                    score = parseFloat(score.slice(0, -1)) * 1000;
+                  } else if (score.endsWith('M')) {
+                    score = parseFloat(score.slice(0, -1)) * 1000000;
+                  } else {
+                    score = parseInt(score) || 0;
+                  }
+                  scores[entry.playerId] = score;
+                });
+                setLeaderboard(scores);
+              }
+            } else if (data.seed) {
+              const seedMsg = data.seed;
+              const key = `${seedMsg.chunkId.x},${seedMsg.chunkId.y}`;
+              seedCache.current.set(key, BigInt(seedMsg.seed));
+              pendingSeedRequests.current.delete(key);
+            }
               // Handle new leaderboard format with entries array
               if (data.entries) {
                 const scores = {};
@@ -761,10 +783,6 @@
                 // Fallback to old format
                 setLeaderboard(data.scores || {});
               }
-            } else if (data.type === 'seed') {
-              const key = `${data.chunkX},${data.chunkY}`;
-              seedCache.current.set(key, BigInt(data.seed));
-              pendingSeedRequests.current.delete(key);
             }
           };
 

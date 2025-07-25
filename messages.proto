@@ -1,0 +1,79 @@
+syntax = "proto3";
+option go_package="infinite-minesweeper/pb";
+message ChunkID {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+message RevealRequest {
+  ChunkID chunk_id = 1;
+  int32 x = 2;
+  int32 y = 3;
+}
+
+message SubscribeRequest {
+  ChunkID chunk_id = 1;
+}
+
+message UnsubscribeRequest {
+  ChunkID chunk_id = 1;
+}
+
+message SeedRequest {
+  ChunkID chunk_id = 1;
+}
+
+message SeedResponse {
+  ChunkID chunk_id = 1;
+  uint64 seed = 2;
+}
+
+message Reveal {
+  ChunkID chunk_id = 1;
+  int32 x = 2;
+  int32 y = 3;
+  int32 player_id = 4;
+}
+
+message ChunkSync {
+  ChunkID chunk_id = 1;
+  uint64 seed = 2;
+  repeated Reveal reveals = 3;
+}
+
+message RevealAck {
+  ChunkID chunk_id = 1;
+  int32 x = 2;
+  int32 y = 3;
+  bool ok = 4;
+  int32 scorer = 5;
+}
+
+message LeaderboardEntry {
+  int32 player_id = 1;
+  string score = 2;
+}
+
+message Leaderboard {
+  uint64 version = 1;
+  repeated LeaderboardEntry entries = 2;
+}
+
+message ClientMessage {
+  oneof msg {
+    RevealRequest reveal = 1;
+    SubscribeRequest subscribe = 2;
+    UnsubscribeRequest unsubscribe = 3;
+    SeedRequest seed = 4;
+  }
+}
+
+message ServerMessage {
+  oneof msg {
+    Reveal reveal = 1;
+    RevealAck reveal_ack = 2;
+    SeedResponse seed = 3;
+    ChunkSync chunk_sync = 4;
+    Leaderboard leaderboard = 5;
+  }
+}

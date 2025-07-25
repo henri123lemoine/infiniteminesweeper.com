@@ -4,7 +4,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -15,6 +14,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
+
+	pb "infinite-minesweeper/pb"
 )
 
 const (
@@ -86,62 +88,9 @@ func (tb *TokenBucket) Take() bool {
 	return false
 }
 
-type Message struct {
-	Type string `json:"type"`
-}
-
-type RevealMessage struct {
-	Type   string `json:"type"`
-	ChunkX int32  `json:"chunkX"`
-	ChunkY int32  `json:"chunkY"`
-	X      int    `json:"x"`
-	Y      int    `json:"y"`
-}
-
-type SubscribeMessage struct {
-	Type   string `json:"type"`
-	ChunkX int32  `json:"chunkX"`
-	ChunkY int32  `json:"chunkY"`
-}
-
-type UnsubscribeMessage struct {
-	Type   string `json:"type"`
-	ChunkX int32  `json:"chunkX"`
-	ChunkY int32  `json:"chunkY"`
-}
-
-type SeedReq struct {
-	Type   string `json:"type"`
-	ChunkX int32  `json:"chunkX"`
-	ChunkY int32  `json:"chunkY"`
-}
-
-type SeedResp struct {
-	Type   string `json:"type"`
-	ChunkX int32  `json:"chunkX"`
-	ChunkY int32  `json:"chunkY"`
-	Seed   uint64 `json:"seed"`
-}
-
-type ChunkSync struct {
-	Type    string   `json:"type"`
-	ChunkID ChunkID  `json:"chunkId"`
-	Seed    uint64   `json:"seed"`
-	Reveals []Reveal `json:"reveals"`
-}
-
-type RevealAck struct {
-	Type    string  `json:"type"`
-	ChunkID ChunkID `json:"chunkId"`
-	X       int     `json:"x"`
-	Y       int     `json:"y"`
-	OK      bool    `json:"ok"`
-	Scorer  int32   `json:"scorer,omitempty"`
-}
-
-// mustJSON helper for marshaling
-func mustJSON(v any) []byte {
-	b, err := json.Marshal(v)
+// mustProto helper for marshaling protobuf messages
+func mustProto(m proto.Message) []byte {
+	b, err := proto.Marshal(m)
 	if err != nil {
 		panic(err)
 	}
@@ -162,7 +111,7 @@ type Server struct {
 
 	// --- leaderboard cache ---
 	lbVersion uint64
-	lbJSON    []byte
+	lbBuf     []byte
 	lbDirty   bool
 
 	// Players
@@ -219,11 +168,6 @@ func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
 
 // Leaderboard helpers
 
-type lbEntry struct {
-	PlayerID int32  `json:"playerId"`
-	Score    string `json:"score"`
-}
-
 func formatScore(n uint32) string {
 	switch {
 	case n >= 1_000_000:
@@ -238,30 +182,25 @@ func formatScore(n uint32) string {
 // Assumes caller holds s.stateMu (write lock)
 func (s *Server) buildLeaderboardUnsafe() {
 	// Collect & sort
-	entries := make([]lbEntry, 0, len(s.scores))
+	entries := make([]*pb.LeaderboardEntry, 0, len(s.scores))
 	for pid, sc := range s.scores {
-		entries = append(entries, lbEntry{PlayerID: pid, Score: formatScore(sc)})
+		entries = append(entries, &pb.LeaderboardEntry{PlayerId: pid, Score: formatScore(sc)})
 	}
 	// Sort by the real uint32 score
 	sort.Slice(entries, func(i, j int) bool {
-		return s.scores[entries[i].PlayerID] > s.scores[entries[j].PlayerID]
+		return s.scores[entries[i].PlayerId] > s.scores[entries[j].PlayerId]
 	})
 	if len(entries) > 20 {
 		entries = entries[:20]
 	}
 
-	lb := struct {
-		Type    string    `json:"type"`
-		Version uint64    `json:"version"`
-		Entries []lbEntry `json:"entries"`
-	}{
-		Type:    "leaderboard",
+	lb := &pb.Leaderboard{
 		Version: s.lbVersion + 1,
 		Entries: entries,
 	}
 
 	s.lbVersion++
-	s.lbJSON = mustJSON(lb)
+	s.lbBuf = mustProto(lb)
 }
 
 // Bounds checking for reveal requests
@@ -323,7 +262,13 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 
 func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
 	// Caller already holds stateMu (inside reveal())
-	payload := mustJSON(reveal) // marshal once
+	pbReveal := &pb.Reveal{
+		ChunkId:  &pb.ChunkID{X: reveal.ChunkID.X, Y: reveal.ChunkID.Y},
+		X:        int32(reveal.X),
+		Y:        int32(reveal.Y),
+		PlayerId: reveal.PlayerID,
+	}
+	payload := mustProto(&pb.ServerMessage{Msg: &pb.ServerMessage_Reveal{Reveal: pbReveal}})
 	sent := make(map[int32]struct{})
 
 	for dy := int32(-1); dy <= 1; dy++ {
@@ -383,11 +328,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Send initial leaderboard
 	s.stateMu.Lock()
-	if s.lbJSON == nil {
+	if s.lbBuf == nil {
 		s.buildLeaderboardUnsafe()
 		s.lbDirty = false
 	}
-	lbBytes := s.lbJSON
+	lbBytes := s.lbBuf
 	lbVer := s.lbVersion
 	s.stateMu.Unlock()
 
@@ -408,87 +353,57 @@ func (s *Server) readPump(player *Player) {
 	}()
 
 	for {
-		var rawMsg json.RawMessage
-		err := player.Conn.ReadJSON(&rawMsg)
+		_, data, err := player.Conn.ReadMessage()
 		if err != nil {
 			break
 		}
 
-		var baseMsg Message
-		if err := json.Unmarshal(rawMsg, &baseMsg); err != nil {
+		var msg pb.ClientMessage
+		if err := proto.Unmarshal(data, &msg); err != nil {
 			continue
 		}
 
-		switch baseMsg.Type {
-		case "reveal":
-			var msg RevealMessage
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
-
-			// Rate limiting
+		switch t := msg.Msg.(type) {
+		case *pb.ClientMessage_Reveal:
+			r := t.Reveal
 			now := time.Now()
 			if now.Sub(player.RevealWindowStart) > time.Minute {
 				player.RevealWindowStart = now
 				player.RevealCount = 0
 			}
-
 			if player.RevealCount >= MaxRevealsPerMin {
 				player.SusRevealOverflow++
 			}
-
 			player.RevealCount++
 
-			chunkID := ChunkID{X: msg.ChunkX, Y: msg.ChunkY}
-			ok := s.reveal(player.ID, chunkID, msg.X, msg.Y)
+			cid := ChunkID{X: r.ChunkId.X, Y: r.ChunkId.Y}
+			ok := s.reveal(player.ID, cid, int(r.X), int(r.Y))
 
-			ack := RevealAck{
-				Type:    "revealAck",
-				ChunkID: chunkID,
-				X:       msg.X,
-				Y:       msg.Y,
-				OK:      ok,
+			ack := &pb.RevealAck{
+				ChunkId: r.ChunkId,
+				X:       r.X,
+				Y:       r.Y,
+				Ok:      ok,
 			}
-
 			if ok {
 				ack.Scorer = player.ID
 			}
+			s.sendToPlayer(player.ID, mustProto(&pb.ServerMessage{Msg: &pb.ServerMessage_RevealAck{RevealAck: ack}}))
 
-			s.sendToPlayer(player.ID, mustJSON(ack))
+		case *pb.ClientMessage_Subscribe:
+			s.subscribeToChunk(player.ID, ChunkID{X: t.Subscribe.ChunkId.X, Y: t.Subscribe.ChunkId.Y})
 
-		case "subscribe":
-			var msg SubscribeMessage
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
-			s.subscribeToChunk(player.ID, ChunkID{X: msg.ChunkX, Y: msg.ChunkY})
+		case *pb.ClientMessage_Unsubscribe:
+			s.unsubscribeFromChunk(player.ID, ChunkID{X: t.Unsubscribe.ChunkId.X, Y: t.Unsubscribe.ChunkId.Y})
 
-		case "seed":
-			var msg SeedReq
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
-
+		case *pb.ClientMessage_Seed:
 			if !player.TokenBucket.Take() {
 				continue
 			}
-
-			seed := s.generateChunkSeed(ChunkID{msg.ChunkX, msg.ChunkY})
-			resp := SeedResp{
-				Type:   "seed",
-				ChunkX: msg.ChunkX,
-				ChunkY: msg.ChunkY,
-				Seed:   seed,
-			}
-
-			s.sendToPlayer(player.ID, mustJSON(resp))
-
-		case "unsubscribe":
-			var msg UnsubscribeMessage
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
-			s.unsubscribeFromChunk(player.ID, ChunkID{X: msg.ChunkX, Y: msg.ChunkY})
+			cid := ChunkID{X: t.Seed.ChunkId.X, Y: t.Seed.ChunkId.Y}
+			seed := s.generateChunkSeed(cid)
+			resp := &pb.SeedResponse{ChunkId: t.Seed.ChunkId, Seed: seed}
+			s.sendToPlayer(player.ID, mustProto(&pb.ServerMessage{Msg: &pb.ServerMessage_Seed{Seed: resp}}))
 		}
 	}
 }
@@ -497,7 +412,7 @@ func (s *Server) writePump(player *Player) {
 	defer player.Conn.Close()
 
 	for message := range player.Send {
-		if err := player.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		if err := player.Conn.WriteMessage(websocket.BinaryMessage, message); err != nil {
 			return
 		}
 	}
@@ -543,14 +458,21 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	}
 	s.stateMu.Unlock()
 
-	msg := ChunkSync{
-		Type:    "chunkSync",
-		ChunkID: chunkID,
-		Seed:    seed,
-		Reveals: reveals,
+	pbReveals := make([]*pb.Reveal, 0, len(reveals))
+	for _, rv := range reveals {
+		pbReveals = append(pbReveals, &pb.Reveal{
+			ChunkId:  &pb.ChunkID{X: rv.ChunkID.X, Y: rv.ChunkID.Y},
+			X:        int32(rv.X),
+			Y:        int32(rv.Y),
+			PlayerId: rv.PlayerID,
+		})
 	}
-
-	s.sendToPlayer(playerID, mustJSON(msg))
+	msg := &pb.ChunkSync{
+		ChunkId: &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
+		Seed:    seed,
+		Reveals: pbReveals,
+	}
+	s.sendToPlayer(playerID, mustProto(&pb.ServerMessage{Msg: &pb.ServerMessage_ChunkSync{ChunkSync: msg}}))
 }
 
 func (s *Server) unsubscribeFromChunk(playerID int32, chunkID ChunkID) {
@@ -605,11 +527,11 @@ func main() {
 		for range ticker.C {
 			// Re‑compute if dirty
 			server.stateMu.Lock()
-			if server.lbDirty || server.lbJSON == nil {
+			if server.lbDirty || server.lbBuf == nil {
 				server.buildLeaderboardUnsafe()
 				server.lbDirty = false
 			}
-			lbJSON := server.lbJSON
+			lbBytes := server.lbBuf
 			lbVer := server.lbVersion
 			server.stateMu.Unlock()
 
@@ -620,7 +542,7 @@ func main() {
 					continue
 				}
 				select {
-				case p.Send <- lbJSON:
+				case p.Send <- lbBytes:
 					p.LastLBVersion = lbVer
 				default:
 					// full buffer; skip, they'll get it next tick
