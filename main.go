@@ -1,13 +1,16 @@
 package main
 
 import (
+	"compress/gzip"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"runtime"
 	"sort"
 	"strconv"
@@ -21,6 +24,13 @@ const (
 	ChunkSize        = 64
 	SendBufSize      = 4096  // outbound msgs kept per player before back‑pressure
 	MaxRevealsPerMin = 10000 // relaxed flood‑fill budget
+)
+
+// SNAPSHOT / PERSISTENCE CONSTANTS
+const (
+	snapshotFile     = "data/snapshot.gob.gz"
+	snapshotTmp      = "snapshot.tmp.gz"
+	snapshotInterval = 10 * time.Minute
 )
 
 type ChunkID struct {
@@ -195,6 +205,13 @@ func NewServer() *Server {
 	}
 }
 
+func (s *Server) initPersistence() {
+	if err := s.loadSnapshot(); err != nil {
+		log.Printf("[snapshot] no previous snapshot loaded: %v (starting fresh)", err)
+	}
+	go s.periodicSnapshotLoop() // fire‑and‑forget
+}
+
 func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
 	// Cache seeds to avoid repeated HMAC calculations
 	s.seedCacheMu.RLock()
@@ -318,6 +335,8 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	// Broadcast to 3x3 neighborhood
 	s.broadcastRevealTo3x3(reveal)
 
+	// persistence: mark dirty so that next snapshot loop rewrites file
+	s.lbDirty = true
 	return true
 }
 
@@ -589,10 +608,88 @@ func (s *Server) removePlayer(playerID int32) {
 	log.Printf("Player %d disconnected", playerID)
 }
 
+// snapshotData is what actually gets serialized. Gob can handle maps with
+// struct keys, so we keep the exact types.
+type snapshotData struct {
+	Chunks     map[ChunkID]*ChunkBits
+	CellOwners map[ChunkID]map[int]int32
+	Scores     map[int32]uint32
+}
+
+func (s *Server) saveSnapshot() error {
+	s.stateMu.RLock()
+	data := snapshotData{
+		Chunks:     s.chunks,
+		CellOwners: s.cellOwners,
+		Scores:     s.scores,
+	}
+	s.stateMu.RUnlock()
+
+	f, err := os.Create(snapshotTmp)
+	if err != nil {
+		return err
+	}
+	gz := gzip.NewWriter(f)
+	enc := gob.NewEncoder(gz)
+	if err := enc.Encode(&data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(snapshotTmp, snapshotFile)
+}
+
+func (s *Server) loadSnapshot() error {
+	f, err := os.Open(snapshotFile)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+
+	dec := gob.NewDecoder(gz)
+	var data snapshotData
+	if err := dec.Decode(&data); err != nil {
+		return err
+	}
+
+	s.stateMu.Lock()
+	s.chunks = data.Chunks
+	s.cellOwners = data.CellOwners
+	s.scores = data.Scores
+	s.lbDirty = true // force rebuild of leaderboard on first tick
+	s.stateMu.Unlock()
+	return nil
+}
+
+func (s *Server) periodicSnapshotLoop() {
+	ticker := time.NewTicker(snapshotInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		if err := s.saveSnapshot(); err != nil {
+			log.Printf("[snapshot] save error: %v", err)
+		} else {
+			log.Printf("[snapshot] wrote %s", snapshotFile)
+		}
+	}
+}
+
 func main() {
 	runtime.GOMAXPROCS(1)
 
 	server := NewServer()
+	server.initPersistence()
 
 	http.HandleFunc("/ws", server.handleWebSocket)
 	http.Handle("/", http.FileServer(http.Dir("./")))
