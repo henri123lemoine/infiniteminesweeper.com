@@ -50,6 +50,7 @@
         width: 100%;
         height: 100%;
         position: relative;
+        image-rendering: pixelated;
         cursor: grab;
       }
 
@@ -61,7 +62,7 @@
         display: block;
         width: 100%;
         height: 100%;
-        background: #ddd;
+        background: #c0c0c0;
       }
 
       .coordinates-debug {
@@ -91,6 +92,7 @@
         max-height: 200px;
         overflow-y: auto;
         z-index: 10;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       }
 
       .leaderboard h3 {
@@ -239,14 +241,14 @@
         // Add getNumberColor for Minesweeper number coloring
         const getNumberColor = useCallback((num) => {
           const colors = {
-            1: '#0000FF', // Blue
-            2: '#008000', // Green
-            3: '#FF0000', // Red
-            4: '#000080', // Navy
-            5: '#800000', // Maroon
-            6: '#008080', // Teal
-            7: '#000000', // Black
-            8: '#808080'  // Gray
+            1: '#0000FF',
+            2: '#008000',
+            3: '#FF0000',
+            4: '#000080',
+            5: '#800000',
+            6: '#008080',
+            7: '#000000',
+            8: '#808080'
           };
           return colors[num] || '#000000';
         }, []);
@@ -471,7 +473,7 @@
           canvas.width = rect.width;
           canvas.height = rect.height;
 
-          ctx.fillStyle = '#ddd';
+          ctx.fillStyle = '#c0c0c0';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
 
           const startWorldX = Math.floor(viewX / CELL_SIZE);
@@ -480,8 +482,8 @@
           const endWorldY = Math.ceil((viewY + canvas.height) / CELL_SIZE);
 
           // Draw grid
-          ctx.strokeStyle = '#999';
-          ctx.lineWidth = 1;
+          ctx.strokeStyle = '#808080';
+          ctx.lineWidth = 0.5;
           ctx.beginPath();
 
           for (let worldX = startWorldX; worldX <= endWorldX; worldX++) {
@@ -524,7 +526,7 @@
         //   ctx.stroke();
 
           // Draw revealed cells
-          ctx.font = '12px Arial';
+          ctx.font = 'bold 14px monospace';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
 
@@ -542,11 +544,24 @@
               return;
             }
 
+            // Draw subtle border around revealed cells
+            ctx.strokeStyle = '#999';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(screenX + 0.5, screenY + 0.5, CELL_SIZE - 1, CELL_SIZE - 1);
+
             // Draw cell background
             if (cellData.isMine) {
-              ctx.fillStyle = '#f44';
+              // Red gradient for mines
+              const gradient = ctx.createLinearGradient(screenX, screenY, screenX + CELL_SIZE, screenY + CELL_SIZE);
+              gradient.addColorStop(0, '#ff6b6b');
+              gradient.addColorStop(1, '#e74c3c');
+              ctx.fillStyle = gradient;
             } else {
-              ctx.fillStyle = cellData.playerId === -1 ? 'rgba(255, 255, 255, 0.7)' : '#fff';
+              // Light gray for revealed cells with subtle gradient
+              const gradient = ctx.createLinearGradient(screenX, screenY, screenX + CELL_SIZE, screenY + CELL_SIZE);
+              gradient.addColorStop(0, cellData.playerId === -1 ? '#f5f5f5' : '#ffffff');
+              gradient.addColorStop(1, cellData.playerId === -1 ? '#e8e8e8' : '#f0f0f0');
+              ctx.fillStyle = gradient;
             }
 
             ctx.fillRect(screenX + 1, screenY + 1, CELL_SIZE - 2, CELL_SIZE - 2);
@@ -554,10 +569,11 @@
             // Draw cell content
             if (cellData.isMine) {
               ctx.fillStyle = 'white';
-              ctx.fillText('💣', screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2);
+              ctx.fillText('💣', screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2 + 2);
             } else if (cellData.adjacentMines > 0) {
+              ctx.font = 'bold 14px monospace';
               ctx.fillStyle = getNumberColor(cellData.adjacentMines);
-              ctx.fillText(cellData.adjacentMines.toString(), screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2);
+              ctx.fillText(cellData.adjacentMines.toString(), screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2 + 1.5);
             }
           });
 
