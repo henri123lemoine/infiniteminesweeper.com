@@ -74,9 +74,13 @@ func TestBuildLeaderboard(t *testing.T) {
 	s.buildLeaderboardUnsafe()
 	s.stateMu.Unlock()
 
-	var lb pb.Leaderboard
-	if err := proto.Unmarshal(s.lbBuf, &lb); err != nil {
-		t.Fatalf("unmarshal leaderboard: %v", err)
+	var msg pb.ServerMessage
+	if err := proto.Unmarshal(s.lbBuf, &msg); err != nil {
+		t.Fatalf("unmarshal leaderboard message: %v", err)
+	}
+	lb := msg.GetLeaderboard()
+	if lb == nil {
+		t.Fatalf("leaderboard message missing")
 	}
 	if lb.Version != 1 {
 		t.Fatalf("version = %d, want 1", lb.Version)

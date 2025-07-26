@@ -200,7 +200,7 @@ func (s *Server) buildLeaderboardUnsafe() {
 	}
 
 	s.lbVersion++
-	s.lbBuf = mustProto(lb)
+	s.lbBuf = mustProto(&pb.ServerMessage{Msg: &pb.ServerMessage_Leaderboard{Leaderboard: lb}})
 }
 
 // Bounds checking for reveal requests
