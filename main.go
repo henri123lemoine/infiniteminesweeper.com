@@ -40,9 +40,10 @@ type ChunkID struct {
 type ChunkBits [64]uint64
 
 type Reveal struct {
-	ChunkID ChunkID `json:"chunkId"`
-	X       int     `json:"x"`
-	Y       int     `json:"y"`
+	ChunkID  ChunkID `json:"chunkId"`
+	X        int     `json:"x"`
+	Y        int     `json:"y"`
+	PlayerID int32   `json:"playerId"`
 }
 
 type Player struct {
@@ -164,9 +165,10 @@ type Server struct {
 	stateMu sync.RWMutex
 
 	// World state - just what cells are revealed and by whom
-	chunks map[ChunkID]*ChunkBits         // Which cells are revealed (bitset)
-	scores map[int32]uint32               // playerID -> reveal count
-	subs   map[ChunkID]map[int32]struct{} // who wants reveals for each chunk
+	chunks     map[ChunkID]*ChunkBits         // Which cells are revealed (bitset)
+	cellOwners map[ChunkID]map[int]int32      // bitIndex -> playerID
+	scores     map[int32]uint32               // playerID -> reveal count
+	subs       map[ChunkID]map[int32]struct{} // who wants reveals for each chunk
 
 	// --- leaderboard cache ---
 	lbVersion uint64
@@ -189,6 +191,7 @@ func NewServer() *Server {
 	return &Server{
 		secret:       []byte("minesweeper-secret-key"),
 		chunks:       make(map[ChunkID]*ChunkBits),
+		cellOwners:   make(map[ChunkID]map[int]int32),
 		scores:       make(map[int32]uint32),
 		subs:         make(map[ChunkID]map[int32]struct{}),
 		players:      make(map[int32]*Player),
@@ -311,15 +314,22 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	// Set the bit (mark as revealed)
 	chunk[wordIndex] |= 1 << bitOffset
 
+	// Track who revealed it
+	if s.cellOwners[chunkID] == nil {
+		s.cellOwners[chunkID] = make(map[int]int32)
+	}
+	s.cellOwners[chunkID][bitIndex] = playerID
+
 	// Update score & mark leaderboard dirty
 	s.scores[playerID]++
 	s.lbDirty = true
 
 	// Create reveal message
 	reveal := Reveal{
-		ChunkID: chunkID,
-		X:       x,
-		Y:       y,
+		ChunkID:  chunkID,
+		X:        x,
+		Y:        y,
+		PlayerID: playerID,
 	}
 
 	// Broadcast to 3x3 neighborhood
@@ -519,8 +529,9 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	}
 	s.subs[chunkID][playerID] = struct{}{}
 
-	// Prepare chunk sync - just revealed cells
+	// Prepare chunk sync - just revealed cells and their owners
 	chunk, chunkExists := s.chunks[chunkID]
+	owners := s.cellOwners[chunkID]
 	seed := s.generateChunkSeed(chunkID)
 	var reveals []Reveal
 
@@ -532,10 +543,18 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 				bitOffset := bitIndex % 64
 
 				if chunk[wordIndex]&(1<<bitOffset) != 0 {
+					var ownerID int32 = 0
+					if owners != nil {
+						if owner, exists := owners[bitIndex]; exists {
+							ownerID = owner
+						}
+					}
+
 					reveals = append(reveals, Reveal{
-						ChunkID: chunkID,
-						X:       x,
-						Y:       y,
+						ChunkID:  chunkID,
+						X:        x,
+						Y:        y,
+						PlayerID: ownerID,
 					})
 				}
 			}
@@ -592,15 +611,17 @@ func (s *Server) removePlayer(playerID int32) {
 // snapshotData is what actually gets serialized. Gob can handle maps with
 // struct keys, so we keep the exact types.
 type snapshotData struct {
-	Chunks map[ChunkID]*ChunkBits
-	Scores map[int32]uint32
+	Chunks     map[ChunkID]*ChunkBits
+	CellOwners map[ChunkID]map[int]int32
+	Scores     map[int32]uint32
 }
 
 func (s *Server) saveSnapshot() error {
 	s.stateMu.RLock()
 	data := snapshotData{
-		Chunks: s.chunks,
-		Scores: s.scores,
+		Chunks:     s.chunks,
+		CellOwners: s.cellOwners,
+		Scores:     s.scores,
 	}
 	s.stateMu.RUnlock()
 
@@ -645,6 +666,7 @@ func (s *Server) loadSnapshot() error {
 
 	s.stateMu.Lock()
 	s.chunks = data.Chunks
+	s.cellOwners = data.CellOwners
 	s.scores = data.Scores
 	s.lbDirty = true // force rebuild of leaderboard on first tick
 	s.stateMu.Unlock()
