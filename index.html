@@ -236,6 +236,21 @@
           });
         }, [ws, connected]);
 
+        // Add getNumberColor for Minesweeper number coloring
+        const getNumberColor = useCallback((num) => {
+          const colors = {
+            1: '#0000FF', // Blue
+            2: '#008000', // Green
+            3: '#FF0000', // Red
+            4: '#000080', // Navy
+            5: '#800000', // Maroon
+            6: '#008080', // Teal
+            7: '#000000', // Black
+            8: '#808080'  // Gray
+          };
+          return colors[num] || '#000000';
+        }, []);
+
         const countAdjacentMines = useCallback(async (cx, cy, x, y) => {
           let count = 0;
           for (let dy = -1; dy <= 1; dy++) {
@@ -541,12 +556,12 @@
               ctx.fillStyle = 'white';
               ctx.fillText('💣', screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2);
             } else if (cellData.adjacentMines > 0) {
-              ctx.fillStyle = 'black';
+              ctx.fillStyle = getNumberColor(cellData.adjacentMines);
               ctx.fillText(cellData.adjacentMines.toString(), screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2);
             }
           });
 
-        }, [viewX, viewY, tick]);
+        }, [viewX, viewY, tick, getNumberColor]);
 
         // Subscribe to visible chunks
         const subscribeToVisibleChunks = useCallback(() => {
