@@ -51,6 +51,7 @@ type Player struct {
 	Conn        *websocket.Conn
 	Send        chan []byte
 	TokenBucket TokenBucket
+	Name        string
 	// Rate limiting for reveals
 	RevealWindowStart time.Time
 	RevealCount       int
@@ -178,6 +179,7 @@ type Server struct {
 	// Players
 	playersMu    sync.RWMutex
 	players      map[int32]*Player
+	playerNames  map[int32]string
 	nextPlayerID int32
 
 	// Seed cache for performance
@@ -195,6 +197,7 @@ func NewServer() *Server {
 		scores:       make(map[int32]uint32),
 		subs:         make(map[ChunkID]map[int32]struct{}),
 		players:      make(map[int32]*Player),
+		playerNames:  make(map[int32]string),
 		seedCache:    make(map[ChunkID]uint64),
 		nextPlayerID: 1,
 		upgrader: websocket.Upgrader{
@@ -238,6 +241,7 @@ func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
 
 type lbEntry struct {
 	PlayerID int32  `json:"playerId"`
+	Name     string `json:"name"`
 	Score    string `json:"score"`
 }
 
@@ -257,7 +261,7 @@ func (s *Server) buildLeaderboardUnsafe() {
 	// Collect & sort
 	entries := make([]lbEntry, 0, len(s.scores))
 	for pid, sc := range s.scores {
-		entries = append(entries, lbEntry{PlayerID: pid, Score: formatScore(sc)})
+		entries = append(entries, lbEntry{PlayerID: pid, Name: s.playerNames[pid], Score: formatScore(sc)})
 	}
 	// Sort by the real uint32 score
 	sort.Slice(entries, func(i, j int) bool {
@@ -382,25 +386,48 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WebSocket upgrade error: %v", err)
 		return
 	}
+	// Expect hello message with optional playerId and name
+	var hello struct {
+		Type     string `json:"type"`
+		PlayerID int32  `json:"playerId"`
+		Name     string `json:"name"`
+	}
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.ReadJSON(&hello); err != nil || hello.Type != "hello" {
+		conn.Close()
+		return
+	}
+	conn.SetReadDeadline(time.Time{})
 
-	// Create new player
+	playerID := hello.PlayerID
+	s.stateMu.Lock()
+	if playerID <= 0 || playerID >= s.nextPlayerID {
+		playerID = s.nextPlayerID
+		s.nextPlayerID++
+	}
+	s.playerNames[playerID] = hello.Name
+	s.lbDirty = true
+	s.stateMu.Unlock()
+
+	// Create player and replace any existing connection for same id
 	s.playersMu.Lock()
-	playerID := s.nextPlayerID
-	s.nextPlayerID++
+	if old, ok := s.players[playerID]; ok {
+		close(old.Send)
+		delete(s.players, playerID)
+	}
 	player := &Player{
-		ID:   playerID,
-		Conn: conn,
-		Send: make(chan []byte, SendBufSize),
-		TokenBucket: TokenBucket{
-			tokens: 200,
-		},
+		ID:                playerID,
+		Conn:              conn,
+		Send:              make(chan []byte, SendBufSize),
+		TokenBucket:       TokenBucket{tokens: 200},
 		RevealWindowStart: time.Now(),
 		RevealCount:       0,
+		Name:              hello.Name,
 	}
 	s.players[playerID] = player
 	s.playersMu.Unlock()
 
-	// Send initial leaderboard
+	// Send initial leaderboard and welcome after goroutines start
 	s.stateMu.Lock()
 	if s.lbJSON == nil {
 		s.buildLeaderboardUnsafe()
@@ -410,12 +437,17 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	lbVer := s.lbVersion
 	s.stateMu.Unlock()
 
-	s.sendToPlayer(playerID, lbBytes)
-	player.LastLBVersion = lbVer
-
-	// Start goroutines
 	go s.writePump(player)
 	go s.readPump(player)
+
+	welcome := struct {
+		Type     string `json:"type"`
+		PlayerID int32  `json:"playerId"`
+		Name     string `json:"name"`
+	}{"welcome", playerID, hello.Name}
+	s.sendToPlayer(playerID, mustJSON(welcome))
+	s.sendToPlayer(playerID, lbBytes)
+	player.LastLBVersion = lbVer
 
 	log.Printf("Player %d connected", playerID)
 }
@@ -611,17 +643,21 @@ func (s *Server) removePlayer(playerID int32) {
 // snapshotData is what actually gets serialized. Gob can handle maps with
 // struct keys, so we keep the exact types.
 type snapshotData struct {
-	Chunks     map[ChunkID]*ChunkBits
-	CellOwners map[ChunkID]map[int]int32
-	Scores     map[int32]uint32
+	Chunks       map[ChunkID]*ChunkBits
+	CellOwners   map[ChunkID]map[int]int32
+	Scores       map[int32]uint32
+	PlayerNames  map[int32]string
+	NextPlayerID int32
 }
 
 func (s *Server) saveSnapshot() error {
 	s.stateMu.RLock()
 	data := snapshotData{
-		Chunks:     s.chunks,
-		CellOwners: s.cellOwners,
-		Scores:     s.scores,
+		Chunks:       s.chunks,
+		CellOwners:   s.cellOwners,
+		Scores:       s.scores,
+		PlayerNames:  s.playerNames,
+		NextPlayerID: s.nextPlayerID,
 	}
 	s.stateMu.RUnlock()
 
@@ -668,6 +704,14 @@ func (s *Server) loadSnapshot() error {
 	s.chunks = data.Chunks
 	s.cellOwners = data.CellOwners
 	s.scores = data.Scores
+	if data.PlayerNames != nil {
+		s.playerNames = data.PlayerNames
+	} else {
+		s.playerNames = make(map[int32]string)
+	}
+	if data.NextPlayerID != 0 {
+		s.nextPlayerID = data.NextPlayerID
+	}
 	s.lbDirty = true // force rebuild of leaderboard on first tick
 	s.stateMu.Unlock()
 	return nil
