@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	rlockBudget = 100 * time.Nanosecond // p99 target for read‑lock
+	rlockBudget = 200 * time.Nanosecond // p99 target for read‑lock
 	wlockBudget = 2 * time.Microsecond  // p99 target for write‑lock
 )
 

@@ -58,45 +58,16 @@ The server will start on `http://localhost:8001`
 - **Optimistic Updates**: Local state with server reconciliation
 - **Viewport Management**: Efficient rendering of visible chunks only
 
-### Core Data Structures
+## Testing & Development
 
-```go
-type ChunkID struct { X, Y int32 }        // 8 bytes
-type ChunkBits [64]uint64                 // 512 bytes (4096 bits)
-
-// World state maps
-chunks   map[ChunkID]*ChunkBits          // Revealed cells
-scores   map[int32]uint32                // Player scores
-subs     map[ChunkID]map[int32]chan Reveal // Subscriptions
-```
-
-### Message Protocol
-
-```javascript
-// Client to Server
-{ type: 'reveal', chunkX: 0, chunkY: 0, x: 32, y: 32 }
-{ type: 'subscribe', chunkX: 0, chunkY: 0 }
-
-// Server to Client
-{ chunkId: {X: 0, Y: 0}, x: 32, y: 32, isMine: false, adjacentMines: 2, playerId: 1 }
-{ type: 'leaderboard', scores: { "1": 15, "2": 8 } }
-```
-
-## 🧪 Testing & Development
-
-### Manual Testing
+Running Tests
 
 ```bash
-# Run server
-go run main.go
-
-# Open multiple browser tabs to test multiplayer
-# Try revealing cells and check leaderboard updates
+go test -v -race ./...
 ```
 
-## 🔍 Debugging Tips
+Running Benchmarks
 
-- Check browser console for WebSocket errors
-- Monitor server logs for connection/subscription issues
-- Use multiple browser tabs to test multiplayer reveals
-- Verify chunk coordinates align between client and server
+```bash
+go test -run=Bench -bench=. -v
+```
