@@ -388,7 +388,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		RevealCount:       0,
 	}
 	s.players[playerID] = player
-	activeConnections.Inc()
 	s.playersMu.Unlock()
 
 	// Send initial leaderboard
@@ -435,7 +434,6 @@ func (s *Server) readPump(player *Player) {
 			if err := json.Unmarshal(rawMsg, &msg); err != nil {
 				continue
 			}
-			start := time.Now()
 
 			// Rate limiting
 			now := time.Now()
@@ -466,7 +464,6 @@ func (s *Server) readPump(player *Player) {
 			}
 
 			s.sendToPlayer(player.ID, mustJSON(ack))
-			revealLatency.Observe(float64(time.Since(start).Microseconds()))
 
 		case "subscribe":
 			var msg SubscribeMessage
@@ -577,7 +574,6 @@ func (s *Server) removePlayer(playerID int32) {
 		delete(s.players, playerID)
 	}
 	s.playersMu.Unlock()
-	activeConnections.Dec()
 
 	s.stateMu.Lock()
 	for chunkID, subs := range s.subs {
@@ -675,11 +671,6 @@ func main() {
 
 	http.HandleFunc("/ws", server.handleWebSocket)
 	http.Handle("/", http.FileServer(http.Dir("./")))
-	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
-	http.Handle("/metrics", metricsHandler())
 
 	// Leaderboard broadcast loop (1 s cadence, only on version mismatch)
 	go func() {
