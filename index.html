@@ -115,20 +115,18 @@
         color: white;
       }
 
-      .player-score {
-        position: fixed;
-        top: 10px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: white;
-        padding: 10px 20px;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        z-index: 10;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        font-weight: bold;
-        font-size: 18px;
-        border: 2px solid #4CAF50;
+      @media (max-width: 768px) {
+        .coordinates-debug {
+          font-size: 10px;
+          padding: 4px 6px;
+        }
+        .leaderboard {
+          top: 5px;
+          right: 5px;
+          padding: 5px;
+          font-size: 12px;
+          min-width: 120px;
+        }
       }
     </style>
   </head>
@@ -990,6 +988,68 @@
           e.preventDefault();
         }, []);
 
+        // Touch event handlers for mobile
+        const handleTouchStart = useCallback((e) => {
+          if (e.touches.length === 1) {
+            const touch = e.touches[0];
+            setDragStart({
+              x: touch.clientX,
+              y: touch.clientY,
+              viewX,
+              viewY
+            });
+
+            // Set a timeout to enable dragging after a delay
+            dragTimeoutRef.current = setTimeout(() => {
+              setIsDragging(true);
+            }, 150);
+          }
+        }, [viewX, viewY]);
+
+        const handleTouchMove = useCallback((e) => {
+          e.preventDefault(); // Prevent scrolling
+          if (e.touches.length === 1 && dragStart.x) {
+            const touch = e.touches[0];
+            const dx = Math.abs(touch.clientX - dragStart.x);
+            const dy = Math.abs(touch.clientY - dragStart.y);
+
+            // If touch moved significantly, immediately enable dragging
+            if (dx > 10 || dy > 10) {
+              if (dragTimeoutRef.current) {
+                clearTimeout(dragTimeoutRef.current);
+                dragTimeoutRef.current = null;
+              }
+              setIsDragging(true);
+            }
+
+            if (isDragging) {
+              const deltaX = touch.clientX - dragStart.x;
+              const deltaY = touch.clientY - dragStart.y;
+
+              setViewX(dragStart.viewX - deltaX);
+              setViewY(dragStart.viewY - deltaY);
+            }
+          }
+        }, [isDragging, dragStart]);
+
+        const handleTouchEnd = useCallback((e) => {
+          // Clear the drag timeout
+          if (dragTimeoutRef.current) {
+            clearTimeout(dragTimeoutRef.current);
+            dragTimeoutRef.current = null;
+          }
+
+          if (!isDragging && dragStart.x && e.changedTouches.length === 1) {
+            // This was a tap, not a drag
+            const touch = e.changedTouches[0];
+            const { x: worldX, y: worldY } = screenToWorld(touch.clientX, touch.clientY);
+            handleCellClick(worldX, worldY, false);
+          }
+
+          setIsDragging(false);
+          setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
+        }, [isDragging, dragStart, screenToWorld, handleCellClick]);
+
         // WebSocket setup
         const connectWs = useCallback(() => {
           const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
@@ -1192,7 +1252,7 @@
           }, 100);
 
           return () => clearTimeout(timeoutId);
-        }, [username]); // REMOVED connectWs from dependencies to prevent double connections
+        }, [username]);
 
         // Subscribe to visible chunks when view changes
         useEffect(() => {
@@ -1290,6 +1350,10 @@
                 onMouseUp={handleMouseUp}
                 onMouseLeave={handleMouseUp}
                 onContextMenu={handleContextMenu}
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
+                style={{touchAction: 'none'}} // Prevent default touch behaviors
               >
                 <canvas ref={canvasRef} id="game-canvas" />
 
