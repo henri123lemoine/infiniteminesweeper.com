@@ -333,8 +333,6 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 - Create proper error boundaries in React frontend
 - Handle edge cases (disconnections, malformed messages)
 
----
-
 ## Implementation Notes
 
 - **Start with Phase 1** - get basic game working locally first
@@ -343,3 +341,13 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 - **Single-core discipline** is crucial - don't parallelize prematurely
 - **Memory efficiency** matters more than speed for this scale
 - **Client-server state sync** is the most complex part - handle carefully
+
+# OTHER TODOS
+
+- Stop people from joining the game with a different id but the same exact username as someone else
+- Better mobile support; e.g. u gotta reload when joining on mobile for some reason or else it disconnects or smth?
+- Chords
+- Flags (can be client side only for now, as in you can right click to flag but it doesn't do anything concrete other than show a flag icon)
+- Self score at the top
+- Color wheel for user flags
+- Better scoring system
