@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/rand"
 	"runtime"
 	"sort"
 	"sync"
@@ -87,4 +88,75 @@ func BenchmarkReveal(b *testing.B) {
 			}
 		}
 	})
+}
+
+// BenchmarkRevealHeavy hammers a large area of the board and reports extra
+// heap growth per iteration so you can spot regressions quickly with
+// `go test -run=^$ -bench RevealHeavy -benchmem`.
+func BenchmarkRevealHeavy(b *testing.B) {
+	srv := NewServer()
+
+	// Load a 256 × 256 chunk grid (~65 k chunks) so that every reveal below
+	// touches an already‑allocated chunk node instead of silently short‑circuiting.
+	const grid = 256
+	for x := -grid / 2; x < grid/2; x++ {
+		for y := -grid / 2; y < grid/2; y++ {
+			// Ensure chunk is loaded by revealing a dummy cell
+			srv.reveal(1, ChunkID{X: int32(x), Y: int32(y)}, 0, 0)
+		}
+	}
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	base := ChunkID{X: 0, Y: 0}
+
+	// Pre‑choose 100 chunks we’ll fully reveal exactly once.
+	full := make([]ChunkID, 100)
+	for i := range full {
+		full[i] = ChunkID{
+			X: int32(rand.Intn(grid) - grid/2),
+			Y: int32(rand.Intn(grid) - grid/2),
+		}
+	}
+
+	for i := 0; i < b.N; i++ {
+		// stage A: first 100 iters => full‑chunk reveal
+		if i < len(full) {
+			c := full[i]
+			for x := 0; x < ChunkSize; x++ {
+				for y := 0; y < ChunkSize; y++ {
+					srv.reveal(1, c, x, y)
+				}
+			}
+			continue
+		}
+
+		// stage B: organic spray across the board
+		for j := 0; j < 30; j++ { // 30 different chunks
+			c := ChunkID{
+				X: int32(rand.Intn(grid) - grid/2),
+				Y: int32(rand.Intn(grid) - grid/2),
+			}
+			for k := 0; k < 200; k++ { // 200 random cells per chunk
+				x := rand.Intn(ChunkSize)
+				y := rand.Intn(ChunkSize)
+				srv.reveal(1, c, x, y)
+			}
+		}
+
+		// ping the origin chunk now and then to keep that code path hot.
+		if i%250 == 0 {
+			srv.reveal(1, base, rand.Intn(ChunkSize), rand.Intn(ChunkSize))
+		}
+	}
+
+	b.StopTimer()
+	runtime.ReadMemStats(&after)
+	// Extra heap per op (not captured by -benchmem's per‑op numbers).
+	extra := float64(after.Alloc-before.Alloc) / float64(b.N)
+	b.ReportMetric(extra, "bytes/op_extra")
 }
