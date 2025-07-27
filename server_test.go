@@ -173,14 +173,16 @@ func startTestServer(t *testing.T) (*Server, string, func()) {
 				s.stateMu.Unlock()
 
 				s.playersMu.RLock()
-				for _, p := range s.players {
-					if p.LastLBVersion == lbVer {
-						continue
-					}
-					select {
-					case p.Send <- lbJSON:
-						p.LastLBVersion = lbVer
-					default:
+				for _, set := range s.players {
+					for p := range set {
+						if p.LastLBVersion == lbVer {
+							continue
+						}
+						select {
+						case p.Send <- lbJSON:
+							p.LastLBVersion = lbVer
+						default:
+						}
 					}
 				}
 				s.playersMu.RUnlock()

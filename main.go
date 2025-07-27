@@ -178,7 +178,7 @@ type Server struct {
 
 	// Players
 	playersMu    sync.RWMutex
-	players      map[int32]*Player
+	players      map[int32]map[*Player]struct{}
 	playerNames  map[int32]string
 	nextPlayerID int32
 
@@ -196,7 +196,7 @@ func NewServer() *Server {
 		cellOwners:   make(map[ChunkID]map[int]int32),
 		scores:       make(map[int32]uint32),
 		subs:         make(map[ChunkID]map[int32]struct{}),
-		players:      make(map[int32]*Player),
+		players:      make(map[int32]map[*Player]struct{}),
 		playerNames:  make(map[int32]string),
 		seedCache:    make(map[ChunkID]uint64),
 		nextPlayerID: 1,
@@ -365,18 +365,17 @@ func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
 
 func (s *Server) sendToPlayer(playerID int32, data []byte) {
 	s.playersMu.RLock()
-	player, exists := s.players[playerID]
+	conns, exists := s.players[playerID]
 	s.playersMu.RUnlock()
 	if !exists {
 		return
 	}
 
-	// Non‑blocking send; drop the message if the client's buffer is full.
-	// Avoids stalling the entire server when a slow client back‑pressures.
-	select {
-	case player.Send <- data:
-	default:
-		// TODO: increment metric / log dropped message
+	for p := range conns {
+		select {
+		case p.Send <- data:
+		default:
+		}
 	}
 }
 
@@ -409,11 +408,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.lbDirty = true
 	s.stateMu.Unlock()
 
-	// Create player and replace any existing connection for same id
+	// Create player and register connection under this id
 	s.playersMu.Lock()
-	if old, ok := s.players[playerID]; ok {
-		close(old.Send)
-		delete(s.players, playerID)
+	if s.players[playerID] == nil {
+		s.players[playerID] = make(map[*Player]struct{})
 	}
 	player := &Player{
 		ID:                playerID,
@@ -424,7 +422,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		RevealCount:       0,
 		Name:              hello.Name,
 	}
-	s.players[playerID] = player
+	s.players[playerID][player] = struct{}{}
 	s.playersMu.Unlock()
 
 	// Send initial leaderboard and welcome after goroutines start
@@ -454,7 +452,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) readPump(player *Player) {
 	defer func() {
-		s.removePlayer(player.ID)
+		s.removePlayer(player)
 		player.Conn.Close()
 	}()
 
@@ -617,19 +615,23 @@ func (s *Server) unsubscribeFromChunk(playerID int32, chunkID ChunkID) {
 	s.stateMu.Unlock()
 }
 
-func (s *Server) removePlayer(playerID int32) {
+func (s *Server) removePlayer(p *Player) {
 	s.playersMu.Lock()
-	player, exists := s.players[playerID]
-	if exists {
-		close(player.Send)
-		delete(s.players, playerID)
+	if set, ok := s.players[p.ID]; ok {
+		if _, exists := set[p]; exists {
+			close(p.Send)
+			delete(set, p)
+			if len(set) == 0 {
+				delete(s.players, p.ID)
+			}
+		}
 	}
 	s.playersMu.Unlock()
 
 	s.stateMu.Lock()
 	for chunkID, subs := range s.subs {
-		if _, exists := subs[playerID]; exists {
-			delete(subs, playerID)
+		if _, exists := subs[p.ID]; exists {
+			delete(subs, p.ID)
 			if len(subs) == 0 {
 				delete(s.subs, chunkID)
 			}
@@ -637,7 +639,7 @@ func (s *Server) removePlayer(playerID int32) {
 	}
 	s.stateMu.Unlock()
 
-	log.Printf("Player %d disconnected", playerID)
+	log.Printf("Player %d disconnected", p.ID)
 }
 
 // snapshotData is what actually gets serialized. Gob can handle maps with
@@ -756,15 +758,16 @@ func main() {
 
 			// Fan‑out only to players with stale version
 			server.playersMu.RLock()
-			for _, p := range server.players {
-				if p.LastLBVersion == lbVer {
-					continue
-				}
-				select {
-				case p.Send <- lbJSON:
-					p.LastLBVersion = lbVer
-				default:
-					// full buffer; skip, they'll get it next tick
+			for _, set := range server.players {
+				for p := range set {
+					if p.LastLBVersion == lbVer {
+						continue
+					}
+					select {
+					case p.Send <- lbJSON:
+						p.LastLBVersion = lbVer
+					default:
+					}
 				}
 			}
 			server.playersMu.RUnlock()
