@@ -142,6 +142,7 @@
         const [viewY, setViewY] = useState(0);
         const [isDragging, setIsDragging] = useState(false);
         const [dragStart, setDragStart] = useState({ x: 0, y: 0, viewX: 0, viewY: 0 });
+        const dragTimeoutRef = useRef(null);
 
         // Game state
         const seedCache = useRef(new Map());
@@ -627,38 +628,58 @@
         const handleMouseDown = useCallback((e) => {
           if (e.button !== 0) return;
 
-          setIsDragging(true);
           setDragStart({
             x: e.clientX,
             y: e.clientY,
             viewX,
             viewY
           });
+
+          // Set a timeout to enable dragging after a delay
+          dragTimeoutRef.current = setTimeout(() => {
+            setIsDragging(true);
+          }, 150); // delay before considering it a drag
         }, [viewX, viewY]);
 
         const handleMouseMove = useCallback((e) => {
-          if (!isDragging) return;
+          if (!dragStart.x) return; // No mouse down recorded
 
-          const dx = e.clientX - dragStart.x;
-          const dy = e.clientY - dragStart.y;
+          const dx = Math.abs(e.clientX - dragStart.x);
+          const dy = Math.abs(e.clientY - dragStart.y);
 
-          setViewX(dragStart.viewX - dx);
-          setViewY(dragStart.viewY - dy);
+          // If mouse moved significantly, immediately enable dragging
+          if (dx > 50 || dy > 50) {
+            if (dragTimeoutRef.current) {
+              clearTimeout(dragTimeoutRef.current);
+              dragTimeoutRef.current = null;
+            }
+            setIsDragging(true);
+          }
+
+          if (isDragging) {
+            const deltaX = e.clientX - dragStart.x;
+            const deltaY = e.clientY - dragStart.y;
+
+            setViewX(dragStart.viewX - deltaX);
+            setViewY(dragStart.viewY - deltaY);
+          }
         }, [isDragging, dragStart]);
 
         const handleMouseUp = useCallback((e) => {
-          if (isDragging) {
-            const dx = Math.abs(e.clientX - dragStart.x);
-            const dy = Math.abs(e.clientY - dragStart.y);
+          // Clear the drag timeout
+          if (dragTimeoutRef.current) {
+            clearTimeout(dragTimeoutRef.current);
+            dragTimeoutRef.current = null;
+          }
 
-            // If it was a small movement, treat as click
-            if (dx < 5 && dy < 5) {
-              const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
-              handleCellClick(worldX, worldY);
-            }
+          if (!isDragging && dragStart.x) {
+            // This was a click, not a drag
+            const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
+            handleCellClick(worldX, worldY);
           }
 
           setIsDragging(false);
+          setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
         }, [isDragging, dragStart, screenToWorld, handleCellClick]);
 
         // WebSocket setup
