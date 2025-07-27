@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -69,6 +70,9 @@ func TestBuildLeaderboard(t *testing.T) {
 	s.scores[3] = 1200
 	s.scores[1] = 20000
 	s.scores[2] = 999
+	s.playerNames[1] = "one"
+	s.playerNames[2] = "two"
+	s.playerNames[3] = "three"
 	s.buildLeaderboardUnsafe()
 	s.stateMu.Unlock()
 
@@ -86,13 +90,13 @@ func TestBuildLeaderboard(t *testing.T) {
 	if len(lb.Entries) != 3 {
 		t.Fatalf("entries = %d, want 3", len(lb.Entries))
 	}
-	if lb.Entries[0].PlayerID != 1 || lb.Entries[0].Score != "20.0k" {
+	if lb.Entries[0].PlayerID != 1 || lb.Entries[0].Score != "20.0k" || lb.Entries[0].Name != "one" {
 		t.Fatalf("first entry %+v", lb.Entries[0])
 	}
-	if lb.Entries[1].PlayerID != 3 || lb.Entries[1].Score != "1.2k" {
+	if lb.Entries[1].PlayerID != 3 || lb.Entries[1].Score != "1.2k" || lb.Entries[1].Name != "three" {
 		t.Fatalf("second entry %+v", lb.Entries[1])
 	}
-	if lb.Entries[2].PlayerID != 2 || lb.Entries[2].Score != "999" {
+	if lb.Entries[2].PlayerID != 2 || lb.Entries[2].Score != "999" || lb.Entries[2].Name != "two" {
 		t.Fatalf("third entry %+v", lb.Entries[2])
 	}
 }
@@ -169,14 +173,16 @@ func startTestServer(t *testing.T) (*Server, string, func()) {
 				s.stateMu.Unlock()
 
 				s.playersMu.RLock()
-				for _, p := range s.players {
-					if p.LastLBVersion == lbVer {
-						continue
-					}
-					select {
-					case p.Send <- lbJSON:
-						p.LastLBVersion = lbVer
-					default:
+				for _, set := range s.players {
+					for p := range set {
+						if p.LastLBVersion == lbVer {
+							continue
+						}
+						select {
+						case p.Send <- lbJSON:
+							p.LastLBVersion = lbVer
+						default:
+						}
 					}
 				}
 				s.playersMu.RUnlock()
@@ -201,6 +207,7 @@ type leaderboardMsg struct {
 	Version uint64 `json:"version"`
 	Entries []struct {
 		PlayerID int32  `json:"playerId"`
+		Name     string `json:"name"`
 		Score    string `json:"score"`
 	} `json:"entries"`
 }
@@ -242,7 +249,18 @@ func TestFullStackIntegration(t *testing.T) {
 			t.Fatalf("dial %d: %v", i, err)
 		}
 		conns[i] = c
-		// initial leaderboard
+		hello := map[string]any{"type": "hello", "playerId": 0, "name": fmt.Sprintf("p%d", i)}
+		if err := c.WriteJSON(hello); err != nil {
+			t.Fatalf("hello %d: %v", i, err)
+		}
+		// welcome
+		var welcome struct {
+			Type     string `json:"type"`
+			PlayerID int32  `json:"playerId"`
+		}
+		if err := c.ReadJSON(&welcome); err != nil {
+			t.Fatalf("welcome %d: %v", i, err)
+		}
 		if _, err := readLeaderboard(c, time.Second); err != nil {
 			t.Fatalf("initial lb %d: %v", i, err)
 		}

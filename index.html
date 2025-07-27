@@ -125,9 +125,15 @@
       const log = DEBUG ? console.log.bind(console) : () => {};
 
       function App() {
+        const storedId = parseInt(localStorage.getItem('playerId') || '0', 10);
+        const storedName = localStorage.getItem('username') || '';
+
         const [ws, setWs] = useState(null);
         const [connected, setConnected] = useState(false);
-        const [leaderboard, setLeaderboard] = useState({});
+        const [leaderboard, setLeaderboard] = useState([]);
+        const [playerId, setPlayerId] = useState(storedId);
+        const [username, setUsername] = useState(storedName);
+        const [nameInput, setNameInput] = useState(storedName);
         const canvasRef = useRef(null);
         const containerRef = useRef(null);
 
@@ -656,11 +662,16 @@
         }, [isDragging, dragStart, screenToWorld, handleCellClick]);
 
         // WebSocket setup
-        useEffect(() => {
+        const connectWs = useCallback(() => {
           const wsUrl = `ws://${window.location.host}/ws`;
           const websocket = new WebSocket(wsUrl);
 
           websocket.onopen = () => {
+            websocket.send(JSON.stringify({
+              type: 'hello',
+              playerId: playerId,
+              name: nameInput
+            }));
             setConnected(true);
             setWs(websocket);
           };
@@ -672,6 +683,14 @@
 
           websocket.onmessage = (event) => {
             const data = JSON.parse(event.data);
+
+            if (data.type === 'welcome') {
+              setPlayerId(data.playerId);
+              setUsername(data.name || '');
+              localStorage.setItem('playerId', data.playerId);
+              localStorage.setItem('username', data.name || '');
+              return;
+            }
 
             if (data.type === 'chunkSync') {
               const key = `${data.chunkId.X},${data.chunkId.Y}`;
@@ -772,25 +791,19 @@
                 setTick(t => t + 1);
               }
             } else if (data.type === 'leaderboard') {
-              // Handle new leaderboard format with entries array
               if (data.entries) {
-                const scores = {};
-                data.entries.forEach(entry => {
-                  // Parse formatted scores like "5", "1.2k", "1.5M"
-                  let score = entry.score;
-                  if (score.endsWith('k')) {
-                    score = parseFloat(score.slice(0, -1)) * 1000;
-                  } else if (score.endsWith('M')) {
-                    score = parseFloat(score.slice(0, -1)) * 1000000;
+                const list = data.entries.map(e => {
+                  let num = e.score;
+                  if (num.endsWith('k')) {
+                    num = parseFloat(num.slice(0, -1)) * 1000;
+                  } else if (num.endsWith('M')) {
+                    num = parseFloat(num.slice(0, -1)) * 1000000;
                   } else {
-                    score = parseInt(score) || 0;
+                    num = parseInt(num) || 0;
                   }
-                  scores[entry.playerId] = score;
-                });
-                setLeaderboard(scores);
-              } else {
-                // Fallback to old format
-                setLeaderboard(data.scores || {});
+                  return { playerId: e.playerId, name: e.name || '', score: num };
+                }).sort((a,b)=>b.score-a.score);
+                setLeaderboard(list);
               }
             } else if (data.type === 'seed') {
               const key = `${data.chunkX},${data.chunkY}`;
@@ -802,7 +815,12 @@
           return () => {
             websocket.close();
           };
-        }, [isMine]);
+        }, [playerId, nameInput, isMine]);
+
+        useEffect(() => {
+          if (!username) return;
+          return connectWs();
+        }, [connectWs, username]);
 
         // Subscribe to visible chunks when view changes
         useEffect(() => {
@@ -825,9 +843,7 @@
         }, []);
 
         const topPlayers = useMemo(() => {
-          return Object.entries(leaderboard)
-            .sort(([, a], [, b]) => b - a)
-            .slice(0, 10);
+          return leaderboard.slice(0, 10);
         }, [leaderboard]);
 
         // Calculate current world position for debugging
@@ -837,6 +853,15 @@
 
         return (
           <div className="game-container">
+            {!username && (
+              <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:20}}>
+                <div style={{background:'white',padding:20,borderRadius:8}}>
+                  <h3>Enter username</h3>
+                  <input value={nameInput} onChange={e=>setNameInput(e.target.value)} />
+                  <button onClick={()=>{setUsername(nameInput); connectWs();}}>Join</button>
+                </div>
+              </div>
+            )}
             <div className="header">
               <div className="status">
                 <div className={`connection-status ${connected ? "connected" : "disconnected"}`}>
@@ -878,9 +903,9 @@
                 <>
                   {topPlayers.length > 0 ? (
                     <ol>
-                      {topPlayers.map(([playerId, score]) => (
-                        <li key={playerId}>
-                          Player {playerId}: {formatScore(score)}
+                      {topPlayers.map(p => (
+                        <li key={p.playerId}>
+                          {p.name ? p.name : `Player ${p.playerId}`}: {formatScore(p.score)}
                         </li>
                       ))}
                     </ol>
