@@ -404,12 +404,12 @@
         const handleCellClick = useCallback(async (worldX, worldY, isRightClick = false) => {
           if (!ws || !connected) return;
 
+          const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
+          const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+          const flagKey = `${worldX},${worldY}`;
+
           // Handle right-click for flagging
           if (isRightClick) {
-            const flagKey = `${worldX},${worldY}`;
-            const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
-            const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
-
             // Don't flag revealed cells
             if (revealedCellsRef.current.has(cellKey)) return;
 
@@ -423,14 +423,53 @@
             return;
           }
 
-          const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
+          // Handle left-click: check if it's chording or normal reveal
+          const revealedCell = revealedCellsRef.current.get(cellKey);
+
+          // If clicking on a revealed cell with a number, try chording
+          if (revealedCell && !revealedCell.isMine && revealedCell.adjacentMines > 0) {
+            // Count flags and mines in 3x3 area
+            let flagCount = 0;
+            const cellsToReveal = [];
+
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) continue;
+
+                const neighborWorldX = worldX + dx;
+                const neighborWorldY = worldY + dy;
+                const neighborFlagKey = `${neighborWorldX},${neighborWorldY}`;
+
+                const { chunkX: nChunkX, chunkY: nChunkY, localX: nLocalX, localY: nLocalY } = worldToChunk(neighborWorldX, neighborWorldY);
+                const neighborCellKey = `${nChunkX},${nChunkY},${nLocalX},${nLocalY}`;
+                const neighborRevealed = revealedCellsRef.current.get(neighborCellKey);
+
+                // Count flags and revealed mines
+                if (flaggedCellsRef.current.has(neighborFlagKey) || (neighborRevealed && neighborRevealed.isMine)) {
+                  flagCount++;
+                } else if (!neighborRevealed) {
+                  // This cell can be revealed
+                  cellsToReveal.push({ worldX: neighborWorldX, worldY: neighborWorldY });
+                }
+              }
+            }
+
+            // Only chord if flag count matches the number
+            if (flagCount === revealedCell.adjacentMines) {
+              // Reveal all unflagged, unrevealed neighbors
+              for (const cell of cellsToReveal) {
+                handleCellClick(cell.worldX, cell.worldY, false);
+              }
+            }
+            return;
+          }
+
           ensureChunkSubscription(chunkX, chunkY);
 
           const key = `${chunkX},${chunkY},${localX},${localY}`;
           if (revealedCellsRef.current.has(key)) return;
 
           // Don't reveal flagged cells
-          const flagKey = `${worldX},${worldY}`;
           if (flaggedCellsRef.current.has(flagKey)) return;
 
           let seed = seedCache.current.get(`${chunkX},${chunkY}`);
@@ -679,19 +718,13 @@
         const handleMouseDown = useCallback((e) => {
           e.preventDefault(); // Prevent context menu and other default behaviors
 
-          if (e.button === 1) { // Middle click for chord
-            const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
-            handleCellClick(worldX, worldY, false, true);
-            return;
-          }
-
           if (e.button === 2) { // Right click for flag
             const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
-            handleCellClick(worldX, worldY, true, false);
+            handleCellClick(worldX, worldY, true);
             return;
           }
 
-          if (e.button !== 0 && e.button !== 2) return;
+          if (e.button !== 0) return;
 
           setDragStart({
             x: e.clientX,
@@ -740,8 +773,10 @@
           if (!isDragging && dragStart.x) {
             // This was a click, not a drag
             const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
-            if (e.button === 0) { // Only handle left clicks here now
-              handleCellClick(worldX, worldY, false, false);
+            if (e.button === 0) {
+              handleCellClick(worldX, worldY, false);
+            } else if (e.button === 2) {
+              handleCellClick(worldX, worldY, true);
             }
           }
 
