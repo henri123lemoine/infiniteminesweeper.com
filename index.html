@@ -149,6 +149,7 @@
         const subscribedChunks = useRef(new Set());
         const pendingSeedRequests = useRef(new Set());
         const revealedCellsRef = useRef(new Map());
+        const flaggedCellsRef = useRef(new Map()); // worldX,worldY -> true
         const [tick, setTick] = useState(0);
 
         // Leaderboard visibility and number formatting
@@ -400,14 +401,37 @@
         }, [ws, worldToChunk, isMine, countAdjacentMines, ensureSeed, ensureChunkSubscription]);
 
         // Handle cell click
-        const handleCellClick = useCallback(async (worldX, worldY) => {
+        const handleCellClick = useCallback(async (worldX, worldY, isRightClick = false) => {
           if (!ws || !connected) return;
+
+          // Handle right-click for flagging
+          if (isRightClick) {
+            const flagKey = `${worldX},${worldY}`;
+            const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
+            const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+
+            // Don't flag revealed cells
+            if (revealedCellsRef.current.has(cellKey)) return;
+
+            // Toggle flag
+            if (flaggedCellsRef.current.has(flagKey)) {
+              flaggedCellsRef.current.delete(flagKey);
+            } else {
+              flaggedCellsRef.current.set(flagKey, true);
+            }
+            setTick(t => t + 1);
+            return;
+          }
 
           const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
           ensureChunkSubscription(chunkX, chunkY);
 
           const key = `${chunkX},${chunkY},${localX},${localY}`;
           if (revealedCellsRef.current.has(key)) return;
+
+          // Don't reveal flagged cells
+          const flagKey = `${worldX},${worldY}`;
+          if (flaggedCellsRef.current.has(flagKey)) return;
 
           let seed = seedCache.current.get(`${chunkX},${chunkY}`);
           if (!seed) {
@@ -584,7 +608,34 @@
             }
           });
 
-        }, [viewX, viewY, tick, getNumberColor]);
+          // Draw flags
+          flaggedCellsRef.current.forEach((_, flagKey) => {
+            const [worldX, worldY] = flagKey.split(',').map(Number);
+            const screenX = worldX * CELL_SIZE - viewX;
+            const screenY = worldY * CELL_SIZE - viewY;
+
+            // Skip if not visible
+            if (screenX + CELL_SIZE < 0 || screenX > canvas.width ||
+                screenY + CELL_SIZE < 0 || screenY > canvas.height) {
+              return;
+            }
+
+            // Don't draw flag if cell is revealed
+            const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
+            const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+            if (revealedCellsRef.current.has(cellKey)) return;
+
+            // Draw flag background (slightly darker)
+            ctx.fillStyle = '#e0e0e0';
+            ctx.fillRect(screenX + 1, screenY + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+
+            // Draw flag emoji
+            ctx.font = 'bold 14px monospace';
+            ctx.fillStyle = 'red';
+            ctx.fillText('🚩', screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2 + 2);
+          });
+
+        }, [viewX, viewY, tick, getNumberColor, worldToChunk]);
 
         // Subscribe to visible chunks
         const subscribeToVisibleChunks = useCallback(() => {
@@ -626,7 +677,21 @@
 
         // Mouse event handlers
         const handleMouseDown = useCallback((e) => {
-          if (e.button !== 0) return;
+          e.preventDefault(); // Prevent context menu and other default behaviors
+
+          if (e.button === 1) { // Middle click for chord
+            const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
+            handleCellClick(worldX, worldY, false, true);
+            return;
+          }
+
+          if (e.button === 2) { // Right click for flag
+            const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
+            handleCellClick(worldX, worldY, true, false);
+            return;
+          }
+
+          if (e.button !== 0 && e.button !== 2) return;
 
           setDragStart({
             x: e.clientX,
@@ -639,7 +704,7 @@
           dragTimeoutRef.current = setTimeout(() => {
             setIsDragging(true);
           }, 150); // delay before considering it a drag
-        }, [viewX, viewY]);
+        }, [viewX, viewY, screenToWorld, handleCellClick]);
 
         const handleMouseMove = useCallback((e) => {
           if (!dragStart.x) return; // No mouse down recorded
@@ -675,12 +740,19 @@
           if (!isDragging && dragStart.x) {
             // This was a click, not a drag
             const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
-            handleCellClick(worldX, worldY);
+            if (e.button === 0) { // Only handle left clicks here now
+              handleCellClick(worldX, worldY, false, false);
+            }
           }
 
           setIsDragging(false);
           setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
         }, [isDragging, dragStart, screenToWorld, handleCellClick]);
+
+        // Handle context menu (prevent default right-click menu)
+        const handleContextMenu = useCallback((e) => {
+          e.preventDefault();
+        }, []);
 
         // WebSocket setup
         const connectWs = useCallback(() => {
@@ -899,6 +971,7 @@
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
                 onMouseLeave={handleMouseUp}
+                onContextMenu={handleContextMenu}
               >
                 <canvas ref={canvasRef} id="game-canvas" />
 
