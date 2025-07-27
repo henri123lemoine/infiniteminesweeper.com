@@ -114,6 +114,22 @@
         background: #f44;
         color: white;
       }
+
+      .player-score {
+        position: fixed;
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: white;
+        padding: 10px 20px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        z-index: 10;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        font-weight: bold;
+        font-size: 18px;
+        border: 2px solid #4CAF50;
+      }
     </style>
   </head>
   <body>
@@ -132,6 +148,7 @@
         const [connected, setConnected] = useState(false);
         const [leaderboard, setLeaderboard] = useState([]);
         const [playerId, setPlayerId] = useState(storedId);
+        const [playerScore, setPlayerScore] = useState(0);
         const [username, setUsername] = useState(storedName);
         const [nameInput, setNameInput] = useState(storedName);
         const canvasRef = useRef(null);
@@ -1095,6 +1112,10 @@
                 }).sort((a,b)=>b.score-a.score);
                 setLeaderboard(list);
               }
+            } else if (data.type === 'scoreUpdate') {
+              if (typeof data.score === 'number') {
+                setPlayerScore(data.score);
+              }
             } else if (data.type === 'seed') {
               const key = `${data.chunkX},${data.chunkY}`;
               seedCache.current.set(key, BigInt(data.seed));
@@ -1192,6 +1213,12 @@
                 </div>
               </div>
             )}
+
+            {/* Player Score Display */}
+            <div className="player-score">
+              Score: {playerScore}
+            </div>
+
             <div className="header">
               <div className="status">
                 <div className={`connection-status ${connected ? "connected" : "disconnected"}`}>

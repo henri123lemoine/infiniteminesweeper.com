@@ -27,6 +27,7 @@ var content embed.FS
 const (
 	ChunkSize        = 64
 	SendBufSize      = 4096  // outbound msgs kept per player before back‑pressure
+	MineCount        = 20    // mines per 100 cells (20% chance)
 	MaxRevealsPerMin = 10000 // relaxed flood‑fill budget
 )
 
@@ -65,6 +66,11 @@ type Player struct {
 
 	// Suspicion metrics (for admin dashboards, nothing enforced server‑side)
 	SusRevealOverflow int // # of extra reveals processed beyond MaxRevealsPerMin
+
+	// New scoring system state
+	FlagsInARow    int // consecutive correct flags
+	LastActionTime time.Time
+	Score          int32 // can be negative, but capped at -100
 }
 
 // TokenBucket for rate limiting seed requests (200/min)
@@ -135,13 +141,13 @@ type SeedResp struct {
 	Type   string `json:"type"`
 	ChunkX int32  `json:"chunkX"`
 	ChunkY int32  `json:"chunkY"`
-	Seed   uint64 `json:"seed"`
+	Seed   string `json:"seed"`
 }
 
 type ChunkSync struct {
 	Type    string   `json:"type"`
 	ChunkID ChunkID  `json:"chunkId"`
-	Seed    uint64   `json:"seed"`
+	Seed    string   `json:"seed"`
 	Reveals []Reveal `json:"reveals"`
 }
 
@@ -241,6 +247,20 @@ func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
 	return seed
 }
 
+// splitmix64 - deterministic PRNG for bomb placement (matches frontend)
+func splitmix64(state uint64) uint64 {
+	state += 0x9e3779b97f4a7c15
+	state = (state ^ (state >> 30)) * 0xbf58476d1ce4e5b9
+	state = (state ^ (state >> 27)) * 0x94d049bb133111eb
+	return state ^ (state >> 31)
+}
+
+// isMine determines if a cell contains a mine using the same logic as frontend
+func (s *Server) isMine(seed uint64, x, y int) bool {
+	cellSeed := splitmix64(seed + uint64(y*ChunkSize+x))
+	return (cellSeed % 100) < MineCount
+}
+
 // Leaderboard helpers
 
 type lbEntry struct {
@@ -294,6 +314,9 @@ func (s *Server) isValidCoordinate(x, y int) bool {
 	return x >= 0 && x < ChunkSize && y >= 0 && y < ChunkSize
 }
 
+// TODO: validate, and possibly add speed score
+// New scoring system: reveals = 1pt, correct flags = 1pt + multiplier (max 20x),
+// wrong flags = -20pts + reset multiplier, bombs = -100pts, minimum score = -100
 func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	// Bounds check
 	if !s.isValidCoordinate(x, y) {
@@ -322,14 +345,57 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	// Set the bit (mark as revealed)
 	chunk[wordIndex] |= 1 << bitOffset
 
+	// Determine if this cell is a mine
+	seed := s.generateChunkSeed(chunkID)
+	isMine := s.isMine(seed, x, y)
+	log.Printf("reveal: cell (%d, %d) isMine: %v", x, y, isMine)
+
+	// Update player score based on reveal
+	s.playersMu.RLock()
+	playerConns, exists := s.players[playerID]
+	s.playersMu.RUnlock()
+
+	var player *Player
+	if exists {
+		for p := range playerConns {
+			player = p
+			break // Get any connection for this player
+		}
+	}
+
+	if player != nil {
+		if isMine {
+			// Hit a bomb: -100 points, reset flag streak
+			player.Score -= 100
+			if player.Score < -100 {
+				player.Score = -100
+			}
+			player.FlagsInARow = 0
+		} else {
+			// Safe reveal: +1 point
+			player.Score += 1
+		}
+		player.LastActionTime = time.Now()
+
+		// Send score update to player
+		s.sendScoreUpdate(playerID, player.Score)
+	}
+
 	// Track who revealed it
 	if s.cellOwners[chunkID] == nil {
 		s.cellOwners[chunkID] = make(map[int]int32)
 	}
 	s.cellOwners[chunkID][bitIndex] = playerID
 
-	// Update score & mark leaderboard dirty
-	s.scores[playerID]++
+	// Update leaderboard score (use absolute value for display, but allow negatives)
+	if player != nil && player.Score >= 0 {
+		s.scores[playerID] = uint32(player.Score)
+	} else if player != nil {
+		s.scores[playerID] = 0 // Display 0 for negative scores in leaderboard
+	} else {
+		// For tests or cases where player is not registered, just increment score
+		s.scores[playerID]++
+	}
 	s.lbDirty = true
 
 	// Create reveal message
@@ -346,6 +412,18 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	// persistence: mark dirty so that next snapshot loop rewrites file
 	s.lbDirty = true
 	return true
+}
+
+func (s *Server) sendScoreUpdate(playerID int32, score int32) {
+	scoreMsg := struct {
+		Type  string `json:"type"`
+		Score int32  `json:"score"`
+	}{
+		Type:  "scoreUpdate",
+		Score: score,
+	}
+
+	s.sendToPlayer(playerID, mustJSON(scoreMsg))
 }
 
 func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
@@ -425,6 +503,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		RevealWindowStart: time.Now(),
 		RevealCount:       0,
 		Name:              hello.Name,
+		Score:             0, // Start with 0 points
 	}
 	s.players[playerID][player] = struct{}{}
 	s.playersMu.Unlock()
@@ -450,6 +529,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.sendToPlayer(playerID, mustJSON(welcome))
 	s.sendToPlayer(playerID, lbBytes)
 	player.LastLBVersion = lbVer
+
+	// Send initial score
+	s.sendScoreUpdate(playerID, player.Score)
 
 	log.Printf("Player %d connected", playerID)
 }
@@ -531,7 +613,7 @@ func (s *Server) readPump(player *Player) {
 				Type:   "seed",
 				ChunkX: msg.ChunkX,
 				ChunkY: msg.ChunkY,
-				Seed:   seed,
+				Seed:   strconv.FormatUint(seed, 10),
 			}
 
 			s.sendToPlayer(player.ID, mustJSON(resp))
@@ -599,7 +681,7 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	msg := ChunkSync{
 		Type:    "chunkSync",
 		ChunkID: chunkID,
-		Seed:    seed,
+		Seed:    strconv.FormatUint(seed, 10),
 		Reveals: reveals,
 	}
 
