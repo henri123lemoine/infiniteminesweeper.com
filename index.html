@@ -673,6 +673,56 @@
           }
         }, [ws, connected, worldToChunk, ensureChunkSubscription, isMine, countAdjacentMines, floodFillReveal]);
 
+        // 3D cell drawing function
+        const draw3DCell = useCallback((ctx, x, y, size, isRevealed = false, isPressed = false) => {
+          const lightGray = '#f0f0f0';
+          const mediumGray = '#c0c0c0';
+          const darkGray = '#808080';
+          const veryDarkGray = '#404040';
+
+          if (isRevealed) {
+            // Revealed cells: flat with subtle inset border
+            ctx.fillStyle = '#e8e8e8';
+            ctx.fillRect(x, y, size, size);
+
+            // Subtle inset effect
+            ctx.fillStyle = darkGray;
+            ctx.fillRect(x, y, size, 1); // top
+            ctx.fillRect(x, y, 1, size); // left
+          } else {
+            // Unrevealed cells: raised 3D effect
+            const bevelSize = 2;
+
+            // Main cell face
+            ctx.fillStyle = mediumGray;
+            ctx.fillRect(x + bevelSize, y + bevelSize, size - bevelSize * 2, size - bevelSize * 2);
+
+            if (isPressed) {
+              // Pressed/clicked state - inset
+              ctx.fillStyle = darkGray;
+              ctx.fillRect(x, y, size, bevelSize); // top edge
+              ctx.fillRect(x, y, bevelSize, size); // left edge
+
+              ctx.fillStyle = lightGray;
+              ctx.fillRect(x, y + size - bevelSize, size, bevelSize); // bottom edge
+              ctx.fillRect(x + size - bevelSize, y, bevelSize, size); // right edge
+            } else {
+              // Raised state - normal
+              ctx.fillStyle = lightGray;
+              ctx.fillRect(x, y, size, bevelSize); // top highlight
+              ctx.fillRect(x, y, bevelSize, size); // left highlight
+
+              ctx.fillStyle = darkGray;
+              ctx.fillRect(x, y + size - bevelSize, size, bevelSize); // bottom shadow
+              ctx.fillRect(x + size - bevelSize, y, bevelSize, size); // right shadow
+
+              // Corner pixels for cleaner look
+              ctx.fillStyle = veryDarkGray;
+              ctx.fillRect(x + size - bevelSize, y + size - bevelSize, bevelSize, bevelSize); // bottom-right corner
+            }
+          }
+        }, []);
+
         // Canvas rendering
         const render = useCallback(() => {
           const canvas = canvasRef.current;
@@ -692,24 +742,29 @@
           const endWorldX = Math.ceil((viewX + canvas.width) / CELL_SIZE);
           const endWorldY = Math.ceil((viewY + canvas.height) / CELL_SIZE);
 
-          // Draw grid
-          ctx.strokeStyle = '#808080';
-          ctx.lineWidth = 0.5;
-          ctx.beginPath();
-
-          for (let worldX = startWorldX; worldX <= endWorldX; worldX++) {
-            const screenX = worldX * CELL_SIZE - viewX;
-            ctx.moveTo(screenX, 0);
-            ctx.lineTo(screenX, canvas.height);
-          }
-
+          // Draw all cells (unrevealed first, then revealed on top)
+          // First pass: Draw all unrevealed cells with 3D effect
           for (let worldY = startWorldY; worldY <= endWorldY; worldY++) {
-            const screenY = worldY * CELL_SIZE - viewY;
-            ctx.moveTo(0, screenY);
-            ctx.lineTo(canvas.width, screenY);
-          }
+            for (let worldX = startWorldX; worldX <= endWorldX; worldX++) {
+              const screenX = worldX * CELL_SIZE - viewX;
+              const screenY = worldY * CELL_SIZE - viewY;
 
-          ctx.stroke();
+              // Skip if not visible
+              if (screenX + CELL_SIZE < 0 || screenX > canvas.width ||
+                  screenY + CELL_SIZE < 0 || screenY > canvas.height) {
+                continue;
+              }
+
+              const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
+              const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+              const isRevealed = revealedCellsRef.current.has(cellKey);
+
+              if (!isRevealed) {
+                // Draw unrevealed cell with 3D effect
+                draw3DCell(ctx, screenX, screenY, CELL_SIZE, false, false);
+              }
+            }
+          }
 
         // Removed chunk boundaries for now
         //   // Draw chunk boundaries
@@ -736,7 +791,7 @@
 
         //   ctx.stroke();
 
-          // Draw revealed cells
+          // Second pass: Draw revealed cells with 3D effect and content
           ctx.font = 'bold 14px monospace';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
@@ -755,27 +810,18 @@
               return;
             }
 
-            // Draw subtle border around revealed cells
-            ctx.strokeStyle = '#999';
-            ctx.lineWidth = 1;
-            ctx.strokeRect(screenX + 0.5, screenY + 0.5, CELL_SIZE - 1, CELL_SIZE - 1);
-
-            // Draw cell background
+            // Draw revealed cell with 3D effect
             if (cellData.isMine) {
-              // Red gradient for mines
-              const gradient = ctx.createLinearGradient(screenX, screenY, screenX + CELL_SIZE, screenY + CELL_SIZE);
-              gradient.addColorStop(0, '#ff6b6b');
-              gradient.addColorStop(1, '#e74c3c');
-              ctx.fillStyle = gradient;
-            } else {
-              // Light gray for revealed cells with subtle gradient
-              const gradient = ctx.createLinearGradient(screenX, screenY, screenX + CELL_SIZE, screenY + CELL_SIZE);
-              gradient.addColorStop(0, cellData.playerId === -1 ? '#f5f5f5' : '#ffffff');
-              gradient.addColorStop(1, cellData.playerId === -1 ? '#e8e8e8' : '#f0f0f0');
-              ctx.fillStyle = gradient;
-            }
+              // For mines, draw revealed cell then add red background
+              draw3DCell(ctx, screenX, screenY, CELL_SIZE, true, false);
 
-            ctx.fillRect(screenX + 1, screenY + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+              // Add red tint for mine
+              ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+              ctx.fillRect(screenX + 1, screenY + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+            } else {
+              // Normal revealed cell
+              draw3DCell(ctx, screenX, screenY, CELL_SIZE, true, false);
+            }
 
             // Draw cell content
             if (cellData.isMine) {
@@ -788,7 +834,7 @@
             }
           });
 
-          // Draw flags
+          // Third pass: Draw flags on unrevealed cells
           flaggedCellsRef.current.forEach((_, flagKey) => {
             const [worldX, worldY] = flagKey.split(',').map(Number);
             const screenX = worldX * CELL_SIZE - viewX;
@@ -805,9 +851,8 @@
             const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
             if (revealedCellsRef.current.has(cellKey)) return;
 
-            // Draw flag background (slightly darker)
-            ctx.fillStyle = '#e0e0e0';
-            ctx.fillRect(screenX + 1, screenY + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+            // Flagged cells should already be drawn as unrevealed in first pass
+            // Just draw the flag content on top
 
             // Draw custom flag with player color
             const flagPoleX = screenX + CELL_SIZE / 2 - 1;
@@ -835,7 +880,7 @@
             ctx.stroke();
           });
 
-        }, [viewX, viewY, tick, getNumberColor, worldToChunk, playerColor]);
+        }, [viewX, viewY, tick, getNumberColor, worldToChunk, playerColor, draw3DCell]);
 
         // Subscribe to visible chunks
         const subscribeToVisibleChunks = useCallback(() => {
