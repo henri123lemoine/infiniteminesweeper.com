@@ -58,6 +58,15 @@
         cursor: grabbing;
       }
 
+      /* Disable text selection and context menus on mobile */
+      .canvas-container, #game-canvas {
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+      }
+
       #game-canvas {
         display: block;
         width: 100%;
@@ -992,6 +1001,7 @@
         const handleTouchStart = useCallback((e) => {
           if (e.touches.length === 1) {
             const touch = e.touches[0];
+            e.preventDefault(); // Prevent text selection
             setDragStart({
               x: touch.clientX,
               y: touch.clientY,
@@ -999,12 +1009,17 @@
               viewY
             });
 
-            // Set a timeout to enable dragging after a delay
+            // Start long press timer for flagging
             dragTimeoutRef.current = setTimeout(() => {
-              setIsDragging(true);
-            }, 150);
+              // This is a long press - place a flag
+              const { x: worldX, y: worldY } = screenToWorld(touch.clientX, touch.clientY);
+              handleCellClick(worldX, worldY, true); // true = right click (flag)
+
+              // Clear drag start to prevent any further actions
+              setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
+            }, 200); // long press duration
           }
-        }, [viewX, viewY]);
+        }, [viewX, viewY, screenToWorld, handleCellClick]);
 
         const handleTouchMove = useCallback((e) => {
           e.preventDefault(); // Prevent scrolling
@@ -1013,7 +1028,7 @@
             const dx = Math.abs(touch.clientX - dragStart.x);
             const dy = Math.abs(touch.clientY - dragStart.y);
 
-            // If touch moved significantly, immediately enable dragging
+            // If touch moved significantly, cancel long press and enable dragging
             if (dx > 10 || dy > 10) {
               if (dragTimeoutRef.current) {
                 clearTimeout(dragTimeoutRef.current);
@@ -1033,17 +1048,17 @@
         }, [isDragging, dragStart]);
 
         const handleTouchEnd = useCallback((e) => {
-          // Clear the drag timeout
+          // Clear the long press timeout
           if (dragTimeoutRef.current) {
             clearTimeout(dragTimeoutRef.current);
             dragTimeoutRef.current = null;
           }
 
           if (!isDragging && dragStart.x && e.changedTouches.length === 1) {
-            // This was a tap, not a drag
+            // This was a short tap, not a drag or long press - reveal cell
             const touch = e.changedTouches[0];
             const { x: worldX, y: worldY } = screenToWorld(touch.clientX, touch.clientY);
-            handleCellClick(worldX, worldY, false);
+            handleCellClick(worldX, worldY, false); // false = left click (reveal)
           }
 
           setIsDragging(false);
