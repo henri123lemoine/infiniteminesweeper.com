@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"crypto/hmac"
 	"crypto/sha256"
+	"embed"
 	"encoding/binary"
 	"encoding/gob"
 	"encoding/json"
@@ -19,6 +20,9 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+//go:embed index.html
+var content embed.FS
 
 const (
 	ChunkSize        = 64
@@ -171,7 +175,7 @@ type Server struct {
 	scores     map[int32]uint32               // playerID -> reveal count
 	subs       map[ChunkID]map[int32]struct{} // who wants reveals for each chunk
 
-	// --- leaderboard cache ---
+	// leaderboard cache
 	lbVersion uint64
 	lbJSON    []byte
 	lbDirty   bool
@@ -734,11 +738,18 @@ func (s *Server) periodicSnapshotLoop() {
 func main() {
 	runtime.GOMAXPROCS(1)
 
+	// honour $PORT for Heroku/Fly style deploys
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	addr := "0.0.0.0:" + port
+
 	server := NewServer()
 	server.initPersistence()
 
 	http.HandleFunc("/ws", server.handleWebSocket)
-	http.Handle("/", http.FileServer(http.Dir("./")))
+	http.Handle("/", http.FileServer(http.FS(content)))
 
 	// Leaderboard broadcast loop (1 s cadence, only on version mismatch)
 	go func() {
@@ -774,6 +785,6 @@ func main() {
 		}
 	}()
 
-	fmt.Println("Server running at: http://localhost:8001/")
-	log.Fatal(http.ListenAndServe("0.0.0.0:8001", nil))
+	fmt.Printf("Server running at: http://%s/\n", addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }

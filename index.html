@@ -684,7 +684,7 @@
 
         // WebSocket setup
         const connectWs = useCallback(() => {
-          const wsUrl = `ws://${window.location.host}/ws`;
+          const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
           const websocket = new WebSocket(wsUrl);
 
           websocket.onopen = () => {
