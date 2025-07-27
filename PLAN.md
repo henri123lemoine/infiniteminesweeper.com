@@ -345,14 +345,15 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 # OTHER TODOS
 
 - [ ] Stop people from joining the game with a different id but the same exact username as someone else
-- [ ] Better mobile support; e.g. u gotta reload when joining on mobile for some reason or else it disconnects or smth?
+- [ ] Better mobile support; e.g. u gotta reload when joining on mobile for some reason or else it disconnects or smth? (~done, see )
 - [ ] Self score at the top
-- [ ] Color wheel for user flags (on first join)
 - [ ] Better scoring system
 
 Flags:
 
-- [ ] Flags (can be client side only for now, as in you can right click to flag but it doesn't do anything concrete other than show a flag icon)
+- [x] Flags (can be client side only for now, as in you can right click to flag but it doesn't do anything concrete other than show a flag icon)
+- [x] Color wheel for user flags (on first join)
+  - [ ] Still needs a minor fix (misalignment between color wheel and selected color)
+- [x] Chords (client-side)
 - [ ] Cleaner looking flags
-- [ ] Later, server-side flags for scoring system, remove undoing option
-- [ ] Chords (client-side)
+- [ ] Server-side flags for scoring system, remove undoing option
