@@ -51,6 +51,14 @@ type Reveal struct {
 	PlayerID int32   `json:"playerId"`
 }
 
+type Flag struct {
+	ChunkID  ChunkID `json:"chunkId"`
+	X        int     `json:"x"`
+	Y        int     `json:"y"`
+	PlayerID int32   `json:"playerId"`
+	Color    string  `json:"color"`
+}
+
 type Player struct {
 	ID          int32
 	Conn        *websocket.Conn
@@ -58,6 +66,7 @@ type Player struct {
 	TokenBucket TokenBucket
 	Name        string
 	// Rate limiting for reveals
+	Color             string
 	RevealWindowStart time.Time
 	RevealCount       int
 
@@ -70,7 +79,7 @@ type Player struct {
 	// New scoring system state
 	FlagsInARow    int // consecutive correct flags
 	LastActionTime time.Time
-	Score          int32 // can be negative, but capped at -100
+	Score          int32 // capped at 0
 }
 
 // TokenBucket for rate limiting seed requests (200/min)
@@ -119,6 +128,14 @@ type RevealMessage struct {
 	Y      int    `json:"y"`
 }
 
+type FlagMessage struct {
+	Type   string `json:"type"`
+	ChunkX int32  `json:"chunkX"`
+	ChunkY int32  `json:"chunkY"`
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+}
+
 type SubscribeMessage struct {
 	Type   string `json:"type"`
 	ChunkX int32  `json:"chunkX"`
@@ -131,33 +148,22 @@ type UnsubscribeMessage struct {
 	ChunkY int32  `json:"chunkY"`
 }
 
-type SeedReq struct {
-	Type   string `json:"type"`
-	ChunkX int32  `json:"chunkX"`
-	ChunkY int32  `json:"chunkY"`
-}
-
-type SeedResp struct {
-	Type   string `json:"type"`
-	ChunkX int32  `json:"chunkX"`
-	ChunkY int32  `json:"chunkY"`
-	Seed   string `json:"seed"`
-}
-
 type ChunkSync struct {
 	Type    string   `json:"type"`
 	ChunkID ChunkID  `json:"chunkId"`
 	Seed    string   `json:"seed"`
 	Reveals []Reveal `json:"reveals"`
+	Flags   []Flag   `json:"flags"`
 }
 
 type RevealAck struct {
-	Type    string  `json:"type"`
-	ChunkID ChunkID `json:"chunkId"`
-	X       int     `json:"x"`
-	Y       int     `json:"y"`
-	OK      bool    `json:"ok"`
-	Scorer  int32   `json:"scorer,omitempty"`
+	Type string `json:"type"`
+	OK   bool   `json:"ok"`
+}
+
+type FlagAck struct {
+	Type string `json:"type"`
+	OK   bool   `json:"ok"`
 }
 
 // mustJSON helper for marshaling
@@ -178,13 +184,15 @@ type Server struct {
 	// World state - just what cells are revealed and by whom
 	chunks     map[ChunkID]*ChunkBits         // Which cells are revealed (bitset)
 	cellOwners map[ChunkID]map[int]int32      // bitIndex -> playerID
-	scores     map[int32]uint32               // playerID -> reveal count
+	flags      map[ChunkID]map[int]Flag       // bitIndex -> Flag (with color)
+	scores     map[int32]int32                // playerID -> score
 	subs       map[ChunkID]map[int32]struct{} // who wants reveals for each chunk
 
 	// leaderboard cache
-	lbVersion uint64
-	lbJSON    []byte
-	lbDirty   bool
+	lbVersion    uint64
+	lbJSON       []byte
+	lbDirty      bool
+	playerColors map[int32]string // playerID -> color
 
 	// Players
 	playersMu    sync.RWMutex
@@ -204,10 +212,12 @@ func NewServer() *Server {
 		secret:       []byte("minesweeper-secret-key"),
 		chunks:       make(map[ChunkID]*ChunkBits),
 		cellOwners:   make(map[ChunkID]map[int]int32),
-		scores:       make(map[int32]uint32),
+		flags:        make(map[ChunkID]map[int]Flag),
+		scores:       make(map[int32]int32),
 		subs:         make(map[ChunkID]map[int32]struct{}),
 		players:      make(map[int32]map[*Player]struct{}),
 		playerNames:  make(map[int32]string),
+		playerColors: make(map[int32]string),
 		seedCache:    make(map[ChunkID]uint64),
 		nextPlayerID: 1,
 		upgrader: websocket.Upgrader{
@@ -269,7 +279,7 @@ type lbEntry struct {
 	Score    string `json:"score"`
 }
 
-func formatScore(n uint32) string {
+func formatScore(n int32) string {
 	switch {
 	case n >= 1_000_000:
 		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
@@ -315,8 +325,172 @@ func (s *Server) isValidCoordinate(x, y int) bool {
 }
 
 // TODO: validate, and possibly add speed score
-// New scoring system: reveals = 1pt, correct flags = 1pt + multiplier (max 20x),
-// wrong flags = -20pts + reset multiplier, bombs = -100pts, minimum score = -100
+// New scoring system:
+// - reveals = 1pt
+// - correct flags = +flag-in-a-row multiplier (capped at 20x)
+// - wrong flags = -20pts (and resets multiplier)
+// - bombs = -100pts
+// - minimum score = 0
+
+func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
+	// Bounds check
+	if !s.isValidCoordinate(x, y) {
+		return false
+	}
+
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	// Check if cell is already revealed
+	chunk := s.chunks[chunkID]
+	if chunk != nil {
+		bitIndex := y*ChunkSize + x
+		wordIndex := bitIndex / 64
+		bitOffset := bitIndex % 64
+		if chunk[wordIndex]&(1<<bitOffset) != 0 {
+			return false // Can't flag revealed cells
+		}
+	}
+
+	// Check if cell is already flagged
+	bitIndex := y*ChunkSize + x
+	if s.flags[chunkID] != nil {
+		if _, exists := s.flags[chunkID][bitIndex]; exists {
+			return false // Already flagged
+		}
+	}
+
+	// Get player info
+	s.playersMu.RLock()
+	playerConns := s.players[playerID]
+	playerColor := s.playerColors[playerID]
+	s.playersMu.RUnlock()
+
+	var player *Player
+	for p := range playerConns {
+		player = p
+		break
+	}
+	if player == nil {
+		return false
+	}
+
+	// Determine if this cell contains a mine
+	seed := s.generateChunkSeed(chunkID)
+	isMine := s.isMine(seed, x, y)
+
+	if isMine {
+		// Correct flag: award points with multiplier
+		player.FlagsInARow++
+		multiplier := player.FlagsInARow
+		if multiplier > 20 {
+			multiplier = 20
+		}
+		player.Score += int32(multiplier)
+
+		// Store the flag
+		if s.flags[chunkID] == nil {
+			s.flags[chunkID] = make(map[int]Flag)
+		}
+		flag := Flag{
+			ChunkID:  chunkID,
+			X:        x,
+			Y:        y,
+			PlayerID: playerID,
+			Color:    playerColor,
+		}
+		s.flags[chunkID][bitIndex] = flag
+
+		// Broadcast flag to subscribers
+		s.broadcastFlagTo3x3(flag)
+
+	} else {
+		// Wrong flag: penalize and auto-reveal
+		player.Score -= 20
+		player.FlagsInARow = 0 // Reset multiplier
+
+		// Auto-reveal the cell (like a normal reveal but with penalty already applied)
+		if chunk == nil {
+			chunk = &ChunkBits{}
+			s.chunks[chunkID] = chunk
+		}
+		wordIndex := bitIndex / 64
+		bitOffset := bitIndex % 64
+		chunk[wordIndex] |= 1 << bitOffset
+
+		// Track who revealed it
+		if s.cellOwners[chunkID] == nil {
+			s.cellOwners[chunkID] = make(map[int]int32)
+		}
+		s.cellOwners[chunkID][bitIndex] = playerID
+
+		// Broadcast the auto-reveal to all players who can see this chunk
+		reveal := Reveal{
+			ChunkID:  chunkID,
+			X:        x,
+			Y:        y,
+			PlayerID: playerID,
+		}
+		s.broadcastRevealTo3x3(reveal)
+	}
+
+	player.LastActionTime = time.Now()
+
+	// Cap score at 0
+	if player.Score < 0 {
+		player.Score = 0
+	}
+
+	// Update leaderboard score
+	s.scores[playerID] = player.Score
+
+	// Persist leaderboard
+	s.lbDirty = true
+
+	// Send score update
+	s.sendScoreUpdate(playerID, player.Score)
+
+	return true
+}
+
+func (s *Server) broadcastFlagTo3x3(flag Flag) {
+	// Caller already holds stateMu
+	payload := mustJSON(flag)
+	sent := make(map[int32]struct{})
+
+	for dy := int32(-1); dy <= 1; dy++ {
+		for dx := int32(-1); dx <= 1; dx++ {
+			chk := ChunkID{flag.ChunkID.X + dx, flag.ChunkID.Y + dy}
+			for pid := range s.subs[chk] {
+				if _, dup := sent[pid]; dup {
+					continue
+				}
+				s.sendToPlayer(pid, payload)
+				sent[pid] = struct{}{}
+			}
+		}
+	}
+}
+
+func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
+	// Caller already holds stateMu
+	payload := mustJSON(reveal)
+	sent := make(map[int32]struct{})
+
+	for dy := int32(-1); dy <= 1; dy++ {
+		for dx := int32(-1); dx <= 1; dx++ {
+			chk := ChunkID{reveal.ChunkID.X + dx, reveal.ChunkID.Y + dy}
+			for pid := range s.subs[chk] {
+				if _, dup := sent[pid]; dup {
+					continue
+				}
+				s.sendToPlayer(pid, payload)
+				sent[pid] = struct{}{}
+			}
+		}
+	}
+}
+
 func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	// Bounds check
 	if !s.isValidCoordinate(x, y) {
@@ -367,14 +541,17 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 		if isMine {
 			// Hit a bomb: -100 points, reset flag streak
 			player.Score -= 100
-			if player.Score < -100 {
-				player.Score = -100
-			}
 			player.FlagsInARow = 0
 		} else {
 			// Safe reveal: +1 point
 			player.Score += 1
 		}
+
+		// Cap score at 0
+		if player.Score < 0 {
+			player.Score = 0
+		}
+
 		player.LastActionTime = time.Now()
 
 		// Send score update to player
@@ -387,11 +564,9 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	}
 	s.cellOwners[chunkID][bitIndex] = playerID
 
-	// Update leaderboard score (use absolute value for display, but allow negatives)
-	if player != nil && player.Score >= 0 {
-		s.scores[playerID] = uint32(player.Score)
-	} else if player != nil {
-		s.scores[playerID] = 0 // Display 0 for negative scores in leaderboard
+	// Update leaderboard score
+	if player != nil {
+		s.scores[playerID] = player.Score
 	} else {
 		// For tests or cases where player is not registered, just increment score
 		s.scores[playerID]++
@@ -426,25 +601,6 @@ func (s *Server) sendScoreUpdate(playerID int32, score int32) {
 	s.sendToPlayer(playerID, mustJSON(scoreMsg))
 }
 
-func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
-	// Caller already holds stateMu (inside reveal())
-	payload := mustJSON(reveal) // marshal once
-	sent := make(map[int32]struct{})
-
-	for dy := int32(-1); dy <= 1; dy++ {
-		for dx := int32(-1); dx <= 1; dx++ {
-			chk := ChunkID{reveal.ChunkID.X + dx, reveal.ChunkID.Y + dy}
-			for pid := range s.subs[chk] {
-				if _, dup := sent[pid]; dup {
-					continue
-				}
-				s.sendToPlayer(pid, payload)
-				sent[pid] = struct{}{}
-			}
-		}
-	}
-}
-
 func (s *Server) sendToPlayer(playerID int32, data []byte) {
 	s.playersMu.RLock()
 	conns, exists := s.players[playerID]
@@ -472,6 +628,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Type     string `json:"type"`
 		PlayerID int32  `json:"playerId"`
 		Name     string `json:"name"`
+		Color    string `json:"color"`
 	}
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if err := conn.ReadJSON(&hello); err != nil || hello.Type != "hello" {
@@ -486,7 +643,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		playerID = s.nextPlayerID
 		s.nextPlayerID++
 	}
+	// Grab any previously‑saved score before we touch the player map
+	initScore := s.scores[playerID]
 	s.playerNames[playerID] = hello.Name
+	s.playerColors[playerID] = hello.Color
 	s.lbDirty = true
 	s.stateMu.Unlock()
 
@@ -503,7 +663,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		RevealWindowStart: time.Now(),
 		RevealCount:       0,
 		Name:              hello.Name,
-		Score:             0, // Start with 0 points
+		Color:             hello.Color,
+		Score:             initScore, // preserve previous score
 	}
 	s.players[playerID][player] = struct{}{}
 	s.playersMu.Unlock()
@@ -525,13 +686,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Type     string `json:"type"`
 		PlayerID int32  `json:"playerId"`
 		Name     string `json:"name"`
-	}{"welcome", playerID, hello.Name}
+		Color    string `json:"color"`
+	}{"welcome", playerID, hello.Name, hello.Color}
 	s.sendToPlayer(playerID, mustJSON(welcome))
 	s.sendToPlayer(playerID, lbBytes)
 	player.LastLBVersion = lbVer
 
-	// Send initial score
-	s.sendScoreUpdate(playerID, player.Score)
+	// Send initial score (keeps existing progress)
+	s.sendScoreUpdate(playerID, initScore)
 
 	log.Printf("Player %d connected", playerID)
 }
@@ -578,17 +740,25 @@ func (s *Server) readPump(player *Player) {
 			ok := s.reveal(player.ID, chunkID, msg.X, msg.Y)
 
 			ack := RevealAck{
-				Type:    "revealAck",
-				ChunkID: chunkID,
-				X:       msg.X,
-				Y:       msg.Y,
-				OK:      ok,
+				Type: "revealAck",
+				OK:   ok,
 			}
 
-			if ok {
-				ack.Scorer = player.ID
+			s.sendToPlayer(player.ID, mustJSON(ack))
+
+		case "flag":
+			var msg FlagMessage
+			if err := json.Unmarshal(rawMsg, &msg); err != nil {
+				continue
 			}
 
+			chunkID := ChunkID{X: msg.ChunkX, Y: msg.ChunkY}
+			ok := s.flag(player.ID, chunkID, msg.X, msg.Y)
+
+			ack := FlagAck{
+				Type: "flagAck",
+				OK:   ok,
+			}
 			s.sendToPlayer(player.ID, mustJSON(ack))
 
 		case "subscribe":
@@ -597,26 +767,6 @@ func (s *Server) readPump(player *Player) {
 				continue
 			}
 			s.subscribeToChunk(player.ID, ChunkID{X: msg.ChunkX, Y: msg.ChunkY})
-
-		case "seed":
-			var msg SeedReq
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
-
-			if !player.TokenBucket.Take() {
-				continue
-			}
-
-			seed := s.generateChunkSeed(ChunkID{msg.ChunkX, msg.ChunkY})
-			resp := SeedResp{
-				Type:   "seed",
-				ChunkX: msg.ChunkX,
-				ChunkY: msg.ChunkY,
-				Seed:   strconv.FormatUint(seed, 10),
-			}
-
-			s.sendToPlayer(player.ID, mustJSON(resp))
 
 		case "unsubscribe":
 			var msg UnsubscribeMessage
@@ -648,8 +798,10 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	// Prepare chunk sync - just revealed cells and their owners
 	chunk, chunkExists := s.chunks[chunkID]
 	owners := s.cellOwners[chunkID]
+	flagsMap := s.flags[chunkID]
 	seed := s.generateChunkSeed(chunkID)
 	var reveals []Reveal
+	var flags []Flag
 
 	if chunkExists {
 		for y := 0; y < ChunkSize; y++ {
@@ -676,6 +828,13 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 			}
 		}
 	}
+
+	// Add flags for this chunk
+	if flagsMap != nil {
+		for _, flag := range flagsMap {
+			flags = append(flags, flag)
+		}
+	}
 	s.stateMu.Unlock()
 
 	msg := ChunkSync{
@@ -683,6 +842,7 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 		ChunkID: chunkID,
 		Seed:    strconv.FormatUint(seed, 10),
 		Reveals: reveals,
+		Flags:   flags,
 	}
 
 	s.sendToPlayer(playerID, mustJSON(msg))
@@ -733,8 +893,10 @@ func (s *Server) removePlayer(p *Player) {
 type snapshotData struct {
 	Chunks       map[ChunkID]*ChunkBits
 	CellOwners   map[ChunkID]map[int]int32
-	Scores       map[int32]uint32
+	Flags        map[ChunkID]map[int]Flag
+	Scores       map[int32]int32
 	PlayerNames  map[int32]string
+	PlayerColors map[int32]string
 	NextPlayerID int32
 }
 
@@ -743,8 +905,10 @@ func (s *Server) saveSnapshot() error {
 	data := snapshotData{
 		Chunks:       s.chunks,
 		CellOwners:   s.cellOwners,
+		Flags:        s.flags,
 		Scores:       s.scores,
 		PlayerNames:  s.playerNames,
+		PlayerColors: s.playerColors,
 		NextPlayerID: s.nextPlayerID,
 	}
 	s.stateMu.RUnlock()
@@ -791,11 +955,21 @@ func (s *Server) loadSnapshot() error {
 	s.stateMu.Lock()
 	s.chunks = data.Chunks
 	s.cellOwners = data.CellOwners
+	if data.Flags != nil {
+		s.flags = data.Flags
+	} else {
+		s.flags = make(map[ChunkID]map[int]Flag)
+	}
 	s.scores = data.Scores
 	if data.PlayerNames != nil {
 		s.playerNames = data.PlayerNames
 	} else {
 		s.playerNames = make(map[int32]string)
+	}
+	if data.PlayerColors != nil {
+		s.playerColors = data.PlayerColors
+	} else {
+		s.playerColors = make(map[int32]string)
 	}
 	if data.NextPlayerID != 0 {
 		s.nextPlayerID = data.NextPlayerID

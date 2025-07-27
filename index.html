@@ -164,9 +164,8 @@
         // Game state
         const seedCache = useRef(new Map());
         const subscribedChunks = useRef(new Set());
-        const pendingSeedRequests = useRef(new Set());
         const revealedCellsRef = useRef(new Map());
-        const flaggedCellsRef = useRef(new Map()); // worldX,worldY -> true
+        const flaggedCellsRef = useRef(new Map()); // worldX,worldY -> {color: string, playerId: number}
         const [tick, setTick] = useState(0);
 
         // Leaderboard visibility and number formatting
@@ -378,31 +377,7 @@
           return { chunkX, chunkY, localX, localY };
         }, []);
 
-        // Optimized seed fetching
-        const ensureSeed = useCallback(async (cx, cy) => {
-          const key = `${cx},${cy}`;
-          if (seedCache.current.has(key)) {
-            return seedCache.current.get(key);
-          }
 
-          if (!pendingSeedRequests.current.has(key) && ws && connected) {
-            pendingSeedRequests.current.add(key);
-            ws.send(JSON.stringify({ type: 'seed', chunkX: cx, chunkY: cy }));
-          }
-
-          return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Seed timeout')), 1000);
-            const check = () => {
-              if (seedCache.current.has(key)) {
-                clearTimeout(timeout);
-                resolve(seedCache.current.get(key));
-              } else {
-                setTimeout(check, 10);
-              }
-            };
-            check();
-          });
-        }, [ws, connected]);
 
         // Add getNumberColor for Minesweeper number coloring
         const getNumberColor = useCallback((num) => {
@@ -488,12 +463,8 @@
             // Ensure we have the seed for this chunk
             let seed = seedCache.current.get(`${chunkX},${chunkY}`);
             if (!seed) {
-              try {
-                seed = await ensureSeed(chunkX, chunkY);
-                if (!seed) continue;
-              } catch {
-                continue;
-              }
+              // Skip chunks that don't have seeds yet
+              continue;
             }
 
             // Skip if it's a mine
@@ -556,7 +527,7 @@
 
           setTick(t => t + 1);
           return toReveal.size;
-        }, [ws, worldToChunk, isMine, countAdjacentMines, ensureSeed, ensureChunkSubscription]);
+        }, [ws, worldToChunk, isMine, countAdjacentMines, ensureChunkSubscription]);
 
         // Handle cell click
         const handleCellClick = useCallback(async (worldX, worldY, isRightClick = false) => {
@@ -571,12 +542,19 @@
             // Don't flag revealed cells
             if (revealedCellsRef.current.has(cellKey)) return;
 
-            // Toggle flag
-            if (flaggedCellsRef.current.has(flagKey)) {
-              flaggedCellsRef.current.delete(flagKey);
-            } else {
-              flaggedCellsRef.current.set(flagKey, true);
-            }
+            const flagKey = `${worldX},${worldY}`;
+
+            // Don't flag if already flagged
+            if (flaggedCellsRef.current.has(flagKey)) return;
+
+            // Send flag request to server
+            ws.send(JSON.stringify({
+              type: 'flag',
+              chunkX,
+              chunkY,
+              x: localX,
+              y: localY
+            }));
             setTick(t => t + 1);
             return;
           }
@@ -632,8 +610,8 @@
 
           let seed = seedCache.current.get(`${chunkX},${chunkY}`);
           if (!seed) {
-            seed = await ensureSeed(chunkX, chunkY).catch(() => null);
-            if (!seed) return;
+            // Seed not available yet, user needs to wait for chunk sync
+            return;
           }
 
           // If it's a mine, just reveal the single cell
@@ -806,7 +784,7 @@
           });
 
           // Draw flags
-          flaggedCellsRef.current.forEach((_, flagKey) => {
+          flaggedCellsRef.current.forEach((flagData, flagKey) => {
             const [worldX, worldY] = flagKey.split(',').map(Number);
             const screenX = worldX * CELL_SIZE - viewX;
             const screenY = worldY * CELL_SIZE - viewY;
@@ -837,8 +815,9 @@
             ctx.fillStyle = '#333';
             ctx.fillRect(flagPoleX, flagTopY, 2, flagBottomY - flagTopY);
 
-            // Draw flag triangle with player color
-            ctx.fillStyle = playerColor;
+            // Draw flag triangle with flag color
+            const flagColor = flagData?.color || playerColor;
+            ctx.fillStyle = flagColor;
             ctx.beginPath();
             ctx.moveTo(flagPoleX + 2, flagTopY);
             ctx.lineTo(flagPoleX + 2 + flagWidth, flagTopY + flagHeight / 2);
@@ -879,7 +858,6 @@
               const key = `${chunkX},${chunkY}`;
               visibleNow.add(key);
               ensureChunkSubscription(chunkX, chunkY);
-              ensureSeed(chunkX, chunkY).catch(() => {});
             }
           }
 
@@ -890,7 +868,7 @@
               ensureChunkUnsubscription(cx, cy);
             }
           });
-        }, [ws, connected, viewX, viewY, ensureChunkSubscription, ensureSeed, ensureChunkUnsubscription]);
+        }, [ws, connected, viewX, viewY, ensureChunkSubscription, ensureChunkUnsubscription]);
 
         // Mouse event handlers
         const handleMouseDown = useCallback((e) => {
@@ -1002,7 +980,21 @@
             if (data.type === 'chunkSync') {
               const key = `${data.chunkId.X},${data.chunkId.Y}`;
               seedCache.current.set(key, BigInt(data.seed));
-              pendingSeedRequests.current.delete(key);
+
+              // Handle flags from server
+              if (Array.isArray(data.flags)) {
+                for (const flag of data.flags) {
+                  const flagWorldX = flag.chunkId.X * CHUNK + flag.x;
+                  const flagWorldY = flag.chunkId.Y * CHUNK + flag.y;
+                  const flagKey = `${flagWorldX},${flagWorldY}`;
+
+                  flaggedCellsRef.current.set(flagKey, {
+                    color: flag.color,
+                    playerId: flag.playerId
+                  });
+                }
+                setTick(t => t + 1);
+              }
 
               if (Array.isArray(data.reveals)) {
                 for (const cell of data.reveals) {
@@ -1040,6 +1032,14 @@
                 setTick(t => t + 1);
               }
             } else if (data.type === 'revealAck') {
+              // Handle reveal acknowledgment (no changes needed)
+                        } else if (data.type === 'flagAck') {
+              // Simple acknowledgment - just indicates success or failure
+              if (!data.ok) {
+                // Flag failed - could show user feedback here if needed
+                console.log('Flag failed');
+              }
+            } else if (data.type === 'revealAck') {
               if (!data.ok) {
                 // Optimistic reveal lost → resync this chunk
                 const key = `${data.chunkId.X},${data.chunkId.Y},${data.x},${data.y}`;
@@ -1054,20 +1054,28 @@
 
                 setTick(t => t + 1);
               }
-            } else if (data.chunkId && typeof data.x === 'number' && typeof data.y === 'number' && typeof data.playerId === 'number') {
-              // This is a reveal broadcast from server
-              const cellKey = `${data.chunkId.X},${data.chunkId.Y},${data.x},${data.y}`;
+            } else if (data.chunkId && typeof data.x === 'number' && typeof data.y === 'number' && data.color) {
+              // This is a flag broadcast from server
+              const flagWorldX = data.chunkId.X * CHUNK + data.x;
+              const flagWorldY = data.chunkId.Y * CHUNK + data.y;
+              const flagKey = `${flagWorldX},${flagWorldY}`;
 
-              // Avoid duplicates by checking if we already have this exact reveal
-              const existing = revealedCellsRef.current.get(cellKey);
-              if (existing && existing.playerId === data.playerId) {
-                return; // Skip duplicate
-              }
+              flaggedCellsRef.current.set(flagKey, {
+                color: data.color,
+                playerId: data.playerId
+              });
 
-              // Calculate mine content client-side
-              const seed = seedCache.current.get(`${data.chunkId.X},${data.chunkId.Y}`);
+              setTick(t => t + 1);
+
+            } else if (data.chunkId && typeof data.x === 'number' && typeof data.y === 'number' && typeof data.playerId === 'number' && !data.color) {
+              // This is a reveal broadcast from server (e.g., from wrong flag)
+              const { chunkX, chunkY, localX, localY } = worldToChunk(data.chunkId.X * CHUNK + data.x, data.chunkId.Y * CHUNK + data.y);
+              const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+
+              // Get the seed for this chunk to determine if it's a mine
+              const seed = seedCache.current.get(`${chunkX},${chunkY}`);
               if (seed) {
-                const cellIsMine = isMine(seed, data.x, data.y);
+                const cellIsMine = isMine(seed, localX, localY);
                 let adjacentMines = 0;
 
                 if (!cellIsMine) {
@@ -1075,10 +1083,10 @@
                   for (let dy = -1; dy <= 1; dy++) {
                     for (let dx = -1; dx <= 1; dx++) {
                       if (dx === 0 && dy === 0) continue;
-                      let nx = data.x + dx;
-                      let ny = data.y + dy;
-                      let ncx = data.chunkId.X;
-                      let ncy = data.chunkId.Y;
+                      let nx = localX + dx;
+                      let ny = localY + dy;
+                      let ncx = chunkX;
+                      let ncy = chunkY;
                       if (nx < 0) { ncx--; nx += CHUNK; }
                       else if (nx >= CHUNK) { ncx++; nx -= CHUNK; }
                       if (ny < 0) { ncy--; ny += CHUNK; }
@@ -1091,12 +1099,17 @@
                 }
 
                 revealedCellsRef.current.set(cellKey, {
-                  ...data,
+                  chunkId: data.chunkId,
+                  x: localX,
+                  y: localY,
+                  playerId: data.playerId,
                   isMine: cellIsMine,
                   adjacentMines
                 });
+
                 setTick(t => t + 1);
               }
+
             } else if (data.type === 'leaderboard') {
               if (data.entries) {
                 const list = data.entries.map(e => {
@@ -1116,10 +1129,6 @@
               if (typeof data.score === 'number') {
                 setPlayerScore(data.score);
               }
-            } else if (data.type === 'seed') {
-              const key = `${data.chunkX},${data.chunkY}`;
-              seedCache.current.set(key, BigInt(data.seed));
-              pendingSeedRequests.current.delete(key);
             }
           };
 
