@@ -364,17 +364,17 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 		}
 	}
 
-	// Get player info
+	// Get player info (atomically under the same read‑lock)
 	s.playersMu.RLock()
-	playerConns := s.players[playerID]
-	playerColor := s.playerColors[playerID]
-	s.playersMu.RUnlock()
-
 	var player *Player
-	for p := range playerConns {
-		player = p
-		break
+	playerColor := s.playerColors[playerID]
+	if conns, ok := s.players[playerID]; ok {
+		for p := range conns {
+			player = p
+			break
+		}
 	}
+	s.playersMu.RUnlock()
 	if player == nil {
 		return false
 	}
@@ -534,16 +534,14 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 
 	// Update player score based on reveal
 	s.playersMu.RLock()
-	playerConns, exists := s.players[playerID]
-	s.playersMu.RUnlock()
-
 	var player *Player
-	if exists {
-		for p := range playerConns {
+	if conns, ok := s.players[playerID]; ok {
+		for p := range conns { // pick first connection while lock is held
 			player = p
-			break // Get any connection for this player
+			break
 		}
 	}
+	s.playersMu.RUnlock()
 
 	if player != nil {
 		player.mu.Lock()
