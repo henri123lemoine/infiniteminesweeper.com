@@ -65,6 +65,10 @@ type Player struct {
 	Send        chan []byte
 	TokenBucket TokenBucket
 	Name        string
+	// protects everything below this line against concurrent readPump /
+	// flag() / reveal() races (one player can have several connections)
+	mu sync.Mutex
+
 	// Rate limiting for reveals
 	Color             string
 	RevealWindowStart time.Time
@@ -379,6 +383,7 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 	seed := s.generateChunkSeed(chunkID)
 	isMine := s.isMine(seed, x, y)
 
+	player.mu.Lock()
 	if isMine {
 		// Correct flag: award points with multiplier
 		player.FlagsInARow++
@@ -441,14 +446,17 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 		player.Score = 0
 	}
 
-	// Update leaderboard score
-	s.scores[playerID] = player.Score
+	score := player.Score
+	player.mu.Unlock()
 
-	// Persist leaderboard
+	// Update leaderboard score
+	s.scores[playerID] = score
+
+	// Mark leaderboard as dirty for persistence
 	s.lbDirty = true
 
-	// Send score update
-	s.sendScoreUpdate(playerID, player.Score)
+	// Send score update to player
+	s.sendScoreUpdate(playerID, score)
 
 	return true
 }
@@ -538,24 +546,21 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	}
 
 	if player != nil {
+		player.mu.Lock()
 		if isMine {
-			// Hit a bomb: -100 points, reset flag streak
-			player.Score -= 100
+			player.Score -= 100 // bomb penalty
 			player.FlagsInARow = 0
 		} else {
-			// Safe reveal: +1 point
-			player.Score += 1
+			player.Score += 1 // normal reveal
 		}
-
-		// Cap score at 0
 		if player.Score < 0 {
 			player.Score = 0
 		}
-
 		player.LastActionTime = time.Now()
+		newScore := player.Score // copy while still locked
+		player.mu.Unlock()
 
-		// Send score update to player
-		s.sendScoreUpdate(playerID, player.Score)
+		s.sendScoreUpdate(playerID, newScore)
 	}
 
 	// Track who revealed it
@@ -724,17 +729,17 @@ func (s *Server) readPump(player *Player) {
 			}
 
 			// Rate limiting
+			player.mu.Lock()
 			now := time.Now()
 			if now.Sub(player.RevealWindowStart) > time.Minute {
 				player.RevealWindowStart = now
 				player.RevealCount = 0
 			}
-
 			if player.RevealCount >= MaxRevealsPerMin {
 				player.SusRevealOverflow++
 			}
-
 			player.RevealCount++
+			player.mu.Unlock()
 
 			chunkID := ChunkID{X: msg.ChunkX, Y: msg.ChunkY}
 			ok := s.reveal(player.ID, chunkID, msg.X, msg.Y)
