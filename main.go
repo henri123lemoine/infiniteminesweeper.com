@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/websocket"
+	pb "infinite-minesweeper/pb"
 )
 
 //go:embed index.html
@@ -617,15 +618,8 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 }
 
 func (s *Server) sendScoreUpdate(playerID int32, score int32) {
-	scoreMsg := struct {
-		Type  string `json:"type"`
-		Score int32  `json:"score"`
-	}{
-		Type:  "scoreUpdate",
-		Score: score,
-	}
-
-	s.sendToPlayer(playerID, mustJSON(scoreMsg))
+	env := &pb.Envelope{Msg: &pb.Envelope_ScoreUpdate{ScoreUpdate: &pb.ScoreUpdate{Score: score}}}
+	s.sendEnvelope(playerID, env)
 }
 
 func (s *Server) sendToPlayer(playerID int32, data []byte) {
@@ -653,6 +647,13 @@ func (s *Server) sendToPlayer(playerID int32, data []byte) {
 			}
 		}
 	}
+}
+func (s *Server) sendEnvelope(playerID int32, env *pb.Envelope) {
+	b, err := marshalEnvelope(env)
+	if err != nil {
+		return
+	}
+	s.sendToPlayer(playerID, b)
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -761,25 +762,14 @@ func (s *Server) readPump(player *Player) {
 	}()
 
 	for {
-		var rawMsg json.RawMessage
-		err := player.Conn.ReadJSON(&rawMsg)
+		env, err := readEnvelope(player.Conn)
 		if err != nil {
 			break
 		}
 
-		var baseMsg Message
-		if err := json.Unmarshal(rawMsg, &baseMsg); err != nil {
-			continue
-		}
-
-		switch baseMsg.Type {
-		case "reveal":
-			var msg RevealMessage
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
-
-			// Rate limiting
+		switch msg := env.Msg.(type) {
+		case *pb.Envelope_Reveal:
+			rm := msg.Reveal
 			player.Mailbox <- func(pl *Player) {
 				now := time.Now()
 				if now.Sub(pl.RevealWindowStart) > time.Minute {
@@ -791,45 +781,22 @@ func (s *Server) readPump(player *Player) {
 				}
 				pl.RevealCount++
 			}
-
-			chunkID := ChunkID{X: msg.ChunkX, Y: msg.ChunkY}
-			ok := s.reveal(player.ID, chunkID, msg.X, msg.Y)
-
-			ack := RevealAck{
-				Type: "revealAck",
-				OK:   ok,
-			}
-
-			s.sendToPlayer(player.ID, mustJSON(ack))
-
-		case "flag":
-			var msg FlagMessage
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
-
-			chunkID := ChunkID{X: msg.ChunkX, Y: msg.ChunkY}
-			ok := s.flag(player.ID, chunkID, msg.X, msg.Y)
-
-			ack := FlagAck{
-				Type: "flagAck",
-				OK:   ok,
-			}
-			s.sendToPlayer(player.ID, mustJSON(ack))
-
-		case "subscribe":
-			var msg SubscribeMessage
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
-			s.subscribeToChunk(player.ID, ChunkID{X: msg.ChunkX, Y: msg.ChunkY})
-
-		case "unsubscribe":
-			var msg UnsubscribeMessage
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
-			s.unsubscribeFromChunk(player.ID, ChunkID{X: msg.ChunkX, Y: msg.ChunkY})
+			chunkID := ChunkID{X: rm.ChunkId.X, Y: rm.ChunkId.Y}
+			ok := s.reveal(player.ID, chunkID, int(rm.X), int(rm.Y))
+			ack := &pb.Envelope{Msg: &pb.Envelope_RevealAck{RevealAck: &pb.RevealAck{Ok: ok}}}
+			s.sendEnvelope(player.ID, ack)
+		case *pb.Envelope_Flag:
+			fm := msg.Flag
+			chunkID := ChunkID{X: fm.ChunkId.X, Y: fm.ChunkId.Y}
+			ok := s.flag(player.ID, chunkID, int(fm.X), int(fm.Y))
+			ack := &pb.Envelope{Msg: &pb.Envelope_FlagAck{FlagAck: &pb.FlagAck{Ok: ok}}}
+			s.sendEnvelope(player.ID, ack)
+		case *pb.Envelope_Subscribe:
+			sm := msg.Subscribe
+			s.subscribeToChunk(player.ID, ChunkID{X: sm.ChunkId.X, Y: sm.ChunkId.Y})
+		case *pb.Envelope_Unsubscribe:
+			um := msg.Unsubscribe
+			s.unsubscribeFromChunk(player.ID, ChunkID{X: um.ChunkId.X, Y: um.ChunkId.Y})
 		}
 	}
 }
@@ -846,7 +813,7 @@ func (s *Server) writePump(player *Player) {
 			if !ok {
 				return
 			}
-			if err := player.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
+			if err := player.Conn.WriteMessage(websocket.BinaryMessage, message); err != nil {
 				return
 			}
 		case <-ping.C:
