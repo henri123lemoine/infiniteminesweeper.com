@@ -7,8 +7,8 @@ import (
 	"embed"
 	"encoding/binary"
 	"encoding/gob"
-	"encoding/json"
 	"fmt"
+	"github.com/klauspost/compress/zstd"
 	"log"
 	"net/http"
 	"os"
@@ -19,6 +19,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
+
+	"infinite-minesweeper/pb"
 )
 
 //go:embed index.html
@@ -30,6 +33,16 @@ const (
 	MineCount        = 20    // mines per 100 cells (20% chance)
 	MaxRevealsPerMin = 10000 // relaxed flood‑fill budget
 )
+
+var (
+	zstdEnc *zstd.Encoder
+	zstdDec *zstd.Decoder
+)
+
+func init() {
+	zstdEnc, _ = zstd.NewWriter(nil)
+	zstdDec, _ = zstd.NewReader(nil)
+}
 
 // SNAPSHOT / PERSISTENCE CONSTANTS
 const (
@@ -116,63 +129,22 @@ func (tb *TokenBucket) Take() bool {
 	return false
 }
 
-type Message struct {
-	Type string `json:"type"`
-}
-
-type RevealMessage struct {
-	Type   string `json:"type"`
-	ChunkX int32  `json:"chunkX"`
-	ChunkY int32  `json:"chunkY"`
-	X      int    `json:"x"`
-	Y      int    `json:"y"`
-}
-
-type FlagMessage struct {
-	Type   string `json:"type"`
-	ChunkX int32  `json:"chunkX"`
-	ChunkY int32  `json:"chunkY"`
-	X      int    `json:"x"`
-	Y      int    `json:"y"`
-}
-
-type SubscribeMessage struct {
-	Type   string `json:"type"`
-	ChunkX int32  `json:"chunkX"`
-	ChunkY int32  `json:"chunkY"`
-}
-
-type UnsubscribeMessage struct {
-	Type   string `json:"type"`
-	ChunkX int32  `json:"chunkX"`
-	ChunkY int32  `json:"chunkY"`
-}
-
-type ChunkSync struct {
-	Type    string   `json:"type"`
-	ChunkID ChunkID  `json:"chunkId"`
-	Seed    string   `json:"seed"`
-	Reveals []Reveal `json:"reveals"`
-	Flags   []Flag   `json:"flags"`
-}
-
-type RevealAck struct {
-	Type string `json:"type"`
-	OK   bool   `json:"ok"`
-}
-
-type FlagAck struct {
-	Type string `json:"type"`
-	OK   bool   `json:"ok"`
-}
-
-// mustJSON helper for marshaling
-func mustJSON(v any) []byte {
-	b, err := json.Marshal(v)
+func mustEncode(msg proto.Message) []byte {
+	raw, err := proto.Marshal(msg)
 	if err != nil {
 		panic(err)
 	}
-	return b
+	return zstdEnc.EncodeAll(raw, make([]byte, 0, len(raw)))
+}
+
+func mustDecode(data []byte, msg proto.Message) {
+	dec, err := zstdDec.DecodeAll(data, nil)
+	if err != nil {
+		panic(err)
+	}
+	if err := proto.Unmarshal(dec, msg); err != nil {
+		panic(err)
+	}
 }
 
 type Server struct {
@@ -305,18 +277,20 @@ func (s *Server) buildLeaderboardUnsafe() {
 		entries = entries[:20]
 	}
 
-	lb := struct {
-		Type    string    `json:"type"`
-		Version uint64    `json:"version"`
-		Entries []lbEntry `json:"entries"`
-	}{
-		Type:    "leaderboard",
+	lb := &pb.Leaderboard{
 		Version: s.lbVersion + 1,
-		Entries: entries,
+		Entries: make([]*pb.LeaderboardEntry, len(entries)),
+	}
+	for i, e := range entries {
+		lb.Entries[i] = &pb.LeaderboardEntry{
+			PlayerId: e.PlayerID,
+			Name:     e.Name,
+			Score:    e.Score,
+		}
 	}
 
 	s.lbVersion++
-	s.lbJSON = mustJSON(lb)
+	s.lbJSON = mustEncode(&pb.Envelope{Msg: &pb.Envelope_Leaderboard{Leaderboard: lb}})
 }
 
 // Bounds checking for reveal requests
@@ -455,7 +429,14 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 
 func (s *Server) broadcastFlagTo3x3(flag Flag) {
 	// Caller already holds stateMu
-	payload := mustJSON(flag)
+	env := &pb.Envelope{Msg: &pb.Envelope_FlagEvent{FlagEvent: &pb.FlagEvent{
+		ChunkX:   flag.ChunkID.X,
+		ChunkY:   flag.ChunkID.Y,
+		X:        int32(flag.X),
+		Y:        int32(flag.Y),
+		PlayerId: flag.PlayerID,
+		Color:    flag.Color,
+	}}}
 	sent := make(map[int32]struct{})
 
 	for dy := int32(-1); dy <= 1; dy++ {
@@ -465,7 +446,7 @@ func (s *Server) broadcastFlagTo3x3(flag Flag) {
 				if _, dup := sent[pid]; dup {
 					continue
 				}
-				s.sendToPlayer(pid, payload)
+				s.sendToPlayer(pid, env)
 				sent[pid] = struct{}{}
 			}
 		}
@@ -474,7 +455,13 @@ func (s *Server) broadcastFlagTo3x3(flag Flag) {
 
 func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
 	// Caller already holds stateMu
-	payload := mustJSON(reveal)
+	env := &pb.Envelope{Msg: &pb.Envelope_RevealEvent{RevealEvent: &pb.RevealEvent{
+		ChunkX:   reveal.ChunkID.X,
+		ChunkY:   reveal.ChunkID.Y,
+		X:        int32(reveal.X),
+		Y:        int32(reveal.Y),
+		PlayerId: reveal.PlayerID,
+	}}}
 	sent := make(map[int32]struct{})
 
 	for dy := int32(-1); dy <= 1; dy++ {
@@ -484,7 +471,7 @@ func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
 				if _, dup := sent[pid]; dup {
 					continue
 				}
-				s.sendToPlayer(pid, payload)
+				s.sendToPlayer(pid, env)
 				sent[pid] = struct{}{}
 			}
 		}
@@ -590,18 +577,12 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 }
 
 func (s *Server) sendScoreUpdate(playerID int32, score int32) {
-	scoreMsg := struct {
-		Type  string `json:"type"`
-		Score int32  `json:"score"`
-	}{
-		Type:  "scoreUpdate",
-		Score: score,
-	}
-
-	s.sendToPlayer(playerID, mustJSON(scoreMsg))
+	msg := &pb.Envelope{Msg: &pb.Envelope_ScoreUpdate{ScoreUpdate: &pb.ScoreUpdate{Score: score}}}
+	s.sendToPlayer(playerID, msg)
 }
 
-func (s *Server) sendToPlayer(playerID int32, data []byte) {
+func (s *Server) sendToPlayer(playerID int32, msg proto.Message) {
+	data := mustEncode(msg)
 	s.playersMu.RLock()
 	conns, exists := s.players[playerID]
 	s.playersMu.RUnlock()
@@ -623,21 +604,23 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WebSocket upgrade error: %v", err)
 		return
 	}
-	// Expect hello message with optional playerId and name
-	var hello struct {
-		Type     string `json:"type"`
-		PlayerID int32  `json:"playerId"`
-		Name     string `json:"name"`
-		Color    string `json:"color"`
-	}
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if err := conn.ReadJSON(&hello); err != nil || hello.Type != "hello" {
+	_, data, err := conn.ReadMessage()
+	if err != nil {
 		conn.Close()
 		return
 	}
 	conn.SetReadDeadline(time.Time{})
 
-	playerID := hello.PlayerID
+	var env pb.Envelope
+	mustDecode(data, &env)
+	helloMsg := env.GetHello()
+	if helloMsg == nil {
+		conn.Close()
+		return
+	}
+
+	playerID := helloMsg.PlayerId
 	s.stateMu.Lock()
 	if playerID <= 0 || playerID >= s.nextPlayerID {
 		playerID = s.nextPlayerID
@@ -645,8 +628,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	// Grab any previously‑saved score before we touch the player map
 	initScore := s.scores[playerID]
-	s.playerNames[playerID] = hello.Name
-	s.playerColors[playerID] = hello.Color
+	s.playerNames[playerID] = helloMsg.Name
+	s.playerColors[playerID] = helloMsg.Color
 	s.lbDirty = true
 	s.stateMu.Unlock()
 
@@ -662,8 +645,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		TokenBucket:       TokenBucket{tokens: 200},
 		RevealWindowStart: time.Now(),
 		RevealCount:       0,
-		Name:              hello.Name,
-		Color:             hello.Color,
+		Name:              helloMsg.Name,
+		Color:             helloMsg.Color,
 		Score:             initScore, // preserve previous score
 	}
 	s.players[playerID][player] = struct{}{}
@@ -682,14 +665,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	go s.writePump(player)
 	go s.readPump(player)
 
-	welcome := struct {
-		Type     string `json:"type"`
-		PlayerID int32  `json:"playerId"`
-		Name     string `json:"name"`
-		Color    string `json:"color"`
-	}{"welcome", playerID, hello.Name, hello.Color}
-	s.sendToPlayer(playerID, mustJSON(welcome))
-	s.sendToPlayer(playerID, lbBytes)
+	welcome := &pb.Welcome{PlayerId: playerID, Name: helloMsg.Name, Color: helloMsg.Color}
+	s.sendToPlayer(playerID, &pb.Envelope{Msg: &pb.Envelope_Welcome{Welcome: welcome}})
+	var lbEnv pb.Envelope
+	mustDecode(lbBytes, &lbEnv)
+	s.sendToPlayer(playerID, &lbEnv)
 	player.LastLBVersion = lbVer
 
 	// Send initial score (keeps existing progress)
@@ -705,23 +685,17 @@ func (s *Server) readPump(player *Player) {
 	}()
 
 	for {
-		var rawMsg json.RawMessage
-		err := player.Conn.ReadJSON(&rawMsg)
+		_, data, err := player.Conn.ReadMessage()
 		if err != nil {
 			break
 		}
 
-		var baseMsg Message
-		if err := json.Unmarshal(rawMsg, &baseMsg); err != nil {
-			continue
-		}
+		var env pb.Envelope
+		mustDecode(data, &env)
 
-		switch baseMsg.Type {
-		case "reveal":
-			var msg RevealMessage
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
+		switch m := env.Msg.(type) {
+		case *pb.Envelope_Reveal:
+			msg := m.Reveal
 
 			// Rate limiting
 			now := time.Now()
@@ -737,42 +711,24 @@ func (s *Server) readPump(player *Player) {
 			player.RevealCount++
 
 			chunkID := ChunkID{X: msg.ChunkX, Y: msg.ChunkY}
-			ok := s.reveal(player.ID, chunkID, msg.X, msg.Y)
+			ok := s.reveal(player.ID, chunkID, int(msg.X), int(msg.Y))
 
-			ack := RevealAck{
-				Type: "revealAck",
-				OK:   ok,
-			}
+			ack := &pb.Envelope{Msg: &pb.Envelope_RevealAck{RevealAck: &pb.RevealAck{Ok: ok}}}
+			s.sendToPlayer(player.ID, ack)
 
-			s.sendToPlayer(player.ID, mustJSON(ack))
-
-		case "flag":
-			var msg FlagMessage
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
-
+		case *pb.Envelope_Flag:
+			msg := m.Flag
 			chunkID := ChunkID{X: msg.ChunkX, Y: msg.ChunkY}
-			ok := s.flag(player.ID, chunkID, msg.X, msg.Y)
+			ok := s.flag(player.ID, chunkID, int(msg.X), int(msg.Y))
+			ack := &pb.Envelope{Msg: &pb.Envelope_FlagAck{FlagAck: &pb.FlagAck{Ok: ok}}}
+			s.sendToPlayer(player.ID, ack)
 
-			ack := FlagAck{
-				Type: "flagAck",
-				OK:   ok,
-			}
-			s.sendToPlayer(player.ID, mustJSON(ack))
-
-		case "subscribe":
-			var msg SubscribeMessage
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
+		case *pb.Envelope_Subscribe:
+			msg := m.Subscribe
 			s.subscribeToChunk(player.ID, ChunkID{X: msg.ChunkX, Y: msg.ChunkY})
 
-		case "unsubscribe":
-			var msg UnsubscribeMessage
-			if err := json.Unmarshal(rawMsg, &msg); err != nil {
-				continue
-			}
+		case *pb.Envelope_Unsubscribe:
+			msg := m.Unsubscribe
 			s.unsubscribeFromChunk(player.ID, ChunkID{X: msg.ChunkX, Y: msg.ChunkY})
 		}
 	}
@@ -782,7 +738,7 @@ func (s *Server) writePump(player *Player) {
 	defer player.Conn.Close()
 
 	for message := range player.Send {
-		if err := player.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		if err := player.Conn.WriteMessage(websocket.BinaryMessage, message); err != nil {
 			return
 		}
 	}
@@ -837,15 +793,34 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	}
 	s.stateMu.Unlock()
 
-	msg := ChunkSync{
-		Type:    "chunkSync",
-		ChunkID: chunkID,
-		Seed:    strconv.FormatUint(seed, 10),
-		Reveals: reveals,
-		Flags:   flags,
+	syncMsg := &pb.ChunkSync{
+		ChunkX:  chunkID.X,
+		ChunkY:  chunkID.Y,
+		Seed:    seed,
+		Reveals: make([]*pb.RevealEvent, len(reveals)),
+		Flags:   make([]*pb.FlagEvent, len(flags)),
 	}
-
-	s.sendToPlayer(playerID, mustJSON(msg))
+	for i, r := range reveals {
+		syncMsg.Reveals[i] = &pb.RevealEvent{
+			ChunkX:   r.ChunkID.X,
+			ChunkY:   r.ChunkID.Y,
+			X:        int32(r.X),
+			Y:        int32(r.Y),
+			PlayerId: r.PlayerID,
+		}
+	}
+	for i, f := range flags {
+		syncMsg.Flags[i] = &pb.FlagEvent{
+			ChunkX:   f.ChunkID.X,
+			ChunkY:   f.ChunkID.Y,
+			X:        int32(f.X),
+			Y:        int32(f.Y),
+			PlayerId: f.PlayerID,
+			Color:    f.Color,
+		}
+	}
+	env := &pb.Envelope{Msg: &pb.Envelope_ChunkSync{ChunkSync: syncMsg}}
+	s.sendToPlayer(playerID, env)
 }
 
 func (s *Server) unsubscribeFromChunk(playerID int32, chunkID ChunkID) {

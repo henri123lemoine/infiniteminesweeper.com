@@ -1,0 +1,105 @@
+syntax = "proto3";
+package pb;
+option go_package = "infinite-minesweeper/pb;pb";
+
+message Hello {
+  int32 player_id = 1;
+  string name = 2;
+  string color = 3;
+}
+
+message Welcome {
+  int32 player_id = 1;
+  string name = 2;
+  string color = 3;
+}
+
+message RevealRequest {
+  int32 chunk_x = 1;
+  int32 chunk_y = 2;
+  int32 x = 3;
+  int32 y = 4;
+}
+
+message RevealAck {
+  bool ok = 1;
+}
+
+message FlagRequest {
+  int32 chunk_x = 1;
+  int32 chunk_y = 2;
+  int32 x = 3;
+  int32 y = 4;
+}
+
+message FlagAck {
+  bool ok = 1;
+}
+
+message Subscribe {
+  int32 chunk_x = 1;
+  int32 chunk_y = 2;
+}
+
+message Unsubscribe {
+  int32 chunk_x = 1;
+  int32 chunk_y = 2;
+}
+
+message RevealEvent {
+  int32 chunk_x = 1;
+  int32 chunk_y = 2;
+  int32 x = 3;
+  int32 y = 4;
+  int32 player_id = 5;
+}
+
+message FlagEvent {
+  int32 chunk_x = 1;
+  int32 chunk_y = 2;
+  int32 x = 3;
+  int32 y = 4;
+  int32 player_id = 5;
+  string color = 6;
+}
+
+message ChunkSync {
+  int32 chunk_x = 1;
+  int32 chunk_y = 2;
+  uint64 seed = 3;
+  repeated RevealEvent reveals = 4;
+  repeated FlagEvent flags = 5;
+}
+
+message ScoreUpdate {
+  int32 score = 1;
+}
+
+message LeaderboardEntry {
+  int32 player_id = 1;
+  string name = 2;
+  string score = 3;
+}
+
+message Leaderboard {
+  uint64 version = 1;
+  repeated LeaderboardEntry entries = 2;
+}
+
+message Envelope {
+  oneof msg {
+    Hello hello = 1;
+    Welcome welcome = 2;
+    RevealRequest reveal = 3;
+    RevealAck reveal_ack = 4;
+    FlagRequest flag = 5;
+    FlagAck flag_ack = 6;
+    Subscribe subscribe = 7;
+    Unsubscribe unsubscribe = 8;
+    RevealEvent reveal_event = 9;
+    FlagEvent flag_event = 10;
+    ChunkSync chunk_sync = 11;
+    ScoreUpdate score_update = 12;
+    Leaderboard leaderboard = 13;
+  }
+}
