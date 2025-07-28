@@ -33,8 +33,9 @@ const (
 
 // SNAPSHOT / PERSISTENCE CONSTANTS
 const (
+	snapshotDir      = "data"
 	snapshotFile     = "data/snapshot.gob.gz"
-	snapshotTmp      = "snapshot.tmp.gz"
+	snapshotTmp      = "data/snapshot.tmp.gz"
 	snapshotInterval = 10 * time.Minute
 )
 
@@ -84,6 +85,9 @@ type Player struct {
 	FlagsInARow    int // consecutive correct flags
 	LastActionTime time.Time
 	Score          int32 // capped at 0
+
+	// outbound‑drop counter (closes WS after 32 consecutive drops)
+	dropMisses int
 }
 
 // TokenBucket for rate limiting seed requests (200/min)
@@ -615,7 +619,12 @@ func (s *Server) sendToPlayer(playerID int32, data []byte) {
 	for p := range conns {
 		select {
 		case p.Send <- data:
+			p.dropMisses = 0
 		default:
+			p.dropMisses++
+			if p.dropMisses > 32 {
+				p.Conn.Close() // force disconnect on sustained back‑pressure
+			}
 		}
 	}
 }
@@ -626,6 +635,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WebSocket upgrade error: %v", err)
 		return
 	}
+
+	// connection hygiene
+	conn.SetReadLimit(1 << 20)                             // max 1 MiB frame
+	conn.SetReadDeadline(time.Now().Add(35 * time.Second)) // liveness timer
+	conn.SetPongHandler(func(string) error {               // refresh on pong
+		conn.SetReadDeadline(time.Now().Add(35 * time.Second))
+		return nil
+	})
+
 	// Expect hello message with optional playerId and name
 	var hello struct {
 		Type     string `json:"type"`
@@ -784,9 +802,22 @@ func (s *Server) readPump(player *Player) {
 func (s *Server) writePump(player *Player) {
 	defer player.Conn.Close()
 
-	for message := range player.Send {
-		if err := player.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
-			return
+	ping := time.NewTicker(30 * time.Second)
+	defer ping.Stop()
+
+	for {
+		select {
+		case message, ok := <-player.Send:
+			if !ok {
+				return
+			}
+			if err := player.Conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				return
+			}
+		case <-ping.C:
+			if err := player.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		}
 	}
 }
@@ -904,6 +935,11 @@ type snapshotData struct {
 }
 
 func (s *Server) saveSnapshot() error {
+	// Ensure data/ exists the first time we’re asked to write here
+	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
+		return err
+	}
+
 	s.stateMu.RLock()
 	data := snapshotData{
 		Chunks:       s.chunks,
