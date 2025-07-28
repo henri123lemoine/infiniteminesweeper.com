@@ -11,12 +11,15 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
+
+	"strings"
 
 	"github.com/gorilla/websocket"
 )
@@ -229,8 +232,22 @@ func NewServer() *Server {
 		seedCache:    make(map[ChunkID]uint64),
 		nextPlayerID: 1,
 		upgrader: websocket.Upgrader{
+			// Reject cross-site WebSocket requests (prevents CSRF via <iframe>).
 			CheckOrigin: func(r *http.Request) bool {
-				return true
+				origin := r.Header.Get("Origin")
+				if origin == "" {
+					return true
+				}
+				u, err := url.Parse(origin)
+				if err != nil {
+					return false
+				}
+				clean := func(h string) string {
+					h = strings.TrimSuffix(h, ":80")
+					h = strings.TrimSuffix(h, ":443")
+					return h
+				}
+				return clean(u.Host) == clean(r.Host)
 			},
 		},
 	}
