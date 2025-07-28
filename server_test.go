@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,7 +16,35 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
+	pb "infinite-minesweeper/proto"
 )
+
+func encodeMsg(m *pb.Msg) []byte {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	b, _ := proto.Marshal(m)
+	gz.Write(b)
+	gz.Close()
+	return buf.Bytes()
+}
+
+func decodeMsg(data []byte) (*pb.Msg, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	b, err := io.ReadAll(gz)
+	gz.Close()
+	if err != nil {
+		return nil, err
+	}
+	var m pb.Msg
+	if err := proto.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
 
 func TestGenerateChunkSeedDeterminism(t *testing.T) {
 	s := NewServer()
@@ -76,13 +106,13 @@ func TestBuildLeaderboard(t *testing.T) {
 	s.buildLeaderboardUnsafe()
 	s.stateMu.Unlock()
 
-	var lb struct {
-		Type    string    `json:"type"`
-		Version uint64    `json:"version"`
-		Entries []lbEntry `json:"entries"`
+	msg, err := decodeMsg(s.lbProto)
+	if err != nil {
+		t.Fatalf("decode leaderboard: %v", err)
 	}
-	if err := json.Unmarshal(s.lbJSON, &lb); err != nil {
-		t.Fatalf("unmarshal leaderboard: %v", err)
+	lb := msg.GetLeaderboard()
+	if lb == nil {
+		t.Fatalf("no leaderboard")
 	}
 	if lb.Version != 1 {
 		t.Fatalf("version = %d, want 1", lb.Version)
@@ -90,13 +120,13 @@ func TestBuildLeaderboard(t *testing.T) {
 	if len(lb.Entries) != 3 {
 		t.Fatalf("entries = %d, want 3", len(lb.Entries))
 	}
-	if lb.Entries[0].PlayerID != 1 || lb.Entries[0].Score != "20.0k" || lb.Entries[0].Name != "one" {
+	if lb.Entries[0].PlayerId != 1 || lb.Entries[0].Score != "20.0k" || lb.Entries[0].Name != "one" {
 		t.Fatalf("first entry %+v", lb.Entries[0])
 	}
-	if lb.Entries[1].PlayerID != 3 || lb.Entries[1].Score != "1.2k" || lb.Entries[1].Name != "three" {
+	if lb.Entries[1].PlayerId != 3 || lb.Entries[1].Score != "1.2k" || lb.Entries[1].Name != "three" {
 		t.Fatalf("second entry %+v", lb.Entries[1])
 	}
-	if lb.Entries[2].PlayerID != 2 || lb.Entries[2].Score != "999" || lb.Entries[2].Name != "two" {
+	if lb.Entries[2].PlayerId != 2 || lb.Entries[2].Score != "999" || lb.Entries[2].Name != "two" {
 		t.Fatalf("third entry %+v", lb.Entries[2])
 	}
 }
@@ -164,11 +194,11 @@ func startTestServer(t *testing.T) (*Server, string, func()) {
 			select {
 			case <-ticker.C:
 				s.stateMu.Lock()
-				if s.lbDirty || s.lbJSON == nil {
+				if s.lbDirty || s.lbProto == nil {
 					s.buildLeaderboardUnsafe()
 					s.lbDirty = false
 				}
-				lbJSON := s.lbJSON
+				lbJSON := s.lbProto
 				lbVer := s.lbVersion
 				s.stateMu.Unlock()
 
@@ -220,18 +250,20 @@ func readLeaderboard(c *websocket.Conn, timeout time.Duration) (*leaderboardMsg,
 		if err != nil {
 			return nil, err
 		}
-		var base struct {
-			Type string `json:"type"`
-		}
-		if err := json.Unmarshal(data, &base); err != nil {
+		msg, err := decodeMsg(data)
+		if err != nil {
 			continue
 		}
-		if base.Type == "leaderboard" {
-			var lb leaderboardMsg
-			if err := json.Unmarshal(data, &lb); err != nil {
-				return nil, err
+		if lb := msg.GetLeaderboard(); lb != nil {
+			out := &leaderboardMsg{Type: "leaderboard", Version: lb.Version}
+			for _, e := range lb.Entries {
+				out.Entries = append(out.Entries, struct {
+					PlayerID int32  `json:"playerId"`
+					Name     string `json:"name"`
+					Score    string `json:"score"`
+				}{e.PlayerId, e.Name, e.Score})
 			}
-			return &lb, nil
+			return out, nil
 		}
 	}
 }
@@ -242,13 +274,16 @@ func waitForRevealAck(c *websocket.Conn, timeout time.Duration) (bool, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		c.SetReadDeadline(deadline)
-		var m map[string]any
-		if err := c.ReadJSON(&m); err != nil {
+		_, data, err := c.ReadMessage()
+		if err != nil {
 			return false, err
 		}
-		if m["type"] == "revealAck" {
-			ok, _ := m["ok"].(bool)
-			return ok, nil
+		m, err := decodeMsg(data)
+		if err != nil {
+			continue
+		}
+		if ack := m.GetRevealAck(); ack != nil {
+			return ack.Ok, nil
 		}
 		// otherwise: broadcast / chunkSync / leaderboard → continue
 	}
@@ -275,24 +310,21 @@ func TestFullStackIntegration(t *testing.T) {
 		}
 		conns[i] = conn
 
-		hello := map[string]any{
-			"type":     "hello",
-			"playerId": 0,
-			"name":     fmt.Sprintf("p%d", i),
-		}
-		if err := conn.WriteJSON(hello); err != nil {
+		hello := &pb.Msg{Payload: &pb.Msg_Hello{Hello: &pb.Hello{PlayerId: 0, Name: fmt.Sprintf("p%d", i)}}}
+		if err := conn.WriteMessage(websocket.BinaryMessage, encodeMsg(hello)); err != nil {
 			t.Fatalf("hello %d: %v", i, err)
 		}
 
-		var welcome struct {
-			Type     string `json:"type"`
-			PlayerID int32  `json:"playerId"`
-		}
-		if err := conn.ReadJSON(&welcome); err != nil {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
 			t.Fatalf("welcome %d: %v", i, err)
 		}
-		if welcome.Type != "welcome" {
-			t.Fatalf("unexpected welcome %d: %+v", i, welcome)
+		m, err := decodeMsg(data)
+		if err != nil {
+			t.Fatalf("decode welcome %d: %v", i, err)
+		}
+		if m.GetWelcome() == nil {
+			t.Fatalf("unexpected welcome %d", i)
 		}
 
 		// drain first leaderboard so it doesn't confuse later reads
@@ -311,8 +343,8 @@ func TestFullStackIntegration(t *testing.T) {
 		go func(i int, c *websocket.Conn) {
 			defer wg.Done()
 			<-start
-			reveal := RevealMessage{Type: "reveal", ChunkX: 0, ChunkY: 0, X: 1, Y: 1}
-			if err := c.WriteJSON(reveal); err != nil {
+			reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{ChunkId: &pb.ChunkID{X: 0, Y: 0}, X: 1, Y: 1}}}
+			if err := c.WriteMessage(websocket.BinaryMessage, encodeMsg(reveal)); err != nil {
 				t.Errorf("write contention %d: %v", i, err)
 				return
 			}
@@ -342,8 +374,8 @@ func TestFullStackIntegration(t *testing.T) {
 	// Phase 2: each client reveals its own unique safe cell
 	successes := 0
 	for i, conn := range conns {
-		reveal := RevealMessage{Type: "reveal", ChunkX: 0, ChunkY: 0, X: i, Y: i + 2} // (0,2) … (9,11)
-		if err := conn.WriteJSON(reveal); err != nil {
+		reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{ChunkId: &pb.ChunkID{X: 0, Y: 0}, X: int32(i), Y: int32(i + 2)}}}
+		if err := conn.WriteMessage(websocket.BinaryMessage, encodeMsg(reveal)); err != nil {
 			t.Fatalf("write unique %d: %v", i, err)
 		}
 		ok, err := waitForRevealAck(conn, 2*time.Second)

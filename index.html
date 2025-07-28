@@ -13,6 +13,9 @@
       src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
     ></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/protobufjs/dist/protobuf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+    <script src="messages_pb.js"></script>
     <style>
       body {
         margin: 0;
@@ -146,6 +149,16 @@
       const { useState, useEffect, useRef, useCallback, useMemo } = React;
       const DEV_MODE = true;
       const log = DEV_MODE ? console.log.bind(console) : () => {};
+
+      const PB = protobuf.roots["default"].ms;
+      function encodeMsg(msg) {
+        const buf = PB.Msg.encode(msg).finish();
+        return pako.gzip(buf);
+      }
+      function decodeMsg(data) {
+        const decompressed = pako.ungzip(new Uint8Array(data));
+        return PB.Msg.decode(decompressed);
+      }
 
       function App() {
         const storedId = parseInt(localStorage.getItem('playerId') || '0', 10);
@@ -427,11 +440,7 @@
           const key = `${chunkX},${chunkY}`;
           if (!subscribedChunks.current.has(key) && ws && connected) {
             subscribedChunks.current.add(key);
-            ws.send(JSON.stringify({
-              type: 'subscribe',
-              chunkX,
-              chunkY
-            }));
+            ws.send(encodeMsg(PB.Msg.create({ subscribe: { chunkX, chunkY } })));
           }
         }, [ws, connected]);
 
@@ -439,11 +448,7 @@
           const key = `${chunkX},${chunkY}`;
           if (subscribedChunks.current.has(key) && ws && connected) {
             subscribedChunks.current.delete(key);
-            ws.send(JSON.stringify({
-              type: 'unsubscribe',
-              chunkX,
-              chunkY
-            }));
+            ws.send(encodeMsg(PB.Msg.create({ unsubscribe: { chunkX, chunkY } })));
           }
         }, [ws, connected]);
 
@@ -523,13 +528,7 @@
             revealedCellsRef.current.set(cell.cellKey, optimisticReveal);
             ensureChunkSubscription(cell.chunkX, cell.chunkY);
 
-            ws.send(JSON.stringify({
-              type: 'reveal',
-              chunkX: cell.chunkX,
-              chunkY: cell.chunkY,
-              x: cell.localX,
-              y: cell.localY
-            }));
+            ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: cell.chunkX, Y: cell.chunkY }, x: cell.localX, y: cell.localY } }))); 
           }
 
           setTick(t => t + 1);
@@ -555,13 +554,7 @@
             if (flaggedCellsRef.current.has(flagKey)) return;
 
             // Send flag request to server
-            ws.send(JSON.stringify({
-              type: 'flag',
-              chunkX,
-              chunkY,
-              x: localX,
-              y: localY
-            }));
+            ws.send(encodeMsg(PB.Msg.create({ flag: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } }))); 
             setTick(t => t + 1);
             return;
           }
@@ -635,13 +628,7 @@
             revealedCellsRef.current.set(key, optimisticReveal);
             setTick(t => t + 1);
 
-            ws.send(JSON.stringify({
-              type: 'reveal',
-              chunkX,
-              chunkY,
-              x: localX,
-              y: localY
-            }));
+            ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } }))); 
             return;
           }
 
@@ -665,13 +652,7 @@
             revealedCellsRef.current.set(key, optimisticReveal);
             setTick(t => t + 1);
 
-            ws.send(JSON.stringify({
-              type: 'reveal',
-              chunkX,
-              chunkY,
-              x: localX,
-              y: localY
-            }));
+            ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } })));
           }
         }, [ws, connected, worldToChunk, ensureChunkSubscription, isMine, countAdjacentMines, floodFillReveal]);
 
@@ -1069,14 +1050,11 @@
         const connectWs = useCallback(() => {
           const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
           const websocket = new WebSocket(wsUrl);
+          websocket.binaryType = 'arraybuffer';
 
           websocket.onopen = () => {
-            websocket.send(JSON.stringify({
-              type: 'hello',
-              playerId: playerId,
-              name: nameInput,
-              color: playerColor
-            }));
+            const msg = PB.Msg.create({ hello: { playerId: playerId, name: nameInput, color: playerColor }});
+            websocket.send(encodeMsg(msg));
             setConnected(true);
             setWs(websocket);
           };
@@ -1087,7 +1065,25 @@
           };
 
           websocket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
+            const m = decodeMsg(event.data);
+            let data = {};
+            if (m.welcome) {
+              data = { type: 'welcome', playerId: m.welcome.playerId, name: m.welcome.name, color: m.welcome.color };
+            } else if (m.chunkSync) {
+              data = { type: 'chunkSync', chunkId: m.chunkSync.chunkId, seed: m.chunkSync.seed.toString(), reveals: m.chunkSync.reveals, flags: m.chunkSync.flags };
+            } else if (m.revealAck) {
+              data = { type: 'revealAck', ok: m.revealAck.ok };
+            } else if (m.flagAck) {
+              data = { type: 'flagAck', ok: m.flagAck.ok };
+            } else if (m.leaderboard) {
+              data = { type: 'leaderboard', version: m.leaderboard.version, entries: m.leaderboard.entries };
+            } else if (m.scoreUpdate) {
+              data = { type: 'scoreUpdate', score: m.scoreUpdate.score };
+            } else if (m.flag) {
+              data = { ...m.flag, chunkId: m.flag.chunkId };
+            } else if (m.reveal) {
+              data = { ...m.reveal, chunkId: m.reveal.chunkId };
+            }
 
             if (data.type === 'welcome') {
               setPlayerId(data.playerId);
@@ -1166,11 +1162,7 @@
                 revealedCellsRef.current.delete(key);
 
                 // Force a re‑subscribe to get authoritative state
-                ws.send(JSON.stringify({
-                  type: 'subscribe',
-                  chunkX: data.chunkId.X,
-                  chunkY: data.chunkId.Y
-                }));
+                ws.send(encodeMsg(PB.Msg.create({ subscribe: { chunkX: data.chunkId.X, chunkY: data.chunkId.Y } })));
 
                 setTick(t => t + 1);
               }
