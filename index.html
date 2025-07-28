@@ -144,8 +144,8 @@
 
     <script type="text/babel">
       const { useState, useEffect, useRef, useCallback, useMemo } = React;
-      const DEBUG = false;
-      const log = DEBUG ? console.log.bind(console) : () => {};
+      const DEV_MODE = true;
+      const log = DEV_MODE ? console.log.bind(console) : () => {};
 
       function App() {
         const storedId = parseInt(localStorage.getItem('playerId') || '0', 10);
@@ -1372,14 +1372,16 @@
               >
                 <canvas ref={canvasRef} id="game-canvas" />
 
-                <div className="coordinates-debug">
-                  <div className={`connection-status ${connected ? "connected" : "disconnected"}`}>
-                    {connected ? "Connected" : "Disconnected"}
+                {DEV_MODE && (
+                  <div className="coordinates-debug">
+                    <div className={`connection-status ${connected ? "connected" : "disconnected"}`}>
+                      {connected ? "Connected" : "Disconnected"}
+                    </div>
+                    View: ({Math.round(viewX)}, {Math.round(viewY)})<br/>
+                    Center: ({centerWorldX}, {centerWorldY})<br/>
+                    Chunk: ({centerChunkX}, {centerChunkY})
                   </div>
-                  View: ({Math.round(viewX)}, {Math.round(viewY)})<br/>
-                  Center: ({centerWorldX}, {centerWorldY})<br/>
-                  Chunk: ({centerChunkX}, {centerChunkY})
-                </div>
+                )}
               </div>
             </div>
 
