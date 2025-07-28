@@ -348,6 +348,8 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 - [x] Better mobile support; e.g. u gotta reload when joining on mobile for some reason or else it disconnects or smth? (~done, see )
 - [x] Self score at the top
 - [x] Better scoring system
+- [ ] Server stores last known player location (x,y) and sends it to the client on join, as well as subscriptions to adjacent chunks. That way, instead of having to call hello, then call subscribe on each chunk in a 3x3 grid, you just call hello and the server deals with connecting you to what you need. Actually, maybe frontend also stores the offset to the center of the chunk you're in, so that all that the server need to store is the chunk you're in.
+- [ ] Minimap like in old game version
 
 Flags:
 

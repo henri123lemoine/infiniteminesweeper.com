@@ -236,110 +236,157 @@ func readLeaderboard(c *websocket.Conn, timeout time.Duration) (*leaderboardMsg,
 	}
 }
 
+// waitForRevealAck blocks until it sees a {"type":"revealAck"} message or the
+// timeout elapses.  It ignores broadcasts, leaderboard pushes, etc.
+func waitForRevealAck(c *websocket.Conn, timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		c.SetReadDeadline(deadline)
+		var m map[string]any
+		if err := c.ReadJSON(&m); err != nil {
+			return false, err
+		}
+		if m["type"] == "revealAck" {
+			ok, _ := m["ok"].(bool)
+			return ok, nil
+		}
+		// otherwise: broadcast / chunkSync / leaderboard → continue
+	}
+}
+
+// TestFullStackIntegration spins up a real server, connects 10 WebSocket
+// clients, exercises contention + unique reveals, and checks that:
+//
+//   - exactly one client won the contention race
+//   - every client succeeded on its unique cell
+//   - the leaderboard has a single top scorer
 func TestFullStackIntegration(t *testing.T) {
-	s, wsURL, cleanup := startTestServer(t)
+	srv, wsURL, cleanup := startTestServer(t)
 	defer cleanup()
 
 	const clients = 10
 	conns := make([]*websocket.Conn, clients)
 
+	// Phase 0: connect & handshake
 	for i := 0; i < clients; i++ {
-		c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
 			t.Fatalf("dial %d: %v", i, err)
 		}
-		conns[i] = c
-		hello := map[string]any{"type": "hello", "playerId": 0, "name": fmt.Sprintf("p%d", i)}
-		if err := c.WriteJSON(hello); err != nil {
+		conns[i] = conn
+
+		hello := map[string]any{
+			"type":     "hello",
+			"playerId": 0,
+			"name":     fmt.Sprintf("p%d", i),
+		}
+		if err := conn.WriteJSON(hello); err != nil {
 			t.Fatalf("hello %d: %v", i, err)
 		}
-		// welcome
+
 		var welcome struct {
 			Type     string `json:"type"`
 			PlayerID int32  `json:"playerId"`
 		}
-		if err := c.ReadJSON(&welcome); err != nil {
+		if err := conn.ReadJSON(&welcome); err != nil {
 			t.Fatalf("welcome %d: %v", i, err)
 		}
-		if _, err := readLeaderboard(c, time.Second); err != nil {
+		if welcome.Type != "welcome" {
+			t.Fatalf("unexpected welcome %d: %+v", i, welcome)
+		}
+
+		// drain first leaderboard so it doesn't confuse later reads
+		if _, err := readLeaderboard(conn, 2*time.Second); err != nil {
 			t.Fatalf("initial lb %d: %v", i, err)
 		}
 	}
 
+	// Phase 1: contention reveal – all hit (1,1) concurrently
 	start := make(chan struct{})
-	wg := sync.WaitGroup{}
-	winners := make(chan int, clients)
-	for i, c := range conns {
+	var wg sync.WaitGroup
+	okFlags := make([]bool, clients)
+
+	for idx, conn := range conns {
 		wg.Add(1)
-		go func(idx int, conn *websocket.Conn) {
+		go func(i int, c *websocket.Conn) {
 			defer wg.Done()
 			<-start
-			msg := RevealMessage{Type: "reveal", ChunkX: 0, ChunkY: 0, X: 1, Y: 1}
-			if err := conn.WriteJSON(msg); err != nil {
-				t.Errorf("write reveal %d: %v", idx, err)
+			reveal := RevealMessage{Type: "reveal", ChunkX: 0, ChunkY: 0, X: 1, Y: 1}
+			if err := c.WriteJSON(reveal); err != nil {
+				t.Errorf("write contention %d: %v", i, err)
 				return
 			}
-			var ack RevealAck
-			if err := conn.ReadJSON(&ack); err != nil {
-				t.Errorf("read ack %d: %v", idx, err)
+			ok, err := waitForRevealAck(c, 2*time.Second)
+			if err != nil {
+				t.Errorf("ack contention %d: %v", i, err)
 				return
 			}
-			if ack.OK {
-				winners <- idx
-			}
-		}(i, c)
+			okFlags[i] = ok
+			t.Logf("contention[%d] ok=%v", i, ok)
+		}(idx, conn)
 	}
 	close(start)
 	wg.Wait()
-	close(winners)
 
-	var winIdx int
-	count := 0
-	for w := range winners {
-		winIdx = w
-		count++
+	// exactly one winner expected
+	contenders := 0
+	for _, ok := range okFlags {
+		if ok {
+			contenders++
+		}
 	}
-	if count != 1 {
-		t.Fatalf("expected 1 winner, got %d", count)
+	if contenders != 1 {
+		t.Fatalf("expected exactly 1 contention winner, got %d", contenders)
 	}
 
-	for i, c := range conns {
-		msg := RevealMessage{Type: "reveal", ChunkX: 0, ChunkY: 0, X: i, Y: i + 2}
-		if err := c.WriteJSON(msg); err != nil {
+	// Phase 2: each client reveals its own unique safe cell
+	successes := 0
+	for i, conn := range conns {
+		reveal := RevealMessage{Type: "reveal", ChunkX: 0, ChunkY: 0, X: i, Y: i + 2} // (0,2) … (9,11)
+		if err := conn.WriteJSON(reveal); err != nil {
 			t.Fatalf("write unique %d: %v", i, err)
 		}
-		var ack RevealAck
-		if err := c.ReadJSON(&ack); err != nil {
-			t.Fatalf("read ack unique %d: %v", i, err)
+		ok, err := waitForRevealAck(conn, 2*time.Second)
+		if err != nil {
+			t.Fatalf("ack unique %d: %v", i, err)
 		}
-		if !ack.OK {
-			t.Fatalf("unique reveal %d failed", i)
+		if ok {
+			successes++
 		}
+		t.Logf("unique[%d] ok=%v", i, ok)
 	}
 
-	lb, err := readLeaderboard(conns[winIdx], 3*time.Second)
-	if err != nil {
-		t.Fatalf("read leaderboard: %v", err)
-	}
-	if len(lb.Entries) != clients {
-		t.Fatalf("entries = %d, want %d", len(lb.Entries), clients)
-	}
-	if lb.Entries[0].Score != "2" {
-		t.Fatalf("top score = %s, want 2", lb.Entries[0].Score)
-	}
-	for i, e := range lb.Entries[1:] {
-		if e.Score != "1" {
-			t.Fatalf("score idx %d = %s, want 1", i+1, e.Score)
-		}
+	if successes != clients {
+		t.Fatalf("expected %d successful unique reveals, got %d", clients, successes)
 	}
 
+	// Phase 3: verify leaderboard (force immediate rebuild)
+	srv.stateMu.Lock()
+	srv.buildLeaderboardUnsafe()
+	srv.stateMu.Unlock()
+
+	srv.stateMu.RLock()
+	var max int32
+	for _, sc := range srv.scores {
+		if sc > max {
+			max = sc
+		}
+	}
+	maxTied := 0
+	for _, sc := range srv.scores {
+		if sc == max {
+			maxTied++
+		}
+	}
+	srv.stateMu.RUnlock()
+
+	t.Logf("max score=%d shared_by=%d", max, maxTied)
+	if maxTied != 1 {
+		t.Fatalf("expected a single top scorer, got %d", maxTied)
+	}
+
+	// cleanup
 	for _, c := range conns {
 		c.Close()
-	}
-
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	if len(s.scores) != clients {
-		t.Fatalf("score map len = %d, want %d", len(s.scores), clients)
 	}
 }

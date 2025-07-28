@@ -67,30 +67,30 @@ type Player struct {
 	ID          int32
 	Conn        *websocket.Conn
 	Send        chan []byte
+	Mailbox     chan func(*Player) // actor channel
 	TokenBucket TokenBucket
 	Name        string
-	// protects everything below this line against concurrent readPump /
-	// flag() / reveal() races (one player can have several connections)
-	mu sync.Mutex
 
-	// Rate limiting for reveals
+	// Rate limiting
 	Color             string
 	RevealWindowStart time.Time
 	RevealCount       int
 
-	// Leaderboard version the player has already received
+	// Leaderboard version already sent (protected by mailbox now)
 	LastLBVersion uint64
 
 	// Suspicion metrics (for admin dashboards, nothing enforced server‑side)
 	SusRevealOverflow int // # of extra reveals processed beyond MaxRevealsPerMin
 
-	// New scoring system state
-	FlagsInARow    int // consecutive correct flags
+	// Scoring
+	FlagsInARow    int
 	LastActionTime time.Time
-	Score          int32 // capped at 0
+	Score          int32
 
-	// outbound‑drop counter (closes WS after 32 consecutive drops)
+	// outbound-drop counter (closes WS after 32 consecutive drops)
 	dropMisses int
+
+	done chan struct{} // closed when player is fully removed
 }
 
 // TokenBucket for rate limiting seed requests (200/min)
@@ -404,71 +404,73 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 	seed := s.generateChunkSeed(chunkID)
 	isMine := s.isMine(seed, x, y)
 
-	player.mu.Lock()
-	if isMine {
-		// Correct flag: award points with multiplier
-		player.FlagsInARow++
-		multiplier := player.FlagsInARow
-		if multiplier > 20 {
-			multiplier = 20
-		}
-		player.Score += int32(multiplier)
+	res := make(chan int32, 1)
+	player.Mailbox <- func(pl *Player) {
+		if isMine {
+			// Correct flag: award points with multiplier
+			pl.FlagsInARow++
+			multiplier := pl.FlagsInARow
+			if multiplier > 20 {
+				multiplier = 20
+			}
+			pl.Score += int32(multiplier)
 
-		// Store the flag
-		if s.flags[chunkID] == nil {
-			s.flags[chunkID] = make(map[int]Flag)
-		}
-		flag := Flag{
-			ChunkID:  chunkID,
-			X:        x,
-			Y:        y,
-			PlayerID: playerID,
-			Color:    playerColor,
-		}
-		s.flags[chunkID][bitIndex] = flag
+			// Store the flag
+			if s.flags[chunkID] == nil {
+				s.flags[chunkID] = make(map[int]Flag)
+			}
+			flag := Flag{
+				ChunkID:  chunkID,
+				X:        x,
+				Y:        y,
+				PlayerID: playerID,
+				Color:    playerColor,
+			}
+			s.flags[chunkID][bitIndex] = flag
 
-		// Broadcast flag to subscribers
-		s.broadcastFlagTo3x3(flag)
+			// Broadcast flag to subscribers
+			s.broadcastFlagTo3x3(flag)
 
-	} else {
-		// Wrong flag: penalize and auto-reveal
-		player.Score -= 20
-		player.FlagsInARow = 0 // Reset multiplier
+		} else {
+			// Wrong flag: penalize and auto-reveal
+			pl.Score -= 20
+			pl.FlagsInARow = 0 // Reset multiplier
 
-		// Auto-reveal the cell (like a normal reveal but with penalty already applied)
-		if chunk == nil {
-			chunk = &ChunkBits{}
-			s.chunks[chunkID] = chunk
+			// Auto-reveal the cell (like a normal reveal but with penalty already applied)
+			if chunk == nil {
+				chunk = &ChunkBits{}
+				s.chunks[chunkID] = chunk
+			}
+			wordIndex := bitIndex / 64
+			bitOffset := bitIndex % 64
+			chunk[wordIndex] |= 1 << bitOffset
+
+			// Track who revealed it
+			if s.cellOwners[chunkID] == nil {
+				s.cellOwners[chunkID] = make(map[int]int32)
+			}
+			s.cellOwners[chunkID][bitIndex] = playerID
+
+			// Broadcast the auto-reveal to all players who can see this chunk
+			reveal := Reveal{
+				ChunkID:  chunkID,
+				X:        x,
+				Y:        y,
+				PlayerID: playerID,
+			}
+			s.broadcastRevealTo3x3(reveal)
 		}
-		wordIndex := bitIndex / 64
-		bitOffset := bitIndex % 64
-		chunk[wordIndex] |= 1 << bitOffset
 
-		// Track who revealed it
-		if s.cellOwners[chunkID] == nil {
-			s.cellOwners[chunkID] = make(map[int]int32)
-		}
-		s.cellOwners[chunkID][bitIndex] = playerID
+		pl.LastActionTime = time.Now()
 
-		// Broadcast the auto-reveal to all players who can see this chunk
-		reveal := Reveal{
-			ChunkID:  chunkID,
-			X:        x,
-			Y:        y,
-			PlayerID: playerID,
+		// Cap score at 0
+		if pl.Score < 0 {
+			pl.Score = 0
 		}
-		s.broadcastRevealTo3x3(reveal)
+
+		res <- pl.Score
 	}
-
-	player.LastActionTime = time.Now()
-
-	// Cap score at 0
-	if player.Score < 0 {
-		player.Score = 0
-	}
-
-	score := player.Score
-	player.mu.Unlock()
+	score := <-res
 
 	// Update leaderboard score
 	s.scores[playerID] = score
@@ -565,20 +567,21 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	s.playersMu.RUnlock()
 
 	if player != nil {
-		player.mu.Lock()
-		if isMine {
-			player.Score -= 100 // bomb penalty
-			player.FlagsInARow = 0
-		} else {
-			player.Score += 1 // normal reveal
+		res := make(chan int32, 1)
+		player.Mailbox <- func(pl *Player) {
+			if isMine {
+				pl.Score -= 100 // bomb penalty
+				pl.FlagsInARow = 0
+			} else {
+				pl.Score += 1 // normal reveal
+			}
+			if pl.Score < 0 {
+				pl.Score = 0
+			}
+			pl.LastActionTime = time.Now()
+			res <- pl.Score
 		}
-		if player.Score < 0 {
-			player.Score = 0
-		}
-		player.LastActionTime = time.Now()
-		newScore := player.Score // copy while still locked
-		player.mu.Unlock()
-
+		newScore := <-res
 		s.sendScoreUpdate(playerID, newScore)
 	}
 
@@ -635,12 +638,18 @@ func (s *Server) sendToPlayer(playerID int32, data []byte) {
 
 	for p := range conns {
 		select {
+		case <-p.done:
+			continue // player gone
+		default:
+		}
+
+		select {
 		case p.Send <- data:
 			p.dropMisses = 0
 		default:
 			p.dropMisses++
 			if p.dropMisses > 32 {
-				p.Conn.Close() // force disconnect on sustained back‑pressure
+				p.Conn.Close() // force disconnect on sustained back-pressure
 			}
 		}
 	}
@@ -697,15 +706,24 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		ID:                playerID,
 		Conn:              conn,
 		Send:              make(chan []byte, SendBufSize),
+		Mailbox:           make(chan func(*Player), 64),
 		TokenBucket:       TokenBucket{tokens: 200},
 		RevealWindowStart: time.Now(),
 		RevealCount:       0,
 		Name:              hello.Name,
 		Color:             hello.Color,
 		Score:             initScore, // preserve previous score
+		done:              make(chan struct{}),
 	}
 	s.players[playerID][player] = struct{}{}
 	s.playersMu.Unlock()
+
+	// start actor loop
+	go func(p *Player) {
+		for fn := range p.Mailbox {
+			fn(p)
+		}
+	}(player)
 
 	// Send initial leaderboard and welcome after goroutines start
 	s.stateMu.Lock()
@@ -762,17 +780,17 @@ func (s *Server) readPump(player *Player) {
 			}
 
 			// Rate limiting
-			player.mu.Lock()
-			now := time.Now()
-			if now.Sub(player.RevealWindowStart) > time.Minute {
-				player.RevealWindowStart = now
-				player.RevealCount = 0
+			player.Mailbox <- func(pl *Player) {
+				now := time.Now()
+				if now.Sub(pl.RevealWindowStart) > time.Minute {
+					pl.RevealWindowStart = now
+					pl.RevealCount = 0
+				}
+				if pl.RevealCount >= MaxRevealsPerMin {
+					pl.SusRevealOverflow++
+				}
+				pl.RevealCount++
 			}
-			if player.RevealCount >= MaxRevealsPerMin {
-				player.SusRevealOverflow++
-			}
-			player.RevealCount++
-			player.mu.Unlock()
 
 			chunkID := ChunkID{X: msg.ChunkX, Y: msg.ChunkY}
 			ok := s.reveal(player.ID, chunkID, msg.X, msg.Y)
@@ -916,7 +934,13 @@ func (s *Server) removePlayer(p *Player) {
 	s.playersMu.Lock()
 	if set, ok := s.players[p.ID]; ok {
 		if _, exists := set[p]; exists {
-			close(p.Send)
+			// signal goroutines to stop enqueueing work
+			close(p.done)
+			// give senders 1 tick to observe <-done
+			time.AfterFunc(10*time.Millisecond, func() {
+				close(p.Mailbox)
+				close(p.Send)
+			})
 			delete(set, p)
 			if len(set) == 0 {
 				delete(s.players, p.ID)
@@ -1083,13 +1107,19 @@ func main() {
 			server.playersMu.RLock()
 			for _, set := range server.players {
 				for p := range set {
-					if p.LastLBVersion == lbVer {
-						continue
-					}
 					select {
-					case p.Send <- lbJSON:
-						p.LastLBVersion = lbVer
+					case <-p.done:
+						continue // player gone
 					default:
+					}
+
+					p.Mailbox <- func(pl *Player) {
+						if pl.LastLBVersion == lbVer {
+							return
+						}
+						// send outside mailbox so we don't block actor
+						go func() { p.Send <- lbJSON }()
+						pl.LastLBVersion = lbVer
 					}
 				}
 			}
