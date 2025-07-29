@@ -167,6 +167,10 @@ type Server struct {
 	seedCache   map[ChunkID]uint64
 	seedCacheMu sync.RWMutex
 
+	// Persistence configuration
+	useS3   bool
+	dataDir string
+
 	// AWS S3 client and WAL
 	s3Client   *s3.S3
 	bucketName string
@@ -190,6 +194,7 @@ func NewServer() *Server {
 		playerColors: make(map[int32]string),
 		seedCache:    make(map[ChunkID]uint64),
 		nextPlayerID: 1,
+		dataDir:      "data",
 		upgrader: websocket.Upgrader{
 			// Reject cross-site WebSocket requests (prevents CSRF via <iframe>).
 			CheckOrigin: func(r *http.Request) bool {
