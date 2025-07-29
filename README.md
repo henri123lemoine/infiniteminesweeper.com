@@ -11,7 +11,7 @@ Can be played at [infiniteminesweeper.com](https://infiniteminesweeper.com).
 - **Chunk-based World**: Efficient 64×64 cell chunks with optimistic updates
 - **Global Leaderboard**: Compete for highest score
 - **Single-Core Optimized**: Designed for high performance on limited hardware
-- **S3-based Persistence**: Robust data persistence with Write-Ahead Logging (WAL)
+- **Configurable Persistence**: Robust state saved via Write-Ahead Logging (WAL) to S3 or a local volume
 
 ## Quick Start
 
@@ -43,14 +43,7 @@ make run-fast  # Quick development cycle
 
 ### Production
 
-Set required environment variables:
-
-```bash
-export AWS_ACCESS_KEY_ID=your_access_key
-export AWS_SECRET_ACCESS_KEY=your_secret_key
-export AWS_REGION=us-east-1
-export S3_BUCKET_NAME=infiniteminesweeper
-```
+Set required environment variables (see `.env.example`).
 
 Run with Docker:
 
