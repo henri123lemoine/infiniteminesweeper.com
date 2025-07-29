@@ -33,9 +33,8 @@ var content embed.FS
 
 const (
 	ChunkSize        = 64
-	SendBufSize      = 4096  // outbound msgs kept per player before back‑pressure
-	MineCount        = 20    // mines per 100 cells (20% chance)
-	MaxRevealsPerMin = 10000 // relaxed flood‑fill budget
+	SendBufSize      = 4096  // outbound msgs kept per player before back-pressure
+	MaxRevealsPerMin = 10000 // relaxed flood-fill budget
 )
 
 type ChunkID struct {
@@ -242,11 +241,7 @@ func splitmix64(state uint64) uint64 {
 	return state ^ (state >> 31)
 }
 
-// isMine determines if a cell contains a mine using the same logic as frontend
-func (s *Server) isMine(seed uint64, x, y int) bool {
-	cellSeed := splitmix64(seed + uint64(y*ChunkSize+x))
-	return (cellSeed % 100) < MineCount
-}
+// noise generates deterministic noise in [0,1)
 
 // Leaderboard helpers
 
@@ -351,18 +346,22 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 
 	// Determine if this cell contains a mine
 	seed := s.generateChunkSeed(chunkID)
-	isMine := s.isMine(seed, x, y)
+	isMine := s.isMine(chunkID, seed, x, y)
 
 	res := make(chan int32, 1)
 	player.Mailbox <- func(pl *Player) {
+		densityMult := float64(s.mineCountForChunk(chunkID)) / float64(DefaultMineCount)
+		playerMult := s.playerDensityMultiplier(chunkID)
+		mult := densityMult * playerMult
+
 		if isMine {
-			// Correct flag: award points with multiplier
 			pl.FlagsInARow++
-			multiplier := pl.FlagsInARow
-			if multiplier > 20 {
-				multiplier = 20
+			flagScore := pl.FlagsInARow
+			if flagScore > 20 {
+				flagScore = 20
 			}
-			pl.Score += int32(multiplier)
+			gain := int32(float64(5*flagScore) * mult)
+			pl.Score += gain
 
 			// Store the flag
 			if s.flags[chunkID] == nil {
@@ -385,7 +384,8 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 
 		} else {
 			// Wrong flag: penalize and auto-reveal
-			pl.Score -= 20
+			penalty := int32(float64(15) * mult)
+			pl.Score -= penalty
 			pl.FlagsInARow = 0 // Reset multiplier
 
 			// Auto-reveal the cell (like a normal reveal but with penalty already applied)
@@ -511,7 +511,7 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 
 	// Determine if this cell is a mine
 	seed := s.generateChunkSeed(chunkID)
-	isMine := s.isMine(seed, x, y)
+	isMine := s.isMine(chunkID, seed, x, y)
 
 	// Update player score based on reveal
 	s.playersMu.RLock()
@@ -525,18 +525,35 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	s.playersMu.RUnlock()
 
 	if player != nil {
+		densityMult := float64(s.mineCountForChunk(chunkID)) / float64(DefaultMineCount)
+		playerMult := s.playerDensityMultiplier(chunkID)
+		multiplier := densityMult * playerMult
+
 		res := make(chan int32, 1)
 		player.Mailbox <- func(pl *Player) {
+			now := time.Now()
+			diff := now.Sub(pl.LastActionTime)
+			speedBonus := 0
+			if diff < time.Second {
+				speedBonus = 3
+			} else if diff < 2*time.Second {
+				speedBonus = 2
+			} else if diff < 3*time.Second {
+				speedBonus = 1
+			}
+
 			if isMine {
-				pl.Score -= 100 // bomb penalty
+				penalty := int32(float64(50) * multiplier)
+				pl.Score -= penalty
 				pl.FlagsInARow = 0
 			} else {
-				pl.Score += 1 // normal reveal
+				gain := int32(float64(1+speedBonus) * multiplier)
+				pl.Score += gain
 			}
 			if pl.Score < 0 {
 				pl.Score = 0
 			}
-			pl.LastActionTime = time.Now()
+			pl.LastActionTime = now
 			res <- pl.Score
 		}
 		newScore := <-res
@@ -575,11 +592,6 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	// persistence: mark dirty so that next snapshot loop rewrites file
 	s.lbDirty = true
 	return true
-}
-
-func (s *Server) sendScoreUpdate(playerID int32, score int32) {
-	msg := &pb.Msg{Payload: &pb.Msg_ScoreUpdate{ScoreUpdate: &pb.ScoreUpdate{Score: score}}}
-	s.sendToPlayer(playerID, mustProto(msg))
 }
 
 func (s *Server) sendToPlayer(playerID int32, data []byte) {
