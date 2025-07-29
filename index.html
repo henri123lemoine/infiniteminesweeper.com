@@ -367,7 +367,8 @@
 
         // Constants
         const CHUNK = 64;
-        const MINE_COUNT = 20;
+        const REGION = 16; // chunks per noise region
+        const DEFAULT_MINE_COUNT = 20;
         const CELL_SIZE = 20;
 
         // Deterministic helpers
@@ -378,10 +379,34 @@
           return state ^ (state >> 31n);
         }, []);
 
-        const isMine = useCallback((seed, x, y) => {
-          const cellSeed = splitmix64(seed + BigInt(y * CHUNK + x));
-          return Number(cellSeed % 100n) < MINE_COUNT;
+        // 2D deterministic noise for varying mine density
+        const noise = useCallback((x, y) => {
+          const state = (BigInt(x) << 32n) ^ (BigInt(y) & 0xffffffffn);
+          const val = splitmix64(state);
+          return Number(val >> 1n) / Number(0x7fffffffffffffffn);
         }, [splitmix64]);
+
+        const mineCountForChunk = useCallback((cx, cy) => {
+          if (cx === 0 && cy === 0) return DEFAULT_MINE_COUNT;
+          const rx = Math.floor(cx / REGION);
+          const ry = Math.floor(cy / REGION);
+          const fx = ((cx % REGION) + REGION) % REGION / REGION;
+          const fy = ((cy % REGION) + REGION) % REGION / REGION;
+          const n00 = noise(rx, ry);
+          const n10 = noise(rx + 1, ry);
+          const n01 = noise(rx, ry + 1);
+          const n11 = noise(rx + 1, ry + 1);
+          const nx0 = n00 * (1 - fx) + n10 * fx;
+          const nx1 = n01 * (1 - fx) + n11 * fx;
+          const n = nx0 * (1 - fy) + nx1 * fy;
+          return 15 + Math.round(n * 20);
+        }, [noise]);
+
+        const isMine = useCallback((seed, x, y, chunkX, chunkY) => {
+          const cellSeed = splitmix64(seed + BigInt(y * CHUNK + x));
+          const mineCount = mineCountForChunk(chunkX, chunkY);
+          return Number(cellSeed % 100n) < mineCount;
+        }, [splitmix64, mineCountForChunk]);
 
         // Convert screen coordinates to world coordinates
         const screenToWorld = useCallback((screenX, screenY) => {
@@ -448,7 +473,7 @@
 
               const nSeed = seedCache.current.get(`${ncx},${ncy}`);
               if (!nSeed) continue;
-              if (isMine(nSeed, nx, ny)) count++;
+              if (isMine(nSeed, nx, ny, ncx, ncy)) count++;
             }
           }
           return count;
@@ -498,7 +523,7 @@
             }
 
             // Skip if it's a mine
-            if (isMine(seed, localX, localY)) continue;
+            if (isMine(seed, localX, localY, chunkX, chunkY)) continue;
 
             // Count adjacent mines
             const adjacentMines = await countAdjacentMines(chunkX, chunkY, localX, localY);
@@ -633,7 +658,7 @@
           }
 
           // If it's a mine, just reveal the single cell
-          if (isMine(seed, localX, localY)) {
+          if (isMine(seed, localX, localY, chunkX, chunkY)) {
             const optimisticReveal = {
               chunkId: { X: chunkX, Y: chunkY },
               x: localX,
@@ -1141,7 +1166,7 @@
               if (Array.isArray(data.reveals)) {
                 for (const cell of data.reveals) {
                   const seed = bytesToBig(data.seed);
-                  const cellIsMine = isMine(seed, cell.x, cell.y);
+                  const cellIsMine = isMine(seed, cell.x, cell.y, cell.chunkId.X, cell.chunkId.Y);
                   let adjacentMines = 0;
 
                   if (!cellIsMine) {
@@ -1159,7 +1184,7 @@
                         else if (ny >= CHUNK) { ncy++; ny -= CHUNK; }
 
                         const nSeed = seedCache.current.get(`${ncx},${ncy}`);
-                        if (nSeed && isMine(nSeed, nx, ny)) adjacentMines++;
+                        if (nSeed && isMine(nSeed, nx, ny, ncx, ncy)) adjacentMines++;
                       }
                     }
                   }
@@ -1211,7 +1236,7 @@
               // Get the seed for this chunk to determine if it's a mine
               const seed = seedCache.current.get(`${chunkX},${chunkY}`);
               if (seed) {
-                const cellIsMine = isMine(seed, localX, localY);
+                const cellIsMine = isMine(seed, localX, localY, chunkX, chunkY);
                 let adjacentMines = 0;
 
                 if (!cellIsMine) {
@@ -1229,7 +1254,7 @@
                       else if (ny >= CHUNK) { ncy++; ny -= CHUNK; }
 
                       const nSeed = seedCache.current.get(`${ncx},${ncy}`);
-                      if (nSeed && isMine(nSeed, nx, ny)) adjacentMines++;
+                      if (nSeed && isMine(nSeed, nx, ny, ncx, ncy)) adjacentMines++;
                     }
                   }
                 }
