@@ -73,7 +73,6 @@ function App() {
   const revealedCellsRef = useRef(new Map());
   const flaggedCellsRef = useRef(new Map()); // worldX,worldY -> {color: string, playerId: number}
   const playerColorsRef = useRef(new Map());
-  const pendingScoreCells = useRef([]);
   const [scorePopups, setScorePopups] = useState([]);
   const [tick, setTick] = useState(0);
 
@@ -82,6 +81,22 @@ function App() {
 
   // Player color state
   const [playerColor, setPlayerColor] = useState(localStorage.getItem('playerColor') || '#FF0000');
+
+  // Score popup color function
+  const getScoreColor = useCallback((delta) => {
+    if (delta > 0) {
+      // Green for positive scores, more intense for higher values
+      const intensity = Math.min(Math.abs(delta) / 20, 1); // Scale 0-1 based on delta
+      const green = Math.floor(100 + intensity * 155); // 100-255 range
+      return `rgb(0, ${green}, 0)`;
+    } else if (delta < 0) {
+      // Red for negative scores, more intense for larger losses
+      const intensity = Math.min(Math.abs(delta) / 100, 1); // Scale 0-1 based on delta (bombs are -100)
+      const red = Math.floor(150 + intensity * 105); // 150-255 range
+      return `rgb(${red}, 0, 0)`;
+    }
+    return '#666'; // Gray for zero delta (shouldn't happen)
+  }, []);
 
   const toggleLeaderboard = useCallback(() => {
     setLeaderboardVisible(v => !v);
@@ -418,8 +433,6 @@ function App() {
       revealedCellsRef.current.set(cell.cellKey, optimisticReveal);
       ensureChunkSubscription(cell.chunkX, cell.chunkY);
 
-      pendingScoreCells.current.push({x: cell.chunkX * CHUNK + cell.localX, y: cell.chunkY * CHUNK + cell.localY});
-
       ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: cell.chunkX, Y: cell.chunkY }, x: cell.localX, y: cell.localY } })));
     }
 
@@ -446,7 +459,6 @@ function App() {
       if (revealedCellsRef.current.has(cellKey)) return;
 
       // Send flag request to server
-      pendingScoreCells.current.push({x: worldX, y: worldY});
       ws.send(encodeMsg(PB.Msg.create({ flag: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } })));
       setTick(t => t + 1);
       return;
@@ -521,7 +533,6 @@ function App() {
       revealedCellsRef.current.set(key, optimisticReveal);
       setTick(t => t + 1);
 
-      pendingScoreCells.current.push({x: worldX, y: worldY});
       ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } })));
       return;
     }
@@ -546,7 +557,6 @@ function App() {
       revealedCellsRef.current.set(key, optimisticReveal);
       setTick(t => t + 1);
 
-      pendingScoreCells.current.push({x: worldX, y: worldY});
       ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } })));
     }
   }, [ws, connected, worldToChunk, ensureChunkSubscription, isMine, countAdjacentMines, floodFillReveal]);
@@ -985,7 +995,13 @@ function App() {
       } else if (m.leaderboard) {
         data = { type: 'leaderboard', version: m.leaderboard.version, entries: m.leaderboard.entries };
       } else if (m.scoreUpdate) {
-        data = { type: 'scoreUpdate', score: m.scoreUpdate.score };
+        data = {
+          type:   'scoreUpdate',
+          score:  m.scoreUpdate.score,
+          delta:  m.scoreUpdate.delta,
+          worldX: m.scoreUpdate.worldX,
+          worldY: m.scoreUpdate.worldY,
+        };
       } else if (m.flag) {
         data = { ...m.flag, chunkId: m.flag.chunkId };
       } else if (m.reveal) {
@@ -1149,20 +1165,21 @@ function App() {
         }
       } else if (data.type === 'scoreUpdate') {
         if (typeof data.score === 'number') {
-          setPlayerScore(prev => {
-            const delta = data.score - prev;
-            if (delta !== 0) {
-              const cell = pendingScoreCells.current.shift();
-              if (cell) {
-                const id = Math.random().toString(36).slice(2);
-                setScorePopups(p => [...p, { id, worldX: cell.x, worldY: cell.y, delta }]);
-                setTimeout(() => {
-                  setScorePopups(p => p.filter(s => s.id !== id));
-                }, 1000);
-              }
-            }
-            return data.score;
-          });
+          setPlayerScore(data.score);
+
+          // Only show popup if there's a delta and valid coordinates (not initial score)
+          if (data.delta && data.delta !== 0 && (data.worldX !== 0 || data.worldY !== 0)) {
+            const id = Math.random().toString(36).slice(2);
+            setScorePopups(p => [...p, {
+              id,
+              worldX: data.worldX,
+              worldY: data.worldY,
+              delta: data.delta
+            }]);
+            setTimeout(() => {
+              setScorePopups(p => p.filter(s => s.id !== id));
+            }, 1000);
+          }
         }
       }
     };
@@ -1292,7 +1309,17 @@ function App() {
             const x = p.worldX * CELL_SIZE - viewX;
             const y = p.worldY * CELL_SIZE - viewY;
             return (
-              <div key={p.id} className="score-popup" style={{left: x, top: y}}>
+              <div
+                key={p.id}
+                className="score-popup"
+                style={{
+                  left: x,
+                  top: y,
+                  color: getScoreColor(p.delta),
+                  fontWeight: 'bold',
+                  textShadow: '1px 1px 2px rgba(0,0,0,0.8)'
+                }}
+              >
                 {p.delta > 0 ? `+${p.delta}` : p.delta}
               </div>
             );

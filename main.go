@@ -429,7 +429,10 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 	s.lbDirty = true
 
 	// Send score update to player
-	s.sendScoreUpdate(playerID, score)
+	worldX := int(chunkID.X)*ChunkSize + x
+	worldY := int(chunkID.Y)*ChunkSize + y
+	delta := score - s.scores[playerID] // Calculate delta before updating scores
+	s.sendScoreUpdate(playerID, score, worldX, worldY, delta)
 
 	return true
 }
@@ -526,7 +529,9 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 
 	if player != nil {
 		res := make(chan int32, 1)
+		oldScore := make(chan int32, 1)
 		player.Mailbox <- func(pl *Player) {
+			oldScore <- pl.Score // Send old score before changes
 			if isMine {
 				pl.Score -= 100 // bomb penalty
 				pl.FlagsInARow = 0
@@ -539,8 +544,12 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 			pl.LastActionTime = time.Now()
 			res <- pl.Score
 		}
+		prevScore := <-oldScore
 		newScore := <-res
-		s.sendScoreUpdate(playerID, newScore)
+		worldX := int(chunkID.X)*ChunkSize + x
+		worldY := int(chunkID.Y)*ChunkSize + y
+		delta := newScore - prevScore
+		s.sendScoreUpdate(playerID, newScore, worldX, worldY, delta)
 	}
 
 	// Track who revealed it
@@ -577,8 +586,13 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	return true
 }
 
-func (s *Server) sendScoreUpdate(playerID int32, score int32) {
-	msg := &pb.Msg{Payload: &pb.Msg_ScoreUpdate{ScoreUpdate: &pb.ScoreUpdate{Score: score}}}
+func (s *Server) sendScoreUpdate(playerID int32, score int32, worldX, worldY int, delta int32) {
+	msg := &pb.Msg{Payload: &pb.Msg_ScoreUpdate{ScoreUpdate: &pb.ScoreUpdate{
+		Score:  score,
+		WorldX: int32(worldX),
+		WorldY: int32(worldY),
+		Delta:  delta,
+	}}}
 	s.sendToPlayer(playerID, mustProto(msg))
 }
 
@@ -714,7 +728,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	player.LastLBVersion = lbVer
 
 	// Send initial score (keeps existing progress)
-	s.sendScoreUpdate(playerID, initScore)
+	// Use dummy coordinates since this is not associated with a specific cell action
+	s.sendScoreUpdate(playerID, initScore, 0, 0, 0)
 
 	log.Printf("Player %d connected", playerID)
 }
