@@ -712,6 +712,9 @@ func (x *Leaderboard) GetEntries() []*LeaderboardEntry {
 type ScoreUpdate struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Score         int32                  `protobuf:"varint,1,opt,name=score,proto3" json:"score,omitempty"`
+	WorldX        int32                  `protobuf:"varint,2,opt,name=worldX,proto3" json:"worldX,omitempty"` // world X coordinate where the score change occurred
+	WorldY        int32                  `protobuf:"varint,3,opt,name=worldY,proto3" json:"worldY,omitempty"` // world Y coordinate where the score change occurred
+	Delta         int32                  `protobuf:"varint,4,opt,name=delta,proto3" json:"delta,omitempty"`   // score change amount (positive or negative)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -749,6 +752,27 @@ func (*ScoreUpdate) Descriptor() ([]byte, []int) {
 func (x *ScoreUpdate) GetScore() int32 {
 	if x != nil {
 		return x.Score
+	}
+	return 0
+}
+
+func (x *ScoreUpdate) GetWorldX() int32 {
+	if x != nil {
+		return x.WorldX
+	}
+	return 0
+}
+
+func (x *ScoreUpdate) GetWorldY() int32 {
+	if x != nil {
+		return x.WorldY
+	}
+	return 0
+}
+
+func (x *ScoreUpdate) GetDelta() int32 {
+	if x != nil {
+		return x.Delta
 	}
 	return 0
 }
@@ -1028,9 +1052,12 @@ const file_proto_messages_proto_rawDesc = "" +
 	"\x05score\x18\x03 \x01(\tR\x05score\"W\n" +
 	"\vLeaderboard\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12.\n" +
-	"\aentries\x18\x02 \x03(\v2\x14.ms.LeaderboardEntryR\aentries\"#\n" +
+	"\aentries\x18\x02 \x03(\v2\x14.ms.LeaderboardEntryR\aentries\"i\n" +
 	"\vScoreUpdate\x12\x14\n" +
-	"\x05score\x18\x01 \x01(\x05R\x05score\"\xf7\x03\n" +
+	"\x05score\x18\x01 \x01(\x05R\x05score\x12\x16\n" +
+	"\x06worldX\x18\x02 \x01(\x05R\x06worldX\x12\x16\n" +
+	"\x06worldY\x18\x03 \x01(\x05R\x06worldY\x12\x14\n" +
+	"\x05delta\x18\x04 \x01(\x05R\x05delta\"\xf7\x03\n" +
 	"\x03Msg\x12!\n" +
 	"\x05hello\x18\x01 \x01(\v2\t.ms.HelloH\x00R\x05hello\x12'\n" +
 	"\awelcome\x18\x02 \x01(\v2\v.ms.WelcomeH\x00R\awelcome\x12$\n" +
