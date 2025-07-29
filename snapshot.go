@@ -37,7 +37,7 @@ const (
 	walFileName      = "wal.log"
 
 	// Timing
-	walFlushInterval = 3 * time.Minute
+	walFlushInterval = 2 * time.Minute
 	snapshotInterval = 30 * time.Minute
 )
 

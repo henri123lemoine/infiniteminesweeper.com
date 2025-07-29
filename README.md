@@ -43,16 +43,7 @@ make run-fast  # Quick development cycle
 
 ### Production
 
-Set required environment variables:
-
-```bash
-export AWS_ACCESS_KEY_ID=your_access_key
-export AWS_SECRET_ACCESS_KEY=your_secret_key
-export AWS_REGION=us-east-1
-export S3_BUCKET_NAME=infiniteminesweeper
-# If S3_BUCKET_NAME is unset, snapshots and WAL are stored in DATA_DIR (default ./data)
-export DATA_DIR=/path/to/volume
-```
+Set required environment variables (see `.env.example`).
 
 Run with Docker:
 

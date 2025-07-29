@@ -12,5 +12,8 @@ FROM debian:bookworm
 
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
+# Persist snapshots/WAL under /data
+VOLUME ["/data"]
+
 COPY --from=builder /run-app /usr/local/bin/
 CMD ["run-app"]

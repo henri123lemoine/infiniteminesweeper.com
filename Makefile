@@ -40,7 +40,7 @@ run-fast: update
 
 run: build
 	@echo "Running with Docker..."
-	docker run --env-file .env -p 8080:8080 infiniteminesweeper
+	docker run --env-file .env -v $(PWD)/data:/data -p 8080:8080 infiniteminesweeper
 
 deploy:
 	@echo "Deploying to Fly.io..."
