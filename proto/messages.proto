@@ -1,0 +1,84 @@
+syntax = "proto3";
+package ms;
+option go_package = "infinite-minesweeper/proto";
+
+message ChunkID {
+  int32 X = 1;
+  int32 Y = 2;
+}
+
+message Reveal {
+  ChunkID chunkId = 1;
+  int32 x = 2;
+  int32 y = 3;
+  int32 playerId = 4;
+}
+
+message Flag {
+  ChunkID chunkId = 1;
+  int32 x = 2;
+  int32 y = 3;
+  int32 playerId = 4;
+  string color = 5;
+}
+
+message Hello {
+  int32 playerId = 1;
+  string name = 2;
+  string color = 3;
+}
+
+message Welcome {
+  int32 playerId = 1;
+  string name = 2;
+  string color = 3;
+}
+
+message Subscribe {
+  int32 chunkX = 1;
+  int32 chunkY = 2;
+}
+
+message Unsubscribe {
+  int32 chunkX = 1;
+  int32 chunkY = 2;
+}
+
+message ChunkSync {
+  ChunkID chunkId = 1;
+  bytes seed = 2;  // 8‑byte little‑endian HMAC seed (exact 64 bits, JS‑safe).
+  repeated Reveal reveals = 3;
+  repeated Flag flags = 4;
+}
+
+message RevealAck { bool ok = 1; }
+message FlagAck { bool ok = 1; }
+
+message LeaderboardEntry {
+  int32 playerId = 1;
+  string name = 2;
+  string score = 3;
+}
+
+message Leaderboard {
+  uint64 version = 1;
+  repeated LeaderboardEntry entries = 2;
+}
+
+message ScoreUpdate { int32 score = 1; }
+
+message Msg {
+  oneof payload {
+    Hello hello = 1;
+    Welcome welcome = 2;
+    Reveal reveal = 3;
+    Flag flag = 4;
+    Subscribe subscribe = 5;
+    Unsubscribe unsubscribe = 6;
+    ChunkSync chunkSync = 7;
+    RevealAck revealAck = 8;
+    FlagAck flagAck = 9;
+    Leaderboard leaderboard = 10;
+    ScoreUpdate scoreUpdate = 11;
+  }
+}
