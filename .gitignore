@@ -3,3 +3,4 @@ experiments/
 .llm_info
 heavy.out
 server.test
+.env

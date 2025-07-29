@@ -7,8 +7,8 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/binary"
-	"encoding/gob"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -21,10 +21,9 @@ import (
 
 	"strings"
 
-	"io"
-
 	pb "infinite-minesweeper/proto"
 
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 )
@@ -37,14 +36,6 @@ const (
 	SendBufSize      = 4096  // outbound msgs kept per player before back‑pressure
 	MineCount        = 20    // mines per 100 cells (20% chance)
 	MaxRevealsPerMin = 10000 // relaxed flood‑fill budget
-)
-
-// SNAPSHOT / PERSISTENCE CONSTANTS
-const (
-	snapshotDir      = "data"
-	snapshotFile     = "data/snapshot.gob.gz"
-	snapshotTmp      = "data/snapshot.tmp.gz"
-	snapshotInterval = 10 * time.Minute
 )
 
 type ChunkID struct {
@@ -176,6 +167,13 @@ type Server struct {
 	seedCache   map[ChunkID]uint64
 	seedCacheMu sync.RWMutex
 
+	// AWS S3 client and WAL
+	s3Client   *s3.S3
+	bucketName string
+	walBuffer  []WALEntry
+	walMutex   sync.Mutex
+	walSeq     uint64
+
 	upgrader websocket.Upgrader
 }
 
@@ -212,13 +210,6 @@ func NewServer() *Server {
 			},
 		},
 	}
-}
-
-func (s *Server) initPersistence() {
-	if err := s.loadSnapshot(); err != nil {
-		log.Printf("[snapshot] no previous snapshot loaded: %v (starting fresh)", err)
-	}
-	go s.periodicSnapshotLoop() // fire‑and‑forget
 }
 
 func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
@@ -386,6 +377,9 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 			}
 			s.flags[chunkID][bitIndex] = flag
 
+			// Write to WAL
+			s.writeWALEntry("flag", flag)
+
 			// Broadcast flag to subscribers
 			s.broadcastFlagTo3x3(flag)
 
@@ -409,13 +403,11 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 			}
 			s.cellOwners[chunkID][bitIndex] = playerID
 
+			// Write to WAL (auto-reveal from wrong flag)
+			reveal := Reveal{ChunkID: chunkID, X: x, Y: y, PlayerID: playerID}
+			s.writeWALEntry("reveal", reveal)
+
 			// Broadcast the auto-reveal to all players who can see this chunk
-			reveal := Reveal{
-				ChunkID:  chunkID,
-				X:        x,
-				Y:        y,
-				PlayerID: playerID,
-			}
 			s.broadcastRevealTo3x3(reveal)
 		}
 
@@ -520,7 +512,6 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	// Determine if this cell is a mine
 	seed := s.generateChunkSeed(chunkID)
 	isMine := s.isMine(seed, x, y)
-	log.Printf("reveal: cell (%d, %d) isMine: %v", x, y, isMine)
 
 	// Update player score based on reveal
 	s.playersMu.RLock()
@@ -574,6 +565,9 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 		Y:        y,
 		PlayerID: playerID,
 	}
+
+	// Write to WAL
+	s.writeWALEntry("reveal", reveal)
 
 	// Broadcast to 3x3 neighborhood
 	s.broadcastRevealTo3x3(reveal)
@@ -926,114 +920,6 @@ func (s *Server) removePlayer(p *Player) {
 	s.stateMu.Unlock()
 
 	log.Printf("Player %d disconnected", p.ID)
-}
-
-// snapshotData is what actually gets serialized. Gob can handle maps with
-// struct keys, so we keep the exact types.
-type snapshotData struct {
-	Chunks       map[ChunkID]*ChunkBits
-	CellOwners   map[ChunkID]map[int]int32
-	Flags        map[ChunkID]map[int]Flag
-	Scores       map[int32]int32
-	PlayerNames  map[int32]string
-	PlayerColors map[int32]string
-	NextPlayerID int32
-}
-
-func (s *Server) saveSnapshot() error {
-	// Ensure data/ exists the first time we’re asked to write here
-	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
-		return err
-	}
-
-	s.stateMu.RLock()
-	data := snapshotData{
-		Chunks:       s.chunks,
-		CellOwners:   s.cellOwners,
-		Flags:        s.flags,
-		Scores:       s.scores,
-		PlayerNames:  s.playerNames,
-		PlayerColors: s.playerColors,
-		NextPlayerID: s.nextPlayerID,
-	}
-	s.stateMu.RUnlock()
-
-	f, err := os.Create(snapshotTmp)
-	if err != nil {
-		return err
-	}
-	gz := gzip.NewWriter(f)
-	enc := gob.NewEncoder(gz)
-	if err := enc.Encode(&data); err != nil {
-		f.Close()
-		return err
-	}
-	if err := gz.Close(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(snapshotTmp, snapshotFile)
-}
-
-func (s *Server) loadSnapshot() error {
-	f, err := os.Open(snapshotFile)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
-
-	dec := gob.NewDecoder(gz)
-	var data snapshotData
-	if err := dec.Decode(&data); err != nil {
-		return err
-	}
-
-	s.stateMu.Lock()
-	s.chunks = data.Chunks
-	s.cellOwners = data.CellOwners
-	if data.Flags != nil {
-		s.flags = data.Flags
-	} else {
-		s.flags = make(map[ChunkID]map[int]Flag)
-	}
-	s.scores = data.Scores
-	if data.PlayerNames != nil {
-		s.playerNames = data.PlayerNames
-	} else {
-		s.playerNames = make(map[int32]string)
-	}
-	if data.PlayerColors != nil {
-		s.playerColors = data.PlayerColors
-	} else {
-		s.playerColors = make(map[int32]string)
-	}
-	if data.NextPlayerID != 0 {
-		s.nextPlayerID = data.NextPlayerID
-	}
-	s.lbDirty = true // force rebuild of leaderboard on first tick
-	s.stateMu.Unlock()
-	return nil
-}
-
-func (s *Server) periodicSnapshotLoop() {
-	ticker := time.NewTicker(snapshotInterval)
-	defer ticker.Stop()
-	for range ticker.C {
-		if err := s.saveSnapshot(); err != nil {
-			log.Printf("[snapshot] save error: %v", err)
-		} else {
-			log.Printf("[snapshot] wrote %s", snapshotFile)
-		}
-	}
 }
 
 func main() {
