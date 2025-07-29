@@ -99,6 +99,7 @@ function App() {
   );
 
   // Score popup color function
+  /*
   const getScoreColor = useCallback((delta) => {
     if (delta > 0) {
       // Green for positive scores, more intense for higher values
@@ -112,6 +113,12 @@ function App() {
       return `rgb(${red}, 0, 0)`;
     }
     return "#666"; // Gray for zero delta (shouldn't happen)
+  }, []);
+  */
+  const getScoreColor = useCallback((delta) => {
+    if (delta > 0) return "#fff";
+    if (delta < 0) return "#f00";
+    return "#666"; // shouldn't happen
   }, []);
 
   const toggleLeaderboard = useCallback(() => {

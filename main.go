@@ -422,7 +422,8 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 	}
 	score := <-res
 
-	// Update leaderboard score
+	old := s.scores[playerID]
+	delta := score - old
 	s.scores[playerID] = score
 
 	// Mark leaderboard as dirty for persistence
@@ -431,7 +432,6 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 	// Send score update to player
 	worldX := int(chunkID.X)*ChunkSize + x
 	worldY := int(chunkID.Y)*ChunkSize + y
-	delta := score - s.scores[playerID] // Calculate delta before updating scores
 	s.sendScoreUpdate(playerID, score, worldX, worldY, delta)
 
 	return true
