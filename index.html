@@ -153,11 +153,29 @@
       const PB = protobuf.roots["default"].ms;
       function encodeMsg(msg) {
         const buf = PB.Msg.encode(msg).finish();
+        // Debug logging for outgoing messages
+        if (DEV_MODE) {
+          console.log('OUTGOING:', {
+            raw: msg,
+            serialized_size: buf.length,
+            message_type: Object.keys(msg)[0]
+          });
+        }
         return pako.gzip(buf);
       }
       function decodeMsg(data) {
         const decompressed = pako.ungzip(new Uint8Array(data));
-        return PB.Msg.decode(decompressed);
+        const decoded = PB.Msg.decode(decompressed);
+        // Debug logging for incoming messages
+        if (DEV_MODE) {
+          console.log('INCOMING:', {
+            raw: decoded,
+            compressed_size: data.byteLength,
+            decompressed_size: decompressed.length,
+            message_type: Object.keys(decoded)[0]
+          });
+        }
+        return decoded;
       }
 
       function App() {
@@ -528,7 +546,7 @@
             revealedCellsRef.current.set(cell.cellKey, optimisticReveal);
             ensureChunkSubscription(cell.chunkX, cell.chunkY);
 
-            ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: cell.chunkX, Y: cell.chunkY }, x: cell.localX, y: cell.localY } }))); 
+            ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: cell.chunkX, Y: cell.chunkY }, x: cell.localX, y: cell.localY } })));
           }
 
           setTick(t => t + 1);
@@ -538,6 +556,7 @@
         // Handle cell click
         const handleCellClick = useCallback(async (worldX, worldY, isRightClick = false) => {
           if (!ws || !connected) return;
+          if (DEV_MODE) console.log('CELL CLICK:', { worldX, worldY, isRightClick });
 
           const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
           const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
@@ -545,16 +564,15 @@
 
           // Handle right-click for flagging
           if (isRightClick) {
-            // Don't flag revealed cells
-            if (revealedCellsRef.current.has(cellKey)) return;
-
-            const flagKey = `${worldX},${worldY}`;
-
+            if (DEV_MODE) console.log('ATTEMPTING TO FLAG:', { chunkX, chunkY, localX, localY });
             // Don't flag if already flagged
             if (flaggedCellsRef.current.has(flagKey)) return;
 
+            // Don't flag revealed cells
+            if (revealedCellsRef.current.has(cellKey)) return;
+
             // Send flag request to server
-            ws.send(encodeMsg(PB.Msg.create({ flag: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } }))); 
+            ws.send(encodeMsg(PB.Msg.create({ flag: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } })));
             setTick(t => t + 1);
             return;
           }
@@ -628,7 +646,7 @@
             revealedCellsRef.current.set(key, optimisticReveal);
             setTick(t => t + 1);
 
-            ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } }))); 
+            ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } })));
             return;
           }
 
@@ -953,20 +971,15 @@
         }, [isDragging, dragStart]);
 
         const handleMouseUp = useCallback((e) => {
-          // Clear the drag timeout
           if (dragTimeoutRef.current) {
             clearTimeout(dragTimeoutRef.current);
             dragTimeoutRef.current = null;
           }
 
           if (!isDragging && dragStart.x) {
-            // This was a click, not a drag
             const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
-            if (e.button === 0) {
-              handleCellClick(worldX, worldY, false);
-            } else if (e.button === 2) {
-              handleCellClick(worldX, worldY, true);
-            }
+            const isRight = (e.button === 2) || (e.button === 0 && e.ctrlKey);
+            handleCellClick(worldX, worldY, isRight);
           }
 
           setIsDragging(false);
@@ -1066,11 +1079,20 @@
 
           websocket.onmessage = (event) => {
             const m = decodeMsg(event.data);
+
+            // Additional debug logging for message processing
+            if (DEV_MODE) {
+              console.log('PROCESSING MESSAGE:', {
+                type: Object.keys(m)[0],
+                payload: m
+              });
+            }
+
             let data = {};
             if (m.welcome) {
               data = { type: 'welcome', playerId: m.welcome.playerId, name: m.welcome.name, color: m.welcome.color };
             } else if (m.chunkSync) {
-              data = { type: 'chunkSync', chunkId: m.chunkSync.chunkId, seed: m.chunkSync.seed.toString(), reveals: m.chunkSync.reveals, flags: m.chunkSync.flags };
+              data = { type: 'chunkSync', chunkId: m.chunkSync.chunkId, seed: m.chunkSync.seed, reveals: m.chunkSync.reveals, flags: m.chunkSync.flags };
             } else if (m.revealAck) {
               data = { type: 'revealAck', ok: m.revealAck.ok };
             } else if (m.flagAck) {
@@ -1094,8 +1116,12 @@
             }
 
             if (data.type === 'chunkSync') {
+              // Helper to convert Uint8Array (protobuf bytes) to BigInt
+              const bytesToBig = (u8) =>
+                (new DataView(u8.buffer, u8.byteOffset, 8)).getBigUint64(0, true);
+
               const key = `${data.chunkId.X},${data.chunkId.Y}`;
-              seedCache.current.set(key, BigInt(data.seed));
+              seedCache.current.set(key, bytesToBig(data.seed));
 
               // Handle flags from server
               if (Array.isArray(data.flags)) {
@@ -1114,7 +1140,7 @@
 
               if (Array.isArray(data.reveals)) {
                 for (const cell of data.reveals) {
-                  const seed = BigInt(data.seed);
+                  const seed = bytesToBig(data.seed);
                   const cellIsMine = isMine(seed, cell.x, cell.y);
                   let adjacentMines = 0;
 

@@ -23,9 +23,10 @@ import (
 
 	"io"
 
+	pb "infinite-minesweeper/proto"
+
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
-	pb "infinite-minesweeper/proto"
 )
 
 //go:embed index.html messages_pb.js
@@ -290,7 +291,7 @@ func (s *Server) buildLeaderboardUnsafe() {
 		entries = entries[:20]
 	}
 
-        s.lbVersion++
+	s.lbVersion++
 	lbMsg := &pb.Msg{Payload: &pb.Msg_Leaderboard{Leaderboard: &pb.Leaderboard{
 		Version: s.lbVersion,
 		Entries: make([]*pb.LeaderboardEntry, len(entries)),
@@ -659,7 +660,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.SetReadDeadline(time.Time{})
 
-        playerID := hello.PlayerId
+	playerID := hello.PlayerId
 	s.stateMu.Lock()
 	if playerID <= 0 || playerID >= s.nextPlayerID {
 		playerID = s.nextPlayerID
@@ -824,7 +825,9 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	chunk, chunkExists := s.chunks[chunkID]
 	owners := s.cellOwners[chunkID]
 	flagsMap := s.flags[chunkID]
-	seed := s.generateChunkSeed(chunkID)
+	seed64 := s.generateChunkSeed(chunkID)
+	var seedBytes [8]byte
+	binary.LittleEndian.PutUint64(seedBytes[:], seed64)
 	var reveals []Reveal
 	var flags []Flag
 
@@ -855,16 +858,14 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	}
 
 	// Add flags for this chunk
-	if flagsMap != nil {
-		for _, flag := range flagsMap {
-			flags = append(flags, flag)
-		}
+	for _, flag := range flagsMap {
+		flags = append(flags, flag)
 	}
 	s.stateMu.Unlock()
 
 	cs := &pb.Msg{Payload: &pb.Msg_ChunkSync{ChunkSync: &pb.ChunkSync{
 		ChunkId: &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
-		Seed:    seed,
+		Seed:    seedBytes[:],
 	}}}
 	for _, rv := range reveals {
 		cs.GetChunkSync().Reveals = append(cs.GetChunkSync().Reveals, &pb.Reveal{

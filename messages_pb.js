@@ -113,19 +113,23 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            ChunkID.decode = function decode(reader, length) {
+            ChunkID.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.ChunkID();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
+                    if (tag === error)
+                        break;
                     switch (tag >>> 3) {
-                    case 1:
-                        message.X = reader.int32();
-                        break;
-                    case 2:
-                        message.Y = reader.int32();
-                        break;
+                    case 1: {
+                            message.X = reader.int32();
+                            break;
+                        }
+                    case 2: {
+                            message.Y = reader.int32();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -222,6 +226,21 @@
              */
             ChunkID.prototype.toJSON = function toJSON() {
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+            };
+    
+            /**
+             * Gets the default type url for ChunkID
+             * @function getTypeUrl
+             * @memberof ms.ChunkID
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            ChunkID.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.ChunkID";
             };
     
             return ChunkID;
@@ -345,25 +364,31 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            Reveal.decode = function decode(reader, length) {
+            Reveal.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.Reveal();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
+                    if (tag === error)
+                        break;
                     switch (tag >>> 3) {
-                    case 1:
-                        message.chunkId = $root.ms.ChunkID.decode(reader, reader.uint32());
-                        break;
-                    case 2:
-                        message.x = reader.int32();
-                        break;
-                    case 3:
-                        message.y = reader.int32();
-                        break;
-                    case 4:
-                        message.playerId = reader.int32();
-                        break;
+                    case 1: {
+                            message.chunkId = $root.ms.ChunkID.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 2: {
+                            message.x = reader.int32();
+                            break;
+                        }
+                    case 3: {
+                            message.y = reader.int32();
+                            break;
+                        }
+                    case 4: {
+                            message.playerId = reader.int32();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -481,6 +506,21 @@
              */
             Reveal.prototype.toJSON = function toJSON() {
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+            };
+    
+            /**
+             * Gets the default type url for Reveal
+             * @function getTypeUrl
+             * @memberof ms.Reveal
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            Reveal.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.Reveal";
             };
     
             return Reveal;
@@ -615,28 +655,35 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            Flag.decode = function decode(reader, length) {
+            Flag.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.Flag();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
+                    if (tag === error)
+                        break;
                     switch (tag >>> 3) {
-                    case 1:
-                        message.chunkId = $root.ms.ChunkID.decode(reader, reader.uint32());
-                        break;
-                    case 2:
-                        message.x = reader.int32();
-                        break;
-                    case 3:
-                        message.y = reader.int32();
-                        break;
-                    case 4:
-                        message.playerId = reader.int32();
-                        break;
-                    case 5:
-                        message.color = reader.string();
-                        break;
+                    case 1: {
+                            message.chunkId = $root.ms.ChunkID.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 2: {
+                            message.x = reader.int32();
+                            break;
+                        }
+                    case 3: {
+                            message.y = reader.int32();
+                            break;
+                        }
+                    case 4: {
+                            message.playerId = reader.int32();
+                            break;
+                        }
+                    case 5: {
+                            message.color = reader.string();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -764,6 +811,21 @@
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
             };
     
+            /**
+             * Gets the default type url for Flag
+             * @function getTypeUrl
+             * @memberof ms.Flag
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            Flag.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.Flag";
+            };
+    
             return Flag;
         })();
     
@@ -874,22 +936,27 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            Hello.decode = function decode(reader, length) {
+            Hello.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.Hello();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
+                    if (tag === error)
+                        break;
                     switch (tag >>> 3) {
-                    case 1:
-                        message.playerId = reader.int32();
-                        break;
-                    case 2:
-                        message.name = reader.string();
-                        break;
-                    case 3:
-                        message.color = reader.string();
-                        break;
+                    case 1: {
+                            message.playerId = reader.int32();
+                            break;
+                        }
+                    case 2: {
+                            message.name = reader.string();
+                            break;
+                        }
+                    case 3: {
+                            message.color = reader.string();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -994,6 +1061,21 @@
              */
             Hello.prototype.toJSON = function toJSON() {
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+            };
+    
+            /**
+             * Gets the default type url for Hello
+             * @function getTypeUrl
+             * @memberof ms.Hello
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            Hello.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.Hello";
             };
     
             return Hello;
@@ -1106,22 +1188,27 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            Welcome.decode = function decode(reader, length) {
+            Welcome.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.Welcome();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
+                    if (tag === error)
+                        break;
                     switch (tag >>> 3) {
-                    case 1:
-                        message.playerId = reader.int32();
-                        break;
-                    case 2:
-                        message.name = reader.string();
-                        break;
-                    case 3:
-                        message.color = reader.string();
-                        break;
+                    case 1: {
+                            message.playerId = reader.int32();
+                            break;
+                        }
+                    case 2: {
+                            message.name = reader.string();
+                            break;
+                        }
+                    case 3: {
+                            message.color = reader.string();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -1228,6 +1315,21 @@
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
             };
     
+            /**
+             * Gets the default type url for Welcome
+             * @function getTypeUrl
+             * @memberof ms.Welcome
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            Welcome.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.Welcome";
+            };
+    
             return Welcome;
         })();
     
@@ -1327,19 +1429,23 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            Subscribe.decode = function decode(reader, length) {
+            Subscribe.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.Subscribe();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
+                    if (tag === error)
+                        break;
                     switch (tag >>> 3) {
-                    case 1:
-                        message.chunkX = reader.int32();
-                        break;
-                    case 2:
-                        message.chunkY = reader.int32();
-                        break;
+                    case 1: {
+                            message.chunkX = reader.int32();
+                            break;
+                        }
+                    case 2: {
+                            message.chunkY = reader.int32();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -1436,6 +1542,21 @@
              */
             Subscribe.prototype.toJSON = function toJSON() {
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+            };
+    
+            /**
+             * Gets the default type url for Subscribe
+             * @function getTypeUrl
+             * @memberof ms.Subscribe
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            Subscribe.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.Subscribe";
             };
     
             return Subscribe;
@@ -1537,19 +1658,23 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            Unsubscribe.decode = function decode(reader, length) {
+            Unsubscribe.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.Unsubscribe();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
+                    if (tag === error)
+                        break;
                     switch (tag >>> 3) {
-                    case 1:
-                        message.chunkX = reader.int32();
-                        break;
-                    case 2:
-                        message.chunkY = reader.int32();
-                        break;
+                    case 1: {
+                            message.chunkX = reader.int32();
+                            break;
+                        }
+                    case 2: {
+                            message.chunkY = reader.int32();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -1648,6 +1773,21 @@
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
             };
     
+            /**
+             * Gets the default type url for Unsubscribe
+             * @function getTypeUrl
+             * @memberof ms.Unsubscribe
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            Unsubscribe.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.Unsubscribe";
+            };
+    
             return Unsubscribe;
         })();
     
@@ -1658,7 +1798,7 @@
              * @memberof ms
              * @interface IChunkSync
              * @property {ms.IChunkID|null} [chunkId] ChunkSync chunkId
-             * @property {number|Long|null} [seed] ChunkSync seed
+             * @property {Uint8Array|null} [seed] ChunkSync seed
              * @property {Array.<ms.IReveal>|null} [reveals] ChunkSync reveals
              * @property {Array.<ms.IFlag>|null} [flags] ChunkSync flags
              */
@@ -1690,11 +1830,11 @@
     
             /**
              * ChunkSync seed.
-             * @member {number|Long} seed
+             * @member {Uint8Array} seed
              * @memberof ms.ChunkSync
              * @instance
              */
-            ChunkSync.prototype.seed = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+            ChunkSync.prototype.seed = $util.newBuffer([]);
     
             /**
              * ChunkSync reveals.
@@ -1739,7 +1879,7 @@
                 if (message.chunkId != null && Object.hasOwnProperty.call(message, "chunkId"))
                     $root.ms.ChunkID.encode(message.chunkId, writer.uint32(/* id 1, wireType 2 =*/10).fork()).ldelim();
                 if (message.seed != null && Object.hasOwnProperty.call(message, "seed"))
-                    writer.uint32(/* id 2, wireType 0 =*/16).uint64(message.seed);
+                    writer.uint32(/* id 2, wireType 2 =*/18).bytes(message.seed);
                 if (message.reveals != null && message.reveals.length)
                     for (var i = 0; i < message.reveals.length; ++i)
                         $root.ms.Reveal.encode(message.reveals[i], writer.uint32(/* id 3, wireType 2 =*/26).fork()).ldelim();
@@ -1773,29 +1913,35 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            ChunkSync.decode = function decode(reader, length) {
+            ChunkSync.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.ChunkSync();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
+                    if (tag === error)
+                        break;
                     switch (tag >>> 3) {
-                    case 1:
-                        message.chunkId = $root.ms.ChunkID.decode(reader, reader.uint32());
-                        break;
-                    case 2:
-                        message.seed = reader.uint64();
-                        break;
-                    case 3:
-                        if (!(message.reveals && message.reveals.length))
-                            message.reveals = [];
-                        message.reveals.push($root.ms.Reveal.decode(reader, reader.uint32()));
-                        break;
-                    case 4:
-                        if (!(message.flags && message.flags.length))
-                            message.flags = [];
-                        message.flags.push($root.ms.Flag.decode(reader, reader.uint32()));
-                        break;
+                    case 1: {
+                            message.chunkId = $root.ms.ChunkID.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 2: {
+                            message.seed = reader.bytes();
+                            break;
+                        }
+                    case 3: {
+                            if (!(message.reveals && message.reveals.length))
+                                message.reveals = [];
+                            message.reveals.push($root.ms.Reveal.decode(reader, reader.uint32()));
+                            break;
+                        }
+                    case 4: {
+                            if (!(message.flags && message.flags.length))
+                                message.flags = [];
+                            message.flags.push($root.ms.Flag.decode(reader, reader.uint32()));
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -1837,8 +1983,8 @@
                         return "chunkId." + error;
                 }
                 if (message.seed != null && message.hasOwnProperty("seed"))
-                    if (!$util.isInteger(message.seed) && !(message.seed && $util.isInteger(message.seed.low) && $util.isInteger(message.seed.high)))
-                        return "seed: integer|Long expected";
+                    if (!(message.seed && typeof message.seed.length === "number" || $util.isString(message.seed)))
+                        return "seed: buffer expected";
                 if (message.reveals != null && message.hasOwnProperty("reveals")) {
                     if (!Array.isArray(message.reveals))
                         return "reveals: array expected";
@@ -1878,14 +2024,10 @@
                     message.chunkId = $root.ms.ChunkID.fromObject(object.chunkId);
                 }
                 if (object.seed != null)
-                    if ($util.Long)
-                        (message.seed = $util.Long.fromValue(object.seed)).unsigned = true;
-                    else if (typeof object.seed === "string")
-                        message.seed = parseInt(object.seed, 10);
-                    else if (typeof object.seed === "number")
+                    if (typeof object.seed === "string")
+                        $util.base64.decode(object.seed, message.seed = $util.newBuffer($util.base64.length(object.seed)), 0);
+                    else if (object.seed.length >= 0)
                         message.seed = object.seed;
-                    else if (typeof object.seed === "object")
-                        message.seed = new $util.LongBits(object.seed.low >>> 0, object.seed.high >>> 0).toNumber(true);
                 if (object.reveals) {
                     if (!Array.isArray(object.reveals))
                         throw TypeError(".ms.ChunkSync.reveals: array expected");
@@ -1928,19 +2070,18 @@
                 }
                 if (options.defaults) {
                     object.chunkId = null;
-                    if ($util.Long) {
-                        var long = new $util.Long(0, 0, true);
-                        object.seed = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
-                    } else
-                        object.seed = options.longs === String ? "0" : 0;
+                    if (options.bytes === String)
+                        object.seed = "";
+                    else {
+                        object.seed = [];
+                        if (options.bytes !== Array)
+                            object.seed = $util.newBuffer(object.seed);
+                    }
                 }
                 if (message.chunkId != null && message.hasOwnProperty("chunkId"))
                     object.chunkId = $root.ms.ChunkID.toObject(message.chunkId, options);
                 if (message.seed != null && message.hasOwnProperty("seed"))
-                    if (typeof message.seed === "number")
-                        object.seed = options.longs === String ? String(message.seed) : message.seed;
-                    else
-                        object.seed = options.longs === String ? $util.Long.prototype.toString.call(message.seed) : options.longs === Number ? new $util.LongBits(message.seed.low >>> 0, message.seed.high >>> 0).toNumber(true) : message.seed;
+                    object.seed = options.bytes === String ? $util.base64.encode(message.seed, 0, message.seed.length) : options.bytes === Array ? Array.prototype.slice.call(message.seed) : message.seed;
                 if (message.reveals && message.reveals.length) {
                     object.reveals = [];
                     for (var j = 0; j < message.reveals.length; ++j)
@@ -1963,6 +2104,21 @@
              */
             ChunkSync.prototype.toJSON = function toJSON() {
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+            };
+    
+            /**
+             * Gets the default type url for ChunkSync
+             * @function getTypeUrl
+             * @memberof ms.ChunkSync
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            ChunkSync.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.ChunkSync";
             };
     
             return ChunkSync;
@@ -2053,16 +2209,19 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            RevealAck.decode = function decode(reader, length) {
+            RevealAck.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.RevealAck();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
-                    switch (tag >>> 3) {
-                    case 1:
-                        message.ok = reader.bool();
+                    if (tag === error)
                         break;
+                    switch (tag >>> 3) {
+                    case 1: {
+                            message.ok = reader.bool();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -2150,6 +2309,21 @@
              */
             RevealAck.prototype.toJSON = function toJSON() {
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+            };
+    
+            /**
+             * Gets the default type url for RevealAck
+             * @function getTypeUrl
+             * @memberof ms.RevealAck
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            RevealAck.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.RevealAck";
             };
     
             return RevealAck;
@@ -2240,16 +2414,19 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            FlagAck.decode = function decode(reader, length) {
+            FlagAck.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.FlagAck();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
-                    switch (tag >>> 3) {
-                    case 1:
-                        message.ok = reader.bool();
+                    if (tag === error)
                         break;
+                    switch (tag >>> 3) {
+                    case 1: {
+                            message.ok = reader.bool();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -2337,6 +2514,21 @@
              */
             FlagAck.prototype.toJSON = function toJSON() {
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+            };
+    
+            /**
+             * Gets the default type url for FlagAck
+             * @function getTypeUrl
+             * @memberof ms.FlagAck
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            FlagAck.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.FlagAck";
             };
     
             return FlagAck;
@@ -2449,22 +2641,27 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            LeaderboardEntry.decode = function decode(reader, length) {
+            LeaderboardEntry.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.LeaderboardEntry();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
+                    if (tag === error)
+                        break;
                     switch (tag >>> 3) {
-                    case 1:
-                        message.playerId = reader.int32();
-                        break;
-                    case 2:
-                        message.name = reader.string();
-                        break;
-                    case 3:
-                        message.score = reader.string();
-                        break;
+                    case 1: {
+                            message.playerId = reader.int32();
+                            break;
+                        }
+                    case 2: {
+                            message.name = reader.string();
+                            break;
+                        }
+                    case 3: {
+                            message.score = reader.string();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -2571,6 +2768,21 @@
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
             };
     
+            /**
+             * Gets the default type url for LeaderboardEntry
+             * @function getTypeUrl
+             * @memberof ms.LeaderboardEntry
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            LeaderboardEntry.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.LeaderboardEntry";
+            };
+    
             return LeaderboardEntry;
         })();
     
@@ -2672,21 +2884,25 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            Leaderboard.decode = function decode(reader, length) {
+            Leaderboard.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.Leaderboard();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
+                    if (tag === error)
+                        break;
                     switch (tag >>> 3) {
-                    case 1:
-                        message.version = reader.uint64();
-                        break;
-                    case 2:
-                        if (!(message.entries && message.entries.length))
-                            message.entries = [];
-                        message.entries.push($root.ms.LeaderboardEntry.decode(reader, reader.uint32()));
-                        break;
+                    case 1: {
+                            message.version = reader.uint64();
+                            break;
+                        }
+                    case 2: {
+                            if (!(message.entries && message.entries.length))
+                                message.entries = [];
+                            message.entries.push($root.ms.LeaderboardEntry.decode(reader, reader.uint32()));
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -2816,6 +3032,21 @@
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
             };
     
+            /**
+             * Gets the default type url for Leaderboard
+             * @function getTypeUrl
+             * @memberof ms.Leaderboard
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            Leaderboard.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.Leaderboard";
+            };
+    
             return Leaderboard;
         })();
     
@@ -2904,16 +3135,19 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            ScoreUpdate.decode = function decode(reader, length) {
+            ScoreUpdate.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.ScoreUpdate();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
-                    switch (tag >>> 3) {
-                    case 1:
-                        message.score = reader.int32();
+                    if (tag === error)
                         break;
+                    switch (tag >>> 3) {
+                    case 1: {
+                            message.score = reader.int32();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -3001,6 +3235,21 @@
              */
             ScoreUpdate.prototype.toJSON = function toJSON() {
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+            };
+    
+            /**
+             * Gets the default type url for ScoreUpdate
+             * @function getTypeUrl
+             * @memberof ms.ScoreUpdate
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            ScoreUpdate.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.ScoreUpdate";
             };
     
             return ScoreUpdate;
@@ -3215,46 +3464,59 @@
              * @throws {Error} If the payload is not a reader or valid buffer
              * @throws {$protobuf.util.ProtocolError} If required fields are missing
              */
-            Msg.decode = function decode(reader, length) {
+            Msg.decode = function decode(reader, length, error) {
                 if (!(reader instanceof $Reader))
                     reader = $Reader.create(reader);
                 var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.Msg();
                 while (reader.pos < end) {
                     var tag = reader.uint32();
+                    if (tag === error)
+                        break;
                     switch (tag >>> 3) {
-                    case 1:
-                        message.hello = $root.ms.Hello.decode(reader, reader.uint32());
-                        break;
-                    case 2:
-                        message.welcome = $root.ms.Welcome.decode(reader, reader.uint32());
-                        break;
-                    case 3:
-                        message.reveal = $root.ms.Reveal.decode(reader, reader.uint32());
-                        break;
-                    case 4:
-                        message.flag = $root.ms.Flag.decode(reader, reader.uint32());
-                        break;
-                    case 5:
-                        message.subscribe = $root.ms.Subscribe.decode(reader, reader.uint32());
-                        break;
-                    case 6:
-                        message.unsubscribe = $root.ms.Unsubscribe.decode(reader, reader.uint32());
-                        break;
-                    case 7:
-                        message.chunkSync = $root.ms.ChunkSync.decode(reader, reader.uint32());
-                        break;
-                    case 8:
-                        message.revealAck = $root.ms.RevealAck.decode(reader, reader.uint32());
-                        break;
-                    case 9:
-                        message.flagAck = $root.ms.FlagAck.decode(reader, reader.uint32());
-                        break;
-                    case 10:
-                        message.leaderboard = $root.ms.Leaderboard.decode(reader, reader.uint32());
-                        break;
-                    case 11:
-                        message.scoreUpdate = $root.ms.ScoreUpdate.decode(reader, reader.uint32());
-                        break;
+                    case 1: {
+                            message.hello = $root.ms.Hello.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 2: {
+                            message.welcome = $root.ms.Welcome.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 3: {
+                            message.reveal = $root.ms.Reveal.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 4: {
+                            message.flag = $root.ms.Flag.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 5: {
+                            message.subscribe = $root.ms.Subscribe.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 6: {
+                            message.unsubscribe = $root.ms.Unsubscribe.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 7: {
+                            message.chunkSync = $root.ms.ChunkSync.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 8: {
+                            message.revealAck = $root.ms.RevealAck.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 9: {
+                            message.flagAck = $root.ms.FlagAck.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 10: {
+                            message.leaderboard = $root.ms.Leaderboard.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 11: {
+                            message.scoreUpdate = $root.ms.ScoreUpdate.decode(reader, reader.uint32());
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -3552,6 +3814,21 @@
              */
             Msg.prototype.toJSON = function toJSON() {
                 return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+            };
+    
+            /**
+             * Gets the default type url for Msg
+             * @function getTypeUrl
+             * @memberof ms.Msg
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            Msg.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.Msg";
             };
     
             return Msg;
