@@ -94,6 +94,20 @@ func TestRevealIdempotency(t *testing.T) {
 	}
 }
 
+func TestChunkHashVerification(t *testing.T) {
+	s := NewServer()
+	id := ChunkID{0, 0}
+	s.reveal(1, id, 1, 1)
+	hash := s.computeChunkHash(id)
+	if !s.verifyChunkHash(id, hash[:]) {
+		t.Fatal("hash should verify")
+	}
+	bad := make([]byte, 32)
+	if s.verifyChunkHash(id, bad) {
+		t.Fatal("expected mismatch")
+	}
+}
+
 func TestBuildLeaderboard(t *testing.T) {
 	s := NewServer()
 	s.stateMu.Lock()

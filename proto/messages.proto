@@ -51,6 +51,13 @@ message ChunkSync {
   repeated Flag flags = 4;
 }
 
+message ChunkHash {
+  ChunkID chunkId = 1;
+  bytes hash = 2;
+}
+
+message ChunkHashAck { bool ok = 1; }
+
 message RevealAck { bool ok = 1; }
 message FlagAck { bool ok = 1; }
 
@@ -80,5 +87,7 @@ message Msg {
     FlagAck flagAck = 9;
     Leaderboard leaderboard = 10;
     ScoreUpdate scoreUpdate = 11;
+    ChunkHash chunkHash = 12;
+    ChunkHashAck chunkHashAck = 13;
   }
 }

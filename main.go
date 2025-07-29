@@ -609,6 +609,26 @@ func (s *Server) sendToPlayer(playerID int32, data []byte) {
 	}
 }
 
+func (s *Server) computeChunkHash(chunkID ChunkID) [32]byte {
+	h := sha256.New()
+	s.stateMu.RLock()
+	chunk := s.chunks[chunkID]
+	if chunk != nil {
+		for i := 0; i < 64; i++ {
+			binary.Write(h, binary.LittleEndian, chunk[i])
+		}
+	}
+	s.stateMu.RUnlock()
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+func (s *Server) verifyChunkHash(chunkID ChunkID, hash []byte) bool {
+	actual := s.computeChunkHash(chunkID)
+	return bytes.Equal(actual[:], hash)
+}
+
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -781,6 +801,16 @@ func (s *Server) readPump(player *Player) {
 		case *pb.Msg_Unsubscribe:
 			m := t.Unsubscribe
 			s.unsubscribeFromChunk(player.ID, ChunkID{X: m.ChunkX, Y: m.ChunkY})
+
+		case *pb.Msg_ChunkHash:
+			m := t.ChunkHash
+			cid := ChunkID{X: m.ChunkId.X, Y: m.ChunkId.Y}
+			ok := s.verifyChunkHash(cid, m.Hash)
+			ack := &pb.Msg{Payload: &pb.Msg_ChunkHashAck{ChunkHashAck: &pb.ChunkHashAck{Ok: ok}}}
+			s.sendToPlayer(player.ID, mustProto(ack))
+			if !ok {
+				s.subscribeToChunk(player.ID, cid)
+			}
 		}
 	}
 }

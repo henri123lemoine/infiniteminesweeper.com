@@ -16,6 +16,23 @@ function encodeMsg(msg) {
   }
   return pako.gzip(buf);
 }
+
+function encodeChunkHashMsg(chunkX, chunkY, hash) {
+  const writer = protobuf.Writer.create();
+  const sub = writer.uint32(98).fork();
+  PB.ChunkID.encode({ X: chunkX, Y: chunkY }, sub.uint32(10).fork()).ldelim();
+  sub.uint32(18).bytes(hash);
+  writer.ldelim();
+  const buf = writer.finish();
+  if (DEV_MODE) {
+    console.log('OUTGOING:', {
+      raw: { chunkHash: { chunkId: { X: chunkX, Y: chunkY }, hash } },
+      serialized_size: buf.length,
+      message_type: 'chunkHash'
+    });
+  }
+  return pako.gzip(buf);
+}
 function decodeMsg(data) {
   const decompressed = pako.ungzip(new Uint8Array(data));
   const decoded = PB.Msg.decode(decompressed);
@@ -57,6 +74,7 @@ function App() {
   const subscribedChunks = useRef(new Set());
   const revealedCellsRef = useRef(new Map());
   const flaggedCellsRef = useRef(new Map()); // worldX,worldY -> {color: string, playerId: number}
+  const hashIntervals = useRef(new Map());
   const [tick, setTick] = useState(0);
 
   // Leaderboard visibility and number formatting
@@ -307,21 +325,50 @@ function App() {
     return count;
   }, [isMine]);
 
+  const computeChunkHash = useCallback(async (chunkX, chunkY) => {
+    const cells = [];
+    revealedCellsRef.current.forEach((_, key) => {
+      const [cx, cy, x, y] = key.split(',').map(Number);
+      if (cx === chunkX && cy === chunkY) cells.push(`${x},${y};`);
+    });
+    const data = new TextEncoder().encode(cells.sort().join(''));
+    const digest = await crypto.subtle.digest('SHA-256', data);
+    return new Uint8Array(digest);
+  }, []);
+
+  const startHashingForChunk = useCallback((chunkX, chunkY) => {
+    const key = `${chunkX},${chunkY}`;
+    if (hashIntervals.current.has(key) || !ws) return;
+    const int = setInterval(async () => {
+      if (!ws || !connected) return;
+      const hash = await computeChunkHash(chunkX, chunkY);
+      ws.send(encodeChunkHashMsg(chunkX, chunkY, hash));
+    }, 5000);
+    hashIntervals.current.set(key, int);
+  }, [ws, connected, computeChunkHash]);
+
   const ensureChunkSubscription = useCallback((chunkX, chunkY) => {
     const key = `${chunkX},${chunkY}`;
     if (!subscribedChunks.current.has(key) && ws && connected) {
       subscribedChunks.current.add(key);
       ws.send(encodeMsg(PB.Msg.create({ subscribe: { chunkX, chunkY } })));
+      startHashingForChunk(chunkX, chunkY);
     }
-  }, [ws, connected]);
+  }, [ws, connected, startHashingForChunk]);
 
   const ensureChunkUnsubscription = useCallback((chunkX, chunkY) => {
     const key = `${chunkX},${chunkY}`;
     if (subscribedChunks.current.has(key) && ws && connected) {
       subscribedChunks.current.delete(key);
       ws.send(encodeMsg(PB.Msg.create({ unsubscribe: { chunkX, chunkY } })));
+      const int = hashIntervals.current.get(key);
+      if (int) {
+        clearInterval(int);
+        hashIntervals.current.delete(key);
+      }
     }
   }, [ws, connected]);
+
 
   // Flood fill reveal for cells with 0 adjacent mines
   const floodFillReveal = useCallback(async (startWorldX, startWorldY) => {
@@ -928,6 +975,8 @@ function App() {
     websocket.onclose = () => {
       setConnected(false);
       setWs(null);
+      hashIntervals.current.forEach((int) => clearInterval(int));
+      hashIntervals.current.clear();
     };
 
     websocket.onmessage = (event) => {
