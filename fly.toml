@@ -1,17 +1,17 @@
-# fly.toml app configuration file generated for infinite-minesweeper-v4 on 2025-07-26T18:09:00-04:00
+# fly.toml app configuration file generated for infiniteminesweeper on 2025-07-29T04:26:55-04:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'infinite-minesweeper-v4'
+app = 'infiniteminesweeper'
 primary_region = 'ewr'
 
 [build]
-  [build.args]
-    GO_VERSION = '1.22'
 
 [env]
+  AWS_REGION = 'us-east-1'
   PORT = '8080'
+  S3_BUCKET_NAME = 'infiniteminesweeper'
 
 [http_service]
   internal_port = 8080
