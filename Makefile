@@ -18,6 +18,9 @@ help:
 	@echo "  make deploy    # Deploy to production"
 
 update:
+	@echo "Updating frontend..."
+	npm install
+	npx prettier frontend/app.jsx --write
 	@echo "Building frontend..."
 	npm run build
 	@echo "Updating proto files..."
