@@ -15,10 +15,10 @@ DATA_DIR = '/data'
 PORT = '8080'
 DEBUG = 'false'
 
-# Persistent volume declaration
-[mounts]
+[[mounts]]
 source = 'storage'
 destination = '/data'
+processes = ['app']
 
 [http_service]
 internal_port = 8080
