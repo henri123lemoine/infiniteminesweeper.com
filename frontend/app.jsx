@@ -687,70 +687,229 @@ function App() {
     ],
   );
 
-  // 3D cell drawing function
-  const draw3DCell = useCallback(
-    (ctx, x, y, size, isRevealed = false, isPressed = false) => {
-      const lightGray = "#f0f0f0";
-      const mediumGray = "#c0c0c0";
-      const darkGray = "#808080";
-      const veryDarkGray = "#404040";
+  // 3D Cell Drawing Functions
+  const draw3DCell = (ctx, x, y, size, isRevealed) => {
+    const borderWidth = Math.max(1, size * 0.08);
+    const innerBorderWidth = Math.max(0.5, size * 0.04);
 
-      if (isRevealed) {
-        // Revealed cells: flat with subtle inset border
-        ctx.fillStyle = "#e8e8e8";
-        ctx.fillRect(x, y, size, size);
+    if (isRevealed) {
+      // Revealed cell - flat appearance
+      ctx.fillStyle = "#e0e0e0";
+      ctx.fillRect(x, y, size, size);
 
-        // Subtle inset effect
-        ctx.fillStyle = darkGray;
-        ctx.fillRect(x, y, size, 1); // top
-        ctx.fillRect(x, y, 1, size); // left
-      } else {
-        // Unrevealed cells: raised 3D effect
-        const bevelSize = 2;
+      // Subtle inset border
+      ctx.fillStyle = "rgba(0, 0, 0, 0.15)";
+      ctx.fillRect(x, y, size, borderWidth);
+      ctx.fillRect(x, y, borderWidth, size);
 
-        // Main cell face
-        ctx.fillStyle = mediumGray;
-        ctx.fillRect(
-          x + bevelSize,
-          y + bevelSize,
-          size - bevelSize * 2,
-          size - bevelSize * 2,
-        );
+      ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+      ctx.fillRect(
+        x + size - borderWidth,
+        y + borderWidth,
+        borderWidth,
+        size - borderWidth,
+      );
+      ctx.fillRect(
+        x + borderWidth,
+        y + size - borderWidth,
+        size - borderWidth,
+        borderWidth,
+      );
+    } else {
+      // Unrevealed cell - raised 3D appearance
+      ctx.fillStyle = "#c0c0c0";
+      ctx.fillRect(
+        x + borderWidth,
+        y + borderWidth,
+        size - 2 * borderWidth,
+        size - 2 * borderWidth,
+      );
 
-        if (isPressed) {
-          // Pressed/clicked state - inset
-          ctx.fillStyle = darkGray;
-          ctx.fillRect(x, y, size, bevelSize); // top edge
-          ctx.fillRect(x, y, bevelSize, size); // left edge
+      // Top and left highlights
+      ctx.fillStyle = "#d4d4d4";
+      ctx.fillRect(x, y, size, borderWidth);
+      ctx.fillRect(x, y, borderWidth, size);
 
-          ctx.fillStyle = lightGray;
-          ctx.fillRect(x, y + size - bevelSize, size, bevelSize); // bottom edge
-          ctx.fillRect(x + size - bevelSize, y, bevelSize, size); // right edge
-        } else {
-          // Raised state - normal
-          ctx.fillStyle = lightGray;
-          ctx.fillRect(x, y, size, bevelSize); // top highlight
-          ctx.fillRect(x, y, bevelSize, size); // left highlight
+      ctx.fillStyle = "rgba(212, 212, 212, 0.6)";
+      ctx.fillRect(
+        x + borderWidth,
+        y + borderWidth,
+        size - 2 * borderWidth,
+        innerBorderWidth,
+      );
+      ctx.fillRect(
+        x + borderWidth,
+        y + borderWidth,
+        innerBorderWidth,
+        size - 2 * borderWidth,
+      );
 
-          ctx.fillStyle = darkGray;
-          ctx.fillRect(x, y + size - bevelSize, size, bevelSize); // bottom shadow
-          ctx.fillRect(x + size - bevelSize, y, bevelSize, size); // right shadow
+      // Bottom and right shadows
+      ctx.fillStyle = "#808080";
+      ctx.fillRect(
+        x + borderWidth,
+        y + size - borderWidth,
+        size - borderWidth,
+        borderWidth,
+      );
+      ctx.fillRect(
+        x + size - borderWidth,
+        y + borderWidth,
+        borderWidth,
+        size - borderWidth,
+      );
 
-          // Corner pixels for cleaner look
-          ctx.fillStyle = veryDarkGray;
-          ctx.fillRect(
-            x + size - bevelSize,
-            y + size - bevelSize,
-            bevelSize,
-            bevelSize,
-          ); // bottom-right corner
-        }
-      }
-    },
-    [],
-  );
+      ctx.fillStyle = "rgba(128, 128, 128, 0.6)";
+      const innerShadowOffset = borderWidth + innerBorderWidth;
+      ctx.fillRect(
+        x + innerShadowOffset,
+        y + size - innerShadowOffset,
+        size - 2 * innerShadowOffset,
+        innerBorderWidth,
+      );
+      ctx.fillRect(
+        x + size - innerShadowOffset,
+        y + innerShadowOffset,
+        innerBorderWidth,
+        size - 2 * innerShadowOffset,
+      );
 
-  // Canvas rendering
+      // Corner highlights/shadows
+      ctx.fillStyle = "#d4d4d4";
+      ctx.fillRect(x, y, borderWidth, borderWidth);
+
+      ctx.fillStyle = "#606060";
+      ctx.fillRect(
+        x + size - borderWidth,
+        y + size - borderWidth,
+        borderWidth,
+        borderWidth,
+      );
+    }
+  };
+
+  // Content Drawing Functions
+  const drawMine = (ctx, x, y, size) => {
+    const mineScale = 0.8;
+    const centerX = x + size / 2;
+    const centerY = y + size / 2;
+    const radius = size * 0.25 * mineScale;
+
+    // Mine body
+    ctx.fillStyle = "#2a2a2a";
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Mine spikes
+    ctx.strokeStyle = "#2a2a2a";
+    ctx.lineWidth = Math.max(1, size * 0.06 * mineScale);
+    const spikeLength = radius * 0.8;
+
+    for (let i = 0; i < 8; i++) {
+      const angle = (i * Math.PI) / 4;
+      const startX = centerX + Math.cos(angle) * radius * 0.6;
+      const startY = centerY + Math.sin(angle) * radius * 0.6;
+      const endX = centerX + Math.cos(angle) * (radius + spikeLength);
+      const endY = centerY + Math.sin(angle) * (radius + spikeLength);
+
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+    }
+
+    // Highlight on mine
+    ctx.fillStyle = "#5a5a5a";
+    ctx.beginPath();
+    ctx.arc(
+      centerX - radius * 0.3,
+      centerY - radius * 0.3,
+      radius * 0.3,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+  };
+
+  const drawNumber = (ctx, x, y, size, number, getNumberColor) => {
+    const fontSize = Math.max(8, size * 0.5);
+    ctx.font = `bold ${fontSize}px monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = getNumberColor(number);
+
+    // Add subtle shadow
+    ctx.shadowColor = "rgba(0, 0, 0, 0.2)";
+    ctx.shadowBlur = 1;
+    ctx.shadowOffsetX = 0.5;
+    ctx.shadowOffsetY = 0.5;
+
+    ctx.fillText(number.toString(), x + size / 2, y + size / 2 + 1.5);
+    ctx.shadowColor = "transparent";
+  };
+
+  const drawFlag = (ctx, x, y, size, flagColor) => {
+    const poleX = x + size * 0.175;
+    const poleTop = y + size * 0.15;
+    const poleHeight = size * 0.75;
+    const poleWidth = size * 0.08;
+    const flagWidth = size * 0.6;
+    const flagHeight = size * 0.4;
+    const poleOutline = Math.max(1, size * 0.04);
+    const flagOutline = Math.max(1, size * 0.04);
+
+    // Draw pole with black outline
+    ctx.fillStyle = "#333";
+    ctx.fillRect(poleX, poleTop, poleWidth, poleHeight);
+    ctx.save();
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = poleOutline;
+    ctx.strokeRect(poleX, poleTop, poleWidth, poleHeight);
+    ctx.restore();
+
+    // Draw flag with player color and black outline
+    ctx.fillStyle = flagColor;
+    ctx.fillRect(poleX + poleWidth, poleTop, flagWidth, flagHeight);
+    ctx.save();
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = flagOutline;
+    ctx.strokeRect(poleX + poleWidth, poleTop, flagWidth, flagHeight);
+    ctx.restore();
+  };
+
+  // Cell Rendering Logic
+  const renderCell = (
+    ctx,
+    screenX,
+    screenY,
+    cellSize,
+    cellData,
+    isRevealed,
+    getNumberColor,
+  ) => {
+    // Always draw the base cell first
+    draw3DCell(ctx, screenX, screenY, cellSize, isRevealed);
+
+    // If not revealed, we're done (content will be handled separately for flags)
+    if (!isRevealed) return;
+
+    // Draw revealed cell content
+    if (cellData.isMine) {
+      drawMine(ctx, screenX, screenY, cellSize);
+    } else if (cellData.adjacentMines > 0) {
+      drawNumber(
+        ctx,
+        screenX,
+        screenY,
+        cellSize,
+        cellData.adjacentMines,
+        getNumberColor,
+      );
+    }
+  };
+
+  // Main Canvas Rendering
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -759,181 +918,72 @@ function App() {
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
 
+    // Setup canvas
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+    // Clear background
     ctx.fillStyle = "#c0c0c0";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    // Calculate visible world coordinates
     const startWorldX = Math.floor(viewX / CELL_SIZE);
     const startWorldY = Math.floor(viewY / CELL_SIZE);
     const endWorldX = Math.ceil((viewX + rect.width) / CELL_SIZE);
     const endWorldY = Math.ceil((viewY + rect.height) / CELL_SIZE);
 
-    // Draw all cells (unrevealed first, then revealed on top)
-    // First pass: Draw all unrevealed cells with 3D effect
+    // Helper function to check if cell is visible
+    const isCellVisible = (screenX, screenY) => {
+      return !(
+        screenX + CELL_SIZE < 0 ||
+        screenX > rect.width ||
+        screenY + CELL_SIZE < 0 ||
+        screenY > rect.height
+      );
+    };
+
+    // Render all cells in the visible area
     for (let worldY = startWorldY; worldY <= endWorldY; worldY++) {
       for (let worldX = startWorldX; worldX <= endWorldX; worldX++) {
         const screenX = worldX * CELL_SIZE - viewX;
         const screenY = worldY * CELL_SIZE - viewY;
 
-        // Skip if not visible
-        if (
-          screenX + CELL_SIZE < 0 ||
-          screenX > rect.width ||
-          screenY + CELL_SIZE < 0 ||
-          screenY > rect.height
-        ) {
-          continue;
-        }
+        if (!isCellVisible(screenX, screenY)) continue;
 
         const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
         const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
-        const isRevealed = revealedCellsRef.current.has(cellKey);
+        const cellData = revealedCellsRef.current.get(cellKey);
+        const isRevealed = cellData !== undefined;
 
-        if (!isRevealed) {
-          // Draw unrevealed cell with 3D effect
-          draw3DCell(ctx, screenX, screenY, CELL_SIZE, false, false);
-        }
+        // Render the cell
+        renderCell(
+          ctx,
+          screenX,
+          screenY,
+          CELL_SIZE,
+          cellData,
+          isRevealed,
+          getNumberColor,
+        );
       }
     }
 
-    // Removed chunk boundaries for now
-    //   // Draw chunk boundaries
-    //   ctx.strokeStyle = '#333';
-    //   ctx.lineWidth = 2;
-    //   ctx.beginPath();
-
-    //   const startChunkX = Math.floor(startWorldX / CHUNK);
-    //   const startChunkY = Math.floor(startWorldY / CHUNK);
-    //   const endChunkX = Math.ceil(endWorldX / CHUNK);
-    //   const endChunkY = Math.ceil(endWorldY / CHUNK);
-
-    //   for (let chunkX = startChunkX; chunkX <= endChunkX; chunkX++) {
-    //     const screenX = chunkX * CHUNK * CELL_SIZE - viewX;
-    //     ctx.moveTo(screenX, 0);
-    //     ctx.lineTo(screenX, canvas.height);
-    //   }
-
-    //   for (let chunkY = startChunkY; chunkY <= endChunkY; chunkY++) {
-    //     const screenY = chunkY * CHUNK * CELL_SIZE - viewY;
-    //     ctx.moveTo(0, screenY);
-    //     ctx.lineTo(canvas.width, screenY);
-    //   }
-
-    //   ctx.stroke();
-
-    // Second pass: Draw revealed cells with 3D effect and content
-    // Scale font size to be exactly half the cell height for consistent proportions
-    const fontSize = Math.max(8, CELL_SIZE * 0.5); // Exactly half the cell size, with minimum 8px for readability
-    ctx.font = `bold ${fontSize}px monospace`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-
-    revealedCellsRef.current.forEach((cellData, key) => {
-      const [chunkX, chunkY, localX, localY] = key.split(",").map(Number);
-      const worldX = chunkX * CHUNK + localX;
-      const worldY = chunkY * CHUNK + localY;
-
-      const screenX = worldX * CELL_SIZE - viewX;
-      const screenY = worldY * CELL_SIZE - viewY;
-
-      // Skip if not visible
-      if (
-        screenX + CELL_SIZE < 0 ||
-        screenX > rect.width ||
-        screenY + CELL_SIZE < 0 ||
-        screenY > rect.height
-      ) {
-        return;
-      }
-
-      // Draw revealed cell with 3D effect
-      if (cellData.isMine) {
-        // For mines, draw revealed cell then add red background
-        draw3DCell(ctx, screenX, screenY, CELL_SIZE, true, false);
-
-        // Add red tint for mine
-        ctx.fillStyle = "rgba(255, 0, 0, 0.3)";
-        ctx.fillRect(screenX + 1, screenY + 1, CELL_SIZE - 2, CELL_SIZE - 2);
-      } else {
-        // Normal revealed cell
-        draw3DCell(ctx, screenX, screenY, CELL_SIZE, true, false);
-      }
-
-      // Draw cell content
-      if (cellData.isMine) {
-        ctx.fillStyle = "white";
-        ctx.fillText(
-          "💣",
-          screenX + CELL_SIZE / 2,
-          screenY + CELL_SIZE / 2 + 2,
-        );
-      } else if (cellData.adjacentMines > 0) {
-        ctx.fillStyle = getNumberColor(cellData.adjacentMines);
-        ctx.fillText(
-          cellData.adjacentMines.toString(),
-          screenX + CELL_SIZE / 2,
-          screenY + CELL_SIZE / 2 + 1.5,
-        );
-      }
-    });
-
-    // Draw flags
+    // Render flags on top of unrevealed cells
     flaggedCellsRef.current.forEach((flagData, flagKey) => {
       const [worldX, worldY] = flagKey.split(",").map(Number);
       const screenX = worldX * CELL_SIZE - viewX;
       const screenY = worldY * CELL_SIZE - viewY;
 
-      // Skip if not visible
-      if (
-        screenX + CELL_SIZE < 0 ||
-        screenX > rect.width ||
-        screenY + CELL_SIZE < 0 ||
-        screenY > rect.height
-      ) {
-        return;
-      }
+      if (!isCellVisible(screenX, screenY)) return;
 
       // Don't draw flag if cell is revealed
       const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
       const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
       if (revealedCellsRef.current.has(cellKey)) return;
 
-      // Flagged cells should already be drawn as unrevealed in first pass
-      // Just draw the flag content on top
-
-      // Draw custom flag with player color
-      const poleX = screenX + CELL_SIZE * 0.175;
-      const poleTop = screenY + CELL_SIZE * 0.15;
-      const poleHeight = CELL_SIZE * 0.75;
-      const poleWidth = CELL_SIZE * 0.08;
-      const flagWidth = CELL_SIZE * 0.6;
-      const flagHeight = CELL_SIZE * 0.4;
-
-      // Make outline widths scale with cell size, so they look visually consistent at all zooms
-      const poleOutline = Math.max(1, CELL_SIZE * 0.04);
-      const flagOutline = Math.max(1, CELL_SIZE * 0.04);
-
-      // Draw pole with black outline
-      ctx.fillStyle = "#333";
-      ctx.fillRect(poleX, poleTop, poleWidth, poleHeight);
-      ctx.save();
-      ctx.strokeStyle = "#000";
-      ctx.lineWidth = poleOutline;
-      ctx.strokeRect(poleX, poleTop, poleWidth, poleHeight);
-      ctx.restore();
-
-      // Draw flag with player color and black outline
       const flagColor = flagData?.color || playerColor;
-      ctx.fillStyle = flagColor;
-      ctx.fillRect(poleX + poleWidth, poleTop, flagWidth, flagHeight);
-      ctx.save();
-      ctx.strokeStyle = "#000";
-      ctx.lineWidth = flagOutline;
-      ctx.strokeRect(poleX + poleWidth, poleTop, flagWidth, flagHeight);
-      ctx.restore();
+      drawFlag(ctx, screenX, screenY, CELL_SIZE, flagColor);
     });
   }, [
     viewX,
@@ -942,10 +992,8 @@ function App() {
     getNumberColor,
     worldToChunk,
     playerColor,
-    draw3DCell,
     CELL_SIZE,
   ]);
-
   // Subscribe to visible chunks
   const subscribeToVisibleChunks = useCallback(() => {
     if (!ws || !connected) return;
