@@ -20,26 +20,25 @@ Can be played at [infiniteminesweeper.com](https://infiniteminesweeper.com).
 ```bash
 git clone https://github.com/henri123lemoine/infiniteminesweeper.com.git
 cd infiniteminesweeper.com
-go mod tidy
-go run .
+make run-fast
+# Then go to http://localhost:8080
 ```
 
-#### Running Tests
+#### Running Tests and Benchmarks
 
 ```bash
+# Run tests
 go test -v -race ./...
-```
-
-Running Benchmarks
-
-```bash
+# Run benchmarks
 go test -run=Bench -bench=. -v
 ```
 
-Generate protobuf files:
+#### Build Commands
 
 ```bash
-./proto/update-proto.sh
+make update    # Update frontend and proto files
+make build     # Full build including Docker image
+make run-fast  # Quick development cycle
 ```
 
 ### Production
@@ -58,11 +57,8 @@ export DATA_DIR=/path/to/volume
 Run with Docker:
 
 ```bash
-docker build -t infinite-minesweeper .
-docker run --env-file .env -p 8080:8080 infinite-minesweeper
+make run
 ```
-
-The server will start on `http://localhost:8080`
 
 ### Deployment
 
@@ -71,5 +67,5 @@ Deploy to Fly.io:
 ```bash
 fly secrets set AWS_ACCESS_KEY_ID=your_access_key
 fly secrets set AWS_SECRET_ACCESS_KEY=your_secret_key
-fly deploy
+make deploy
 ```
