@@ -65,6 +65,14 @@ function App() {
   // Player color state
   const [playerColor, setPlayerColor] = useState(localStorage.getItem('playerColor') || '#FF0000');
 
+  // Minimap state
+  const minimapCanvasRef = useRef(null);
+  const [minimapChunks, setMinimapChunks] = useState(3); // 3x3 by default
+
+  const toggleMinimapSize = useCallback(() => {
+    setMinimapChunks(c => (c === 3 ? 5 : c === 5 ? 7 : 3));
+  }, []);
+
   const toggleLeaderboard = useCallback(() => {
     setLeaderboardVisible(v => !v);
   }, []);
@@ -222,6 +230,7 @@ function App() {
   const CHUNK = 64;
   const MINE_COUNT = 20;
   const CELL_SIZE = 20;
+  const MINIMAP_PIXEL = 2;
 
   // Deterministic helpers
   const splitmix64 = useCallback((state) => {
@@ -737,6 +746,72 @@ function App() {
 
   }, [viewX, viewY, tick, getNumberColor, worldToChunk, playerColor, draw3DCell]);
 
+  // Minimap rendering
+  const renderMinimap = useCallback(() => {
+    const canvas = minimapCanvasRef.current;
+    if (!canvas) return;
+
+    const cellsPerSide = CHUNK * minimapChunks;
+    canvas.width = cellsPerSide;
+    canvas.height = cellsPerSide;
+    canvas.style.width = `${cellsPerSide * MINIMAP_PIXEL}px`;
+    canvas.style.height = `${cellsPerSide * MINIMAP_PIXEL}px`;
+
+    const ctx = canvas.getContext('2d');
+
+    // Center chunk based on view
+    const centerWorldX = Math.floor((viewX + (canvasRef.current?.width || 0) / 2) / CELL_SIZE);
+    const centerWorldY = Math.floor((viewY + (canvasRef.current?.height || 0) / 2) / CELL_SIZE);
+    const { chunkX: centerChunkX, chunkY: centerChunkY } = worldToChunk(centerWorldX, centerWorldY);
+
+    const half = Math.floor(minimapChunks / 2);
+
+    for (let cy = -half; cy <= half; cy++) {
+      for (let cx = -half; cx <= half; cx++) {
+        const chunkX = centerChunkX + cx;
+        const chunkY = centerChunkY + cy;
+        const seed = seedCache.current.get(`${chunkX},${chunkY}`);
+
+        for (let y = 0; y < CHUNK; y++) {
+          for (let x = 0; x < CHUNK; x++) {
+            const worldX = chunkX * CHUNK + x;
+            const worldY = chunkY * CHUNK + y;
+            const cellKey = `${chunkX},${chunkY},${x},${y}`;
+            const flagKey = `${worldX},${worldY}`;
+
+            let color = '#808080';
+            const flag = flaggedCellsRef.current.get(flagKey);
+            if (flag) {
+              color = flag.color || '#ff0000';
+            } else if (revealedCellsRef.current.has(cellKey)) {
+              const cell = revealedCellsRef.current.get(cellKey);
+              if (cell.isMine) color = '#000000';
+              else {
+                const n = cell.adjacentMines;
+                if (n === 0) color = '#e0e0e0';
+                else if (n === 1) color = '#ffcccc';
+                else if (n === 2) color = '#ccffcc';
+                else if (n === 3) color = '#ccccff';
+                else if (n === 4) color = '#ffffcc';
+                else if (n === 5) color = '#ffccff';
+                else if (n === 6) color = '#ccffff';
+                else color = '#dddddd';
+              }
+            } else if (seed && isMine(seed, x, y)) {
+              // Unrevealed mine
+              color = '#808080';
+            }
+
+            ctx.fillStyle = color;
+            const px = (cx + half) * CHUNK + x;
+            const py = (cy + half) * CHUNK + y;
+            ctx.fillRect(px, py, 1, 1);
+          }
+        }
+      }
+    }
+  }, [viewX, viewY, tick, minimapChunks, worldToChunk, isMine]);
+
   // Subscribe to visible chunks
   const subscribeToVisibleChunks = useCallback(() => {
     if (!ws || !connected) return;
@@ -1148,6 +1223,10 @@ function App() {
     render();
   }, [render]);
 
+  useEffect(() => {
+    renderMinimap();
+  }, [renderMinimap]);
+
   // Handle window resize
   useEffect(() => {
     const handleResize = () => {
@@ -1253,6 +1332,8 @@ function App() {
           )}
         </div>
       </div>
+
+      <canvas ref={minimapCanvasRef} className="minimap" onClick={toggleMinimapSize} />
 
       <div className="leaderboard">
         <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
