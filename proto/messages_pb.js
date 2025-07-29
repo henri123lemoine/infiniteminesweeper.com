@@ -3057,6 +3057,9 @@
              * @memberof ms
              * @interface IScoreUpdate
              * @property {number|null} [score] ScoreUpdate score
+             * @property {number|null} [worldX] ScoreUpdate worldX
+             * @property {number|null} [worldY] ScoreUpdate worldY
+             * @property {number|null} [delta] ScoreUpdate delta
              */
     
             /**
@@ -3081,6 +3084,30 @@
              * @instance
              */
             ScoreUpdate.prototype.score = 0;
+    
+            /**
+             * ScoreUpdate worldX.
+             * @member {number} worldX
+             * @memberof ms.ScoreUpdate
+             * @instance
+             */
+            ScoreUpdate.prototype.worldX = 0;
+    
+            /**
+             * ScoreUpdate worldY.
+             * @member {number} worldY
+             * @memberof ms.ScoreUpdate
+             * @instance
+             */
+            ScoreUpdate.prototype.worldY = 0;
+    
+            /**
+             * ScoreUpdate delta.
+             * @member {number} delta
+             * @memberof ms.ScoreUpdate
+             * @instance
+             */
+            ScoreUpdate.prototype.delta = 0;
     
             /**
              * Creates a new ScoreUpdate instance using the specified properties.
@@ -3108,6 +3135,12 @@
                     writer = $Writer.create();
                 if (message.score != null && Object.hasOwnProperty.call(message, "score"))
                     writer.uint32(/* id 1, wireType 0 =*/8).int32(message.score);
+                if (message.worldX != null && Object.hasOwnProperty.call(message, "worldX"))
+                    writer.uint32(/* id 2, wireType 0 =*/16).int32(message.worldX);
+                if (message.worldY != null && Object.hasOwnProperty.call(message, "worldY"))
+                    writer.uint32(/* id 3, wireType 0 =*/24).int32(message.worldY);
+                if (message.delta != null && Object.hasOwnProperty.call(message, "delta"))
+                    writer.uint32(/* id 4, wireType 0 =*/32).int32(message.delta);
                 return writer;
             };
     
@@ -3148,6 +3181,18 @@
                             message.score = reader.int32();
                             break;
                         }
+                    case 2: {
+                            message.worldX = reader.int32();
+                            break;
+                        }
+                    case 3: {
+                            message.worldY = reader.int32();
+                            break;
+                        }
+                    case 4: {
+                            message.delta = reader.int32();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -3186,6 +3231,15 @@
                 if (message.score != null && message.hasOwnProperty("score"))
                     if (!$util.isInteger(message.score))
                         return "score: integer expected";
+                if (message.worldX != null && message.hasOwnProperty("worldX"))
+                    if (!$util.isInteger(message.worldX))
+                        return "worldX: integer expected";
+                if (message.worldY != null && message.hasOwnProperty("worldY"))
+                    if (!$util.isInteger(message.worldY))
+                        return "worldY: integer expected";
+                if (message.delta != null && message.hasOwnProperty("delta"))
+                    if (!$util.isInteger(message.delta))
+                        return "delta: integer expected";
                 return null;
             };
     
@@ -3203,6 +3257,12 @@
                 var message = new $root.ms.ScoreUpdate();
                 if (object.score != null)
                     message.score = object.score | 0;
+                if (object.worldX != null)
+                    message.worldX = object.worldX | 0;
+                if (object.worldY != null)
+                    message.worldY = object.worldY | 0;
+                if (object.delta != null)
+                    message.delta = object.delta | 0;
                 return message;
             };
     
@@ -3219,10 +3279,20 @@
                 if (!options)
                     options = {};
                 var object = {};
-                if (options.defaults)
+                if (options.defaults) {
                     object.score = 0;
+                    object.worldX = 0;
+                    object.worldY = 0;
+                    object.delta = 0;
+                }
                 if (message.score != null && message.hasOwnProperty("score"))
                     object.score = message.score;
+                if (message.worldX != null && message.hasOwnProperty("worldX"))
+                    object.worldX = message.worldX;
+                if (message.worldY != null && message.hasOwnProperty("worldY"))
+                    object.worldY = message.worldY;
+                if (message.delta != null && message.hasOwnProperty("delta"))
+                    object.delta = message.delta;
                 return object;
             };
     
