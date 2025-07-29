@@ -128,6 +128,38 @@
         color: white;
       }
 
+      .zoom-controls {
+        position: fixed;
+        bottom: 10px;
+        left: 10px;
+        z-index: 10;
+      }
+      .zoom-controls button {
+        margin: 2px;
+      }
+
+      .lb-flag {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        margin-right: 4px;
+        vertical-align: middle;
+        border: 1px solid #000;
+      }
+
+      .score-popup {
+        position: absolute;
+        color: gold;
+        font-weight: bold;
+        pointer-events: none;
+        animation: pop 1s forwards;
+      }
+
+      @keyframes pop {
+        from { opacity: 1; transform: translateY(0); }
+        to { opacity: 0; transform: translateY(-20px); }
+      }
+
       @media (max-width: 768px) {
         .coordinates-debug {
           font-size: 10px;
