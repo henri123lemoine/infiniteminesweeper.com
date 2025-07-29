@@ -28,7 +28,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-//go:embed index.html proto/messages_pb.js
+//go:embed index.html proto/messages_pb.js bundle.js
 var content embed.FS
 
 const (
