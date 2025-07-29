@@ -1173,9 +1173,7 @@
                 }
                 setTick(t => t + 1);
               }
-            } else if (data.type === 'revealAck') {
-              // Handle reveal acknowledgment (no changes needed)
-                        } else if (data.type === 'flagAck') {
+            } else if (data.type === 'flagAck') {
               // Simple acknowledgment - just indicates success or failure
               if (!data.ok) {
                 // Flag failed - could show user feedback here if needed

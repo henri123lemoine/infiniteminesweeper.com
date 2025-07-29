@@ -13,7 +13,7 @@
 
 ## 1. High-Level Stack
 
-```
+```bash
 browser (React + WebSocket)         // optimistic UI, rollback netcode-lite
         │
         │  protobuf + zstd frames
@@ -181,171 +181,19 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 
 **Basic Logging:**
 
-- Structured JSON logs to stdout/stderr
 - Key events: connections, reveals, rate limit hits, errors
 - Performance metrics: reveal latency, memory usage, active connections
-
-**Health Checks:**
-
-- `/health` endpoint returns server status
-- `/metrics` endpoint for basic Prometheus metrics
-- Connection count, reveal rate, memory usage
-
-**Error Handling:**
-
-- Graceful degradation on high load
-- Circuit breaker for external dependencies
-- Rate limiting with exponential backoff
-
-## 10. Client Contract (what _must_ live client-side)
-
-- **WorldSeed** (one 64-bit constant).
-- **ChunkSize**.
-- `HMAC(secret, "cx:cy")` (secret requested from server).
-- `bombFromHash(splitmix64(seed, x, y))` – deterministic; identical to server helper for dispute resolution.
-- Local optimistic board copy & rollback buffer (depth 50).
-- Keep-alive ping every 10 s; disconnect after 30 s silence.
 
 ## A few additional notes
 
 - The content of cells should never be stored anywhere (determined from cell coordinates with SplitMix64). Nor seeds (determined from chunk coordinates).
 - The server stores the world state (as in, what cells are revealed) in a bitset, as well as the leaderboard.
 
-# Implementation Plan
-
-## Phase 1: Core Game Engine (Essential)
-
-### 1. **Chunk-based Coordinate System**
-
-- Define `chunkID` struct with X,Y coordinates
-- Implement coordinate conversion between world position and chunk position
-- Create chunk bitset data structure (64×64 bits = 512 bytes)
-- Add helper functions for chunk boundary calculations
-
-### 2. **Deterministic Bomb Generation**
-
-- Implement HMAC-SHA256 seed generation: `HMAC(masterSecret, "cx:cy")`
-- Create `bombFromHash()` function using splitmix64 algorithm
-- Ensure identical bomb placement logic on both client and server
-- Add seed caching mechanism
-
-### 3. **Basic Server State Management**
-
-- Set up single-core discipline with `runtime.GOMAXPROCS(1)`
-- Implement global RWMutex for world state protection
-- Create core data structures: `chunks`, `scores`, `subs` maps
-- Add basic memory management for chunk storage
-
-### 4. **WebSocket Connection Handler**
-
-- Set up WebSocket server with connection management
-- Implement player ID assignment system
-- Create connection lifecycle management (connect/disconnect)
-- Add basic message routing infrastructure
-
-### 5. **Reveal System (Core Game Logic)**
-
-- Implement first-writer-wins reveal mechanism
-- Add atomic reveal validation (check if already revealed)
-- Create reveal broadcasting to 3×3 neighborhood
-- Update player scores on successful reveals
-
-## Phase 2: Networking & Real-time Communication
-
-### 6. **Protocol Message Handling**
-
-- Implement protobuf message definitions for all game messages
-- Add message compression with zstd
-- Create message batching system (≤200ms batches)
-- Handle `SeedReq/SeedResp`, `RevealReq/RevealAck`, `Broadcast` messages
-
-### 7. **Subscription System**
-
-- Implement chunk subscription mechanism
-- Add subscription cleanup on disconnect
-- Create efficient fan-out to subscribed players
-- Handle subscription updates when players move
-
-### 8. **Rate Limiting**
-
-- Implement per-player token bucket for seed requests (200/min)
-- Add reveal rate limiting protection
-- Create soft-ban mechanism for suspicious activity
-- Add rate limit violation logging
-
-### 9. **Leaderboard System**
-
-- Implement real-time leaderboard updates
-- Add HTTP endpoint for leaderboard queries (/leaderboard)
-- Create top-N leaderboard with caching (every 10s)
-- Handle leaderboard broadcasts to connected players
-
-## Phase 3: Client-Side Implementation
-
-### 10. **React Frontend Setup**
-
-- Create infinite scrolling canvas/grid component
-- Implement viewport management for visible chunks
-- Add mouse interaction handlers for cell reveals
-- Create optimistic UI with local state management
-
-### 11. **WebSocket Client Integration**
-
-- Implement WebSocket connection with auto-reconnect
-- Add message handling for all server message types
-- Create client-side state synchronization
-- Handle connection state UI feedback
-
-### 12. **Client-Side Game Logic**
-
-- Implement local bomb calculation for immediate feedback
-- Add optimistic reveal system with rollback capability
-- Create flag placement (client-side only)
-- Handle reveal conflict resolution with server
-
-### 13. **UI/UX Polish**
-
-- Add visual feedback for reveals, numbers, bombs
-- Implement smooth scrolling and zoom controls
-- Create leaderboard display component
-- Add connection status and player count indicators
-
-## Phase 4: Production Readiness
-
-### 14. **Basic Persistence**
-
-- Implement periodic snapshot saving to disk (every 2 min or 5k reveals)
-- Add snapshot loading on server startup
-- Create basic state recovery mechanism
-- Handle graceful shutdown with state preservation
-
-### 15. **Health Monitoring**
-
-- Add `/health` endpoint for server status
-- Implement basic metrics collection
-- Create structured logging to stdout/stderr
-- Add performance monitoring (reveal latency, memory usage)
-
-### 16. **Error Handling & Resilience**
-
-- Implement graceful degradation under high load
-- Add circuit breaker patterns for critical paths
-- Create proper error boundaries in React frontend
-- Handle edge cases (disconnections, malformed messages)
-
-## Implementation Notes
-
-- **Start with Phase 1** - get basic game working locally first
-- **Test thoroughly** after each phase before moving to next
-- **Focus on correctness** over performance initially
-- **Single-core discipline** is crucial - don't parallelize prematurely
-- **Memory efficiency** matters more than speed for this scale
-- **Client-server state sync** is the most complex part - handle carefully
-
 # OTHER TODOS
 
+- [ ] Flow reveals should be sent in batches, not one by one. E.g.: user encounters a large flow, sends this full area (which may be incompassing multiple chunks) in a message to the server; the server checks that this is a single valid flow, and if so, gives score, counts this as 1 click for purposes of rate limiting, and broadcasts all the reveals to the 3x3 neighborhood, again in a single message.
 - [ ] Stop people from joining the game with a different id but the same exact username as someone else
-- [x] Better mobile support; e.g. u gotta reload when joining on mobile for some reason or else it disconnects or smth? (~done, see )
+- [x] Better mobile support; e.g. u gotta reload when joining on mobile for some reason or else it disconnects or smth?
 - [x] Self score at the top
 - [x] Better scoring system
 - [ ] Server stores last known player location (x,y) and sends it to the client on join, as well as subscriptions to adjacent chunks. That way, instead of having to call hello, then call subscribe on each chunk in a 3x3 grid, you just call hello and the server deals with connecting you to what you need. Actually, maybe frontend also stores the offset to the center of the chunk you're in, so that all that the server need to store is the chunk you're in.
@@ -357,8 +205,8 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 - [ ] Lazy‑load React via `defer`/`async` + bundle with esbuild for ~70% initial JS size
 - [ ] Use `devicePixelRatio` when sizing the `<canvas>` to avoid blurry tiles on mobile
 - [ ] Persist `viewX/viewY` in `sessionStorage` so refreshes don’t reset the camera
-
-Flags:
+- [ ] When the server finds itself being basically empty, it should check the latest snapshot for validation. In fact, the server should occasionally check this
+- [ ] Cells should be 32x32 pixels.
 
 - [x] Flags (can be client side only for now, as in you can right click to flag but it doesn't do anything concrete other than show a flag icon)
 - [x] Color wheel for user flags (on first join)
@@ -366,3 +214,33 @@ Flags:
 - [x] Chords (client-side)
 - [ ] Cleaner looking flags
 - [x] Server-side flags for scoring system, remove undoing option
+
+- [ ] Add message compression with zstd
+- [ ] Implement per-player token bucket for seed requests (200/min)
+- [ ] Add reveal rate limiting protection
+- [ ] Create soft-ban mechanism for suspicious activity
+- [ ] Add rate limit violation logging
+- [ ] Add HTTP endpoint for leaderboard queries (/leaderboard)
+- [ ] Implement zoom controls
+- [ ] Add user flag appearance to leaderboard display component
+- [ ] Add connection status and player count indicators
+- [ ] Usernames max 20 characters (I hate fun)
+- [ ] Way to see user statistics (e.g. how many reveals, how many flags, how many exploded bombs, points over time, etc.)
+- [ ] Client should occasionally hash local chunk reveals and send that to server for validation that there is match. If there is a mismatch, the client is unsubscribe and must resubscribe to the chunk.
+
+## Game Fun
+
+- [ ] Large-scale variance in bomb density. Some regions, which are rare but which you can reasonably gradient ascent towards, have a much higher density of bombs than others, and receive accordingly high point multipliers; while some regions are quite safe, with weaker players organically gravitating towards them (on the virtue of being less capable of solving the higher density regions).
+- [ ] More points for higher density of active players in a region. A button to pay coins to shoot yourself to this location of globally highest player density.
+- [ ] Reveals are only allowed for cells that are two-adjacent to a revealed cell. This encourages the revealed map into a
+
+## Math
+
+In theory, a chunk should contain:
+
+- 8 bytes per line x 64 lines = 512 bytes per chunk
+- Add to that flags
+
+I think we might be able to handle more than a 3x3 grid of chunks per player. Something as large as 7x7 might make sense. Hmm, this could permit a minimap of variating sizes, possible to toggle between 3x3 and 5x5 and 7x7 chunks.
+
+Speaking of the minimap. It's basically an image. It's built and rendered entirely from the client. So we're basically just turning e.g. (3 chunks x 64 cells)^2 = 192x192 into a binary black-and-white image. Oh wait, maybe not binary; we chould have pixels that are the color of flags, or black for bomb, slightly red for revealed 1, slightly green for revealed 2, etc. That could be quite nice. One of the most important things though for this game to work is to get the strong feeling that the map is teeming with opponents, so we really need a live update of this minimap as we move around. Worried this is going to be expensive. Might need to look into video streaming, because this is basically what we're going to be doing.
