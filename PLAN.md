@@ -156,19 +156,16 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 
 ## Performance & Optimization
 
-- [ ] Add reveal rate limiting protection
 - [ ] Add message compression with zstd
 - [ ] Flow reveals should be sent in batches, not one by one
-- [ ] Implement per-player token bucket for seed requests (200/min)
 - [ ] If a chunk is fully revealed, send condensed message instead of full chunk data
-- [ ] Use `devicePixelRatio` when sizing the `<canvas>` to avoid blurry tiles on mobile
-- [ ] Lazy-load React via `defer`/`async` + bundle with esbuild for ~70% initial JS size
 
 ## Server Infrastructure & Security
 
 - [ ] When server is empty, validate against latest snapshot
 - [ ] Per-IP or per-/24 subnet connection caps
-- [ ] Origin check + SameSite cookies for CSRF
+- [ ] Add reveal rate limiting protection
+- [ ] Implement per-player token bucket for seed requests (200/min)
 - [ ] Create soft-ban mechanism for suspicious activity
 - [ ] Add rate limit violation logging
 - [ ] Expose `/admin/debug/pprof` behind basic-auth on Fly for free profiling
@@ -176,14 +173,13 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 
 ## Client Features & UX
 
-- [ ] Show score gained for reveals/flags next to where it happened
+- [x] Show score gained for reveals/flags next to where it happened
+  - [ ] Done, but must make it more performant, somehow, flow reveals are quite slow atm. This may be as simple as implementing the batch reveals, and setting that as a single score delta message.
 - [ ] Persist `viewX/viewY` in `sessionStorage` so refreshes don't reset camera
 - [ ] Server stores last known player location and auto-subscribes to adjacent chunks on join
-- [ ] Minimap like in old game version
-- [ ] Implement zoom controls
+- [x] Implement zoom controls
+  - [ ] Perhaps instead of + and - zooming, zooming should be done with mouse wheel or similar.
 - [ ] Add connection status and player count indicators
-- [ ] Cleaner looking flags
-- [ ] Better mobile support fixes
 
 ## Data Integrity & Validation
 
@@ -191,6 +187,7 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 - [ ] Add HTTP endpoint for leaderboard queries (/leaderboard)
 - [ ] Way to see user statistics (reveals, flags, exploded bombs, points over time, etc.)
 - [ ] Add user flag appearance to leaderboard display component
+- [ ] Website page; rather than just direct joining the game, with a button to join, if that makes sense? Pages for leaderboard, about, user profile / stats, etc.
 
 ## Game Balance & Fun
 
@@ -202,7 +199,6 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 ## Quality of Life
 
 - [ ] Usernames max 20 characters
-- [ ] Cells should be 32x32 pixels
 - [ ] Color wheel alignment fix for user flags
 
 ## Completed Items
@@ -214,6 +210,12 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 - [x] Self score display at the top
 - [x] Better scoring system
 - [x] Implement WAL and truncation on snapshot success
+- [x] Cleaner looking flags
+- [x] Better mobile support fixes
+- [x] Minimap like in old game version
+- [x] Use `devicePixelRatio` when sizing the `<canvas>` to avoid blurry tiles on mobile
+- [x] Lazy-load React via `defer`/`async` + bundle with esbuild for ~70% initial JS size
+- [x] Origin check + SameSite cookies for CSRF
 
 ## Miscellaneous
 
