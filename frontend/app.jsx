@@ -48,6 +48,21 @@ function App() {
   // Camera/viewport state
   const [viewX, setViewX] = useState(0);
   const [viewY, setViewY] = useState(0);
+  const [zoom, setZoom] = useState(1);
+  const handleZoom = useCallback((delta) => {
+    setZoom(z => {
+      const newZoom = Math.min(Math.max(z + delta, 0.5), 3);
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const centerX = (viewX + rect.width / 2) / z;
+        const centerY = (viewY + rect.height / 2) / z;
+        setViewX(newZoom * centerX - rect.width / 2);
+        setViewY(newZoom * centerY - rect.height / 2);
+      }
+      return newZoom;
+    });
+  }, [viewX, viewY]);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0, viewX: 0, viewY: 0 });
   const dragTimeoutRef = useRef(null);
@@ -57,6 +72,9 @@ function App() {
   const subscribedChunks = useRef(new Set());
   const revealedCellsRef = useRef(new Map());
   const flaggedCellsRef = useRef(new Map()); // worldX,worldY -> {color: string, playerId: number}
+  const playerColorsRef = useRef(new Map());
+  const pendingScoreCells = useRef([]);
+  const [scorePopups, setScorePopups] = useState([]);
   const [tick, setTick] = useState(0);
 
   // Leaderboard visibility and number formatting
@@ -221,7 +239,8 @@ function App() {
   // Constants
   const CHUNK = 64;
   const MINE_COUNT = 20;
-  const CELL_SIZE = 20;
+  const BASE_CELL_SIZE = 32;
+  const CELL_SIZE = BASE_CELL_SIZE * zoom;
 
   // Deterministic helpers
   const splitmix64 = useCallback((state) => {
@@ -250,7 +269,7 @@ function App() {
     const worldY = Math.floor((canvasY + viewY) / CELL_SIZE);
 
     return { x: worldX, y: worldY };
-  }, [viewX, viewY]);
+  }, [viewX, viewY, CELL_SIZE]);
 
   // Convert world coordinates to chunk and local coordinates
   const worldToChunk = useCallback((worldX, worldY) => {
@@ -399,6 +418,8 @@ function App() {
       revealedCellsRef.current.set(cell.cellKey, optimisticReveal);
       ensureChunkSubscription(cell.chunkX, cell.chunkY);
 
+      pendingScoreCells.current.push({x: cell.chunkX * CHUNK + cell.localX, y: cell.chunkY * CHUNK + cell.localY});
+
       ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: cell.chunkX, Y: cell.chunkY }, x: cell.localX, y: cell.localY } })));
     }
 
@@ -425,6 +446,7 @@ function App() {
       if (revealedCellsRef.current.has(cellKey)) return;
 
       // Send flag request to server
+      pendingScoreCells.current.push({x: worldX, y: worldY});
       ws.send(encodeMsg(PB.Msg.create({ flag: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } })));
       setTick(t => t + 1);
       return;
@@ -499,6 +521,7 @@ function App() {
       revealedCellsRef.current.set(key, optimisticReveal);
       setTick(t => t + 1);
 
+      pendingScoreCells.current.push({x: worldX, y: worldY});
       ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } })));
       return;
     }
@@ -523,6 +546,7 @@ function App() {
       revealedCellsRef.current.set(key, optimisticReveal);
       setTick(t => t + 1);
 
+      pendingScoreCells.current.push({x: worldX, y: worldY});
       ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } })));
     }
   }, [ws, connected, worldToChunk, ensureChunkSubscription, isMine, countAdjacentMines, floodFillReveal]);
@@ -584,17 +608,19 @@ function App() {
 
     const ctx = canvas.getContext('2d');
     const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
 
-    canvas.width = rect.width;
-    canvas.height = rect.height;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     ctx.fillStyle = '#c0c0c0';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const startWorldX = Math.floor(viewX / CELL_SIZE);
     const startWorldY = Math.floor(viewY / CELL_SIZE);
-    const endWorldX = Math.ceil((viewX + canvas.width) / CELL_SIZE);
-    const endWorldY = Math.ceil((viewY + canvas.height) / CELL_SIZE);
+    const endWorldX = Math.ceil((viewX + rect.width) / CELL_SIZE);
+    const endWorldY = Math.ceil((viewY + rect.height) / CELL_SIZE);
 
     // Draw all cells (unrevealed first, then revealed on top)
     // First pass: Draw all unrevealed cells with 3D effect
@@ -604,8 +630,8 @@ function App() {
         const screenY = worldY * CELL_SIZE - viewY;
 
         // Skip if not visible
-        if (screenX + CELL_SIZE < 0 || screenX > canvas.width ||
-            screenY + CELL_SIZE < 0 || screenY > canvas.height) {
+        if (screenX + CELL_SIZE < 0 || screenX > rect.width ||
+            screenY + CELL_SIZE < 0 || screenY > rect.height) {
           continue;
         }
 
@@ -659,8 +685,8 @@ function App() {
       const screenY = worldY * CELL_SIZE - viewY;
 
       // Skip if not visible
-      if (screenX + CELL_SIZE < 0 || screenX > canvas.width ||
-          screenY + CELL_SIZE < 0 || screenY > canvas.height) {
+      if (screenX + CELL_SIZE < 0 || screenX > rect.width ||
+          screenY + CELL_SIZE < 0 || screenY > rect.height) {
         return;
       }
 
@@ -695,8 +721,8 @@ function App() {
       const screenY = worldY * CELL_SIZE - viewY;
 
       // Skip if not visible
-      if (screenX + CELL_SIZE < 0 || screenX > canvas.width ||
-          screenY + CELL_SIZE < 0 || screenY > canvas.height) {
+      if (screenX + CELL_SIZE < 0 || screenX > rect.width ||
+          screenY + CELL_SIZE < 0 || screenY > rect.height) {
         return;
       }
 
@@ -709,33 +735,25 @@ function App() {
       // Just draw the flag content on top
 
       // Draw custom flag with player color
-      const flagPoleX = screenX + CELL_SIZE / 2 - 1;
-      const flagTopY = screenY + 3;
-      const flagBottomY = screenY + CELL_SIZE - 3;
-      const flagWidth = 8;
-      const flagHeight = 6;
+      const poleX = screenX + CELL_SIZE * 0.3;
+      const poleTop = screenY + CELL_SIZE * 0.1;
+      const poleHeight = CELL_SIZE * 0.8;
+      const flagWidth = CELL_SIZE * 0.5;
+      const flagHeight = CELL_SIZE * 0.6;
 
-      // Draw flag pole (dark gray)
       ctx.fillStyle = '#333';
-      ctx.fillRect(flagPoleX, flagTopY, 2, flagBottomY - flagTopY);
+      ctx.fillRect(poleX, poleTop, 2, poleHeight);
 
-      // Draw flag triangle with flag color
       const flagColor = flagData?.color || playerColor;
       ctx.fillStyle = flagColor;
-      ctx.beginPath();
-      ctx.moveTo(flagPoleX + 2, flagTopY);
-      ctx.lineTo(flagPoleX + 2 + flagWidth, flagTopY + flagHeight / 2);
-      ctx.lineTo(flagPoleX + 2, flagTopY + flagHeight);
-      ctx.closePath();
-      ctx.fill();
+      ctx.fillRect(poleX + 2, poleTop, flagWidth, flagHeight);
 
-      // Add a subtle border to the flag
       ctx.strokeStyle = '#000';
       ctx.lineWidth = 0.5;
-      ctx.stroke();
+      ctx.strokeRect(poleX + 2, poleTop, flagWidth, flagHeight);
     });
 
-  }, [viewX, viewY, tick, getNumberColor, worldToChunk, playerColor, draw3DCell]);
+  }, [viewX, viewY, tick, getNumberColor, worldToChunk, playerColor, draw3DCell, CELL_SIZE]);
 
   // Subscribe to visible chunks
   const subscribeToVisibleChunks = useCallback(() => {
@@ -772,7 +790,7 @@ function App() {
         ensureChunkUnsubscription(cx, cy);
       }
     });
-  }, [ws, connected, viewX, viewY, ensureChunkSubscription, ensureChunkUnsubscription]);
+  }, [ws, connected, viewX, viewY, ensureChunkSubscription, ensureChunkUnsubscription, CELL_SIZE]);
 
   // Mouse event handlers
   const handleMouseDown = useCallback((e) => {
@@ -1053,6 +1071,7 @@ function App() {
           color: data.color,
           playerId: data.playerId
         });
+        playerColorsRef.current.set(data.playerId, data.color);
 
         setTick(t => t + 1);
 
@@ -1116,7 +1135,20 @@ function App() {
         }
       } else if (data.type === 'scoreUpdate') {
         if (typeof data.score === 'number') {
-          setPlayerScore(data.score);
+          setPlayerScore(prev => {
+            const delta = data.score - prev;
+            if (delta !== 0) {
+              const cell = pendingScoreCells.current.shift();
+              if (cell) {
+                const id = Math.random().toString(36).slice(2);
+                setScorePopups(p => [...p, { id, worldX: cell.x, worldY: cell.y, delta }]);
+                setTimeout(() => {
+                  setScorePopups(p => p.filter(s => s.id !== id));
+                }, 1000);
+              }
+            }
+            return data.score;
+          });
         }
       }
     };
@@ -1163,8 +1195,9 @@ function App() {
   }, [leaderboard]);
 
   // Calculate current world position for debugging
-  const centerWorldX = Math.floor((viewX + (canvasRef.current?.width || 0) / 2) / CELL_SIZE);
-  const centerWorldY = Math.floor((viewY + (canvasRef.current?.height || 0) / 2) / CELL_SIZE);
+  const centerRect = canvasRef.current?.getBoundingClientRect();
+  const centerWorldX = Math.floor((viewX + (centerRect?.width || 0) / 2) / CELL_SIZE);
+  const centerWorldY = Math.floor((viewY + (centerRect?.height || 0) / 2) / CELL_SIZE);
   const { chunkX: centerChunkX, chunkY: centerChunkY } = worldToChunk(centerWorldX, centerWorldY);
 
   return (
@@ -1241,6 +1274,16 @@ function App() {
         >
           <canvas ref={canvasRef} id="game-canvas" />
 
+          {scorePopups.map(p => {
+            const x = p.worldX * CELL_SIZE - viewX;
+            const y = p.worldY * CELL_SIZE - viewY;
+            return (
+              <div key={p.id} className="score-popup" style={{left: x, top: y}}>
+                {p.delta > 0 ? `+${p.delta}` : p.delta}
+              </div>
+            );
+          })}
+
           {DEV_MODE && (
             <div className="coordinates-debug">
               <div className={`connection-status ${connected ? "connected" : "disconnected"}`}>
@@ -1267,6 +1310,7 @@ function App() {
               <ol>
                 {topPlayers.map(p => (
                   <li key={p.playerId}>
+                    <span className="lb-flag" style={{backgroundColor: playerColorsRef.current.get(p.playerId) || '#ccc'}} />
                     {p.name ? p.name : `Player ${p.playerId}`}: {formatScore(p.score)}
                   </li>
                 ))}
@@ -1276,6 +1320,10 @@ function App() {
             )}
           </>
         )}
+      </div>
+      <div className="zoom-controls">
+        <button onClick={() => handleZoom(0.25)}>+</button>
+        <button onClick={() => handleZoom(-0.25)}>-</button>
       </div>
     </div>
   );
