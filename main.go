@@ -29,7 +29,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-//go:embed index.html messages_pb.js
+//go:embed index.html proto/messages_pb.js
 var content embed.FS
 
 const (

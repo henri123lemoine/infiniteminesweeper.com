@@ -72,12 +72,8 @@ Running Benchmarks
 go test -run=Bench -bench=. -v
 ```
 
-Generate protobuf files for Go and JavaScript:
+Generate protobuf files:
 
 ```bash
-# Go
-protoc --go_out=. --go_opt=paths=source_relative proto/messages.proto
-
-# JavaScript
-npx pbjs -t static-module -w closure -o messages_pb.js proto/messages.proto
+./scripts/update-proto.sh
 ```
