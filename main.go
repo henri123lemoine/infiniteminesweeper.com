@@ -775,6 +775,11 @@ func (s *Server) readPump(player *Player) {
 		switch t := msg.Payload.(type) {
 		case *pb.Msg_Reveal:
 			r := t.Reveal
+			if r.Coord == nil {
+				ack := &pb.Msg{Payload: &pb.Msg_RevealAck{RevealAck: &pb.RevealAck{Ok: false}}}
+				s.sendToPlayer(player.ID, mustProto(ack))
+				continue
+			}
 
 			// Rate limiting
 			player.Mailbox <- func(pl *Player) {
@@ -800,6 +805,11 @@ func (s *Server) readPump(player *Player) {
 
 		case *pb.Msg_Flag:
 			m := t.Flag
+			if m.Coord == nil {
+				ack := &pb.Msg{Payload: &pb.Msg_FlagAck{FlagAck: &pb.FlagAck{Ok: false}}}
+				s.sendToPlayer(player.ID, mustProto(ack))
+				continue
+			}
 			chunkID := ChunkID{X: m.Coord.ChunkX, Y: m.Coord.ChunkY}
 			cell := int(m.Coord.Cell)
 			x := cell % ChunkSize
