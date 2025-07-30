@@ -27,7 +27,7 @@ func init() {
 // PERSISTENCE CONSTANTS
 const (
 	// S3 configuration
-	defaultBucketName = "infinite-minesweeper-snapshots"
+	defaultBucketName = "infiniteminesweeper"
 	snapshotKey       = "snapshot.gob.gz"
 	walKey            = "wal.log"
 
@@ -35,10 +35,6 @@ const (
 	snapshotFileName = "snapshot.gob.gz"
 	snapshotTmpName  = "snapshot.tmp.gz"
 	walFileName      = "wal.log"
-
-	// Timing
-	walFlushInterval = 2 * time.Minute
-	snapshotInterval = 30 * time.Minute
 )
 
 // WAL entry types

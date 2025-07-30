@@ -6,7 +6,8 @@ import React, {
   useMemo,
 } from "react";
 import ReactDOM from "react-dom";
-const DEV_MODE = true;
+
+// DEV_MODE is set by esbuild in build.js
 const log = DEV_MODE ? console.log.bind(console) : () => {};
 
 const PB = protobuf.roots["default"].ms;
