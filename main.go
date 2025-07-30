@@ -36,6 +36,10 @@ const (
 	SendBufSize      = 4096  // outbound msgs kept per player before back‑pressure
 	MineCount        = 20    // mines per 100 cells (20% chance)
 	MaxRevealsPerMin = 10000 // relaxed flood‑fill budget
+	// CompressThreshold defines the minimum size (in bytes) before
+	// protobuf messages are gzipped. Smaller payloads are sent
+	// uncompressed to avoid gzip overhead.
+	CompressThreshold = 100
 )
 
 type ChunkID struct {
@@ -123,14 +127,20 @@ func (tb *TokenBucket) Take() bool {
 	return false
 }
 
-// mustProto marshals and gzips a protobuf message
+// mustProto marshals a protobuf message and gzips it only if the
+// serialized size exceeds CompressThreshold.
 func mustProto(m *pb.Msg) []byte {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
 	b, err := proto.Marshal(m)
 	if err != nil {
 		panic(err)
 	}
+	if len(b) < CompressThreshold {
+		// Send small payloads uncompressed to avoid gzip overhead.
+		return b
+	}
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
 	if _, err := gz.Write(b); err != nil {
 		panic(err)
 	}
@@ -652,16 +662,22 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
-	gz, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		conn.Close()
-		return
-	}
-	pbBytes, err := io.ReadAll(gz)
-	gz.Close()
-	if err != nil {
-		conn.Close()
-		return
+
+	var pbBytes []byte
+	if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
+		gz, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			conn.Close()
+			return
+		}
+		pbBytes, err = io.ReadAll(gz)
+		gz.Close()
+		if err != nil {
+			conn.Close()
+			return
+		}
+	} else {
+		pbBytes = data
 	}
 	var msg pb.Msg
 	if err := proto.Unmarshal(pbBytes, &msg); err != nil {
@@ -762,15 +778,22 @@ func (s *Server) readPump(player *Player) {
 		if err != nil {
 			break
 		}
-		gz, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			continue
+
+		var pbData []byte
+		if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
+			gz, err := gzip.NewReader(bytes.NewReader(data))
+			if err != nil {
+				continue
+			}
+			pbData, err = io.ReadAll(gz)
+			gz.Close()
+			if err != nil {
+				continue
+			}
+		} else {
+			pbData = data
 		}
-		pbData, err := io.ReadAll(gz)
-		gz.Close()
-		if err != nil {
-			continue
-		}
+
 		var msg pb.Msg
 		if err := proto.Unmarshal(pbData, &msg); err != nil {
 			continue
