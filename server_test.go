@@ -21,23 +21,23 @@ import (
 )
 
 func encodeMsg(m *pb.Msg) []byte {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	b, _ := proto.Marshal(m)
-	gz.Write(b)
-	gz.Close()
-	return buf.Bytes()
+	return mustProto(m)
 }
 
 func decodeMsg(data []byte) (*pb.Msg, error) {
-	gz, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	b, err := io.ReadAll(gz)
-	gz.Close()
-	if err != nil {
-		return nil, err
+	var b []byte
+	if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
+		gz, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		b, err = io.ReadAll(gz)
+		gz.Close()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		b = data
 	}
 	var m pb.Msg
 	if err := proto.Unmarshal(b, &m); err != nil {
