@@ -50,12 +50,32 @@ function App() {
   const [nameInput, setNameInput] = useState(storedName);
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
+  const canvasSizeRef = useRef({ w: 0, h: 0, dpr: 1 });
 
   // Camera/viewport state
   const storedViewX = parseInt(sessionStorage.getItem("viewX") || "0", 10);
   const storedViewY = parseInt(sessionStorage.getItem("viewY") || "0", 10);
   const [viewX, setViewX] = useState(storedViewX);
   const [viewY, setViewY] = useState(storedViewY);
+  const viewRef = useRef({ x: storedViewX, y: storedViewY });
+  const rafRef = useRef(null);
+  const commitViewRef = useCallback(() => {
+    setViewX(viewRef.current.x);
+    setViewY(viewRef.current.y);
+  }, []);
+  const scheduleViewUpdate = useCallback(
+    (x, y) => {
+      viewRef.current.x = x;
+      viewRef.current.y = y;
+      if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = null;
+          commitViewRef();
+        });
+      }
+    },
+    [commitViewRef],
+  );
   const [zoom, setZoom] = useState(1);
   const handleZoom = useCallback(
     (delta) => {
@@ -64,15 +84,14 @@ function App() {
         const canvas = canvasRef.current;
         if (canvas) {
           const rect = canvas.getBoundingClientRect();
-          const centerX = (viewX + rect.width / 2) / z;
-          const centerY = (viewY + rect.height / 2) / z;
-          setViewX(newZoom * centerX - rect.width / 2);
-          setViewY(newZoom * centerY - rect.height / 2);
+          const centerX = (viewRef.current.x + rect.width / 2) / z;
+          const centerY = (viewRef.current.y + rect.height / 2) / z;
+          scheduleViewUpdate(newZoom * centerX - rect.width / 2, newZoom * centerY - rect.height / 2);
         }
         return newZoom;
       });
     },
-    [viewX, viewY],
+    [scheduleViewUpdate],
   );
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({
@@ -929,9 +948,15 @@ function App() {
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
 
-    // Setup canvas
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
+    if (
+      rect.width !== canvasSizeRef.current.w ||
+      rect.height !== canvasSizeRef.current.h ||
+      dpr !== canvasSizeRef.current.dpr
+    ) {
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      canvasSizeRef.current = { w: rect.width, h: rect.height, dpr };
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     // Clear background
@@ -1165,8 +1190,8 @@ function App() {
       setDragStart({
         x: e.clientX,
         y: e.clientY,
-        viewX,
-        viewY,
+        viewX: viewRef.current.x,
+        viewY: viewRef.current.y,
       });
 
       // Set a timeout to enable dragging after a delay
@@ -1174,7 +1199,7 @@ function App() {
         setIsDragging(true);
       }, 150); // delay before considering it a drag
     },
-    [viewX, viewY, screenToWorld, handleCellClick],
+    [screenToWorld, handleCellClick],
   );
 
   const handleMouseMove = useCallback(
@@ -1197,11 +1222,10 @@ function App() {
         const deltaX = e.clientX - dragStart.x;
         const deltaY = e.clientY - dragStart.y;
 
-        setViewX(dragStart.viewX - deltaX);
-        setViewY(dragStart.viewY - deltaY);
+        scheduleViewUpdate(dragStart.viewX - deltaX, dragStart.viewY - deltaY);
       }
     },
-    [isDragging, dragStart],
+    [isDragging, dragStart, scheduleViewUpdate],
   );
 
   const handleMouseUp = useCallback(
@@ -1219,20 +1243,25 @@ function App() {
 
       setIsDragging(false);
       setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        commitViewRef();
+      }
       if (ws && connected) {
         ws.send(
           encodeMsg(
             PB.Msg.create({
               viewUpdate: {
-                viewX: Math.floor(viewX),
-                viewY: Math.floor(viewY),
+                viewX: Math.floor(viewRef.current.x),
+                viewY: Math.floor(viewRef.current.y),
               },
             }),
           ),
         );
       }
     },
-    [isDragging, dragStart, screenToWorld, handleCellClick],
+    [isDragging, dragStart, screenToWorld, handleCellClick, commitViewRef],
   );
 
   // Handle context menu (prevent default right-click menu)
@@ -1249,8 +1278,8 @@ function App() {
         setDragStart({
           x: touch.clientX,
           y: touch.clientY,
-          viewX,
-          viewY,
+          viewX: viewRef.current.x,
+          viewY: viewRef.current.y,
         });
 
         // Start long press timer for flagging
@@ -1291,12 +1320,11 @@ function App() {
           const deltaX = touch.clientX - dragStart.x;
           const deltaY = touch.clientY - dragStart.y;
 
-          setViewX(dragStart.viewX - deltaX);
-          setViewY(dragStart.viewY - deltaY);
+          scheduleViewUpdate(dragStart.viewX - deltaX, dragStart.viewY - deltaY);
         }
       }
     },
-    [isDragging, dragStart],
+    [isDragging, dragStart, scheduleViewUpdate],
   );
 
   const handleTouchEnd = useCallback(
@@ -1319,20 +1347,25 @@ function App() {
 
       setIsDragging(false);
       setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        commitViewRef();
+      }
       if (ws && connected) {
         ws.send(
           encodeMsg(
             PB.Msg.create({
               viewUpdate: {
-                viewX: Math.floor(viewX),
-                viewY: Math.floor(viewY),
+                viewX: Math.floor(viewRef.current.x),
+                viewY: Math.floor(viewRef.current.y),
               },
             }),
           ),
         );
       }
     },
-    [isDragging, dragStart, screenToWorld, handleCellClick],
+    [isDragging, dragStart, screenToWorld, handleCellClick, commitViewRef],
   );
 
   // WebSocket setup
@@ -1661,6 +1694,12 @@ function App() {
     sessionStorage.setItem("viewX", String(viewX));
     sessionStorage.setItem("viewY", String(viewY));
   }, [viewX, viewY]);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
 
   // Render when view or game state changes
   useEffect(() => {
