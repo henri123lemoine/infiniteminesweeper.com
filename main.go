@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"regexp"
 	"strings"
 
 	pb "infinite-minesweeper/proto"
@@ -303,6 +304,12 @@ func (s *Server) buildLeaderboardUnsafe() {
 // Bounds checking for reveal requests
 func (s *Server) isValidCoordinate(x, y int) bool {
 	return x >= 0 && x < ChunkSize && y >= 0 && y < ChunkSize
+}
+
+var usernameRegex = regexp.MustCompile(`^[A-Za-z0-9_-]{1,20}$`)
+
+func isValidUsername(name string) bool {
+	return usernameRegex.MatchString(name)
 }
 
 // TODO: validate, and possibly add speed score
@@ -669,7 +676,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hello := msg.GetHello()
-	if hello == nil {
+	if hello == nil || !isValidUsername(hello.Name) {
 		conn.Close()
 		return
 	}
