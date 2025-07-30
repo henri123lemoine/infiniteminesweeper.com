@@ -12,6 +12,7 @@ message Reveal {
   int32 x = 2;
   int32 y = 3;
   int32 playerId = 4;
+  bool flow = 5; // true if this is a flow reveal request
 }
 
 message Flag {

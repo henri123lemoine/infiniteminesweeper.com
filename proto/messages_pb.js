@@ -256,6 +256,7 @@
              * @property {number|null} [x] Reveal x
              * @property {number|null} [y] Reveal y
              * @property {number|null} [playerId] Reveal playerId
+             * @property {boolean|null} [flow] Reveal flow
              */
     
             /**
@@ -306,6 +307,14 @@
             Reveal.prototype.playerId = 0;
     
             /**
+             * Reveal flow.
+             * @member {boolean} flow
+             * @memberof ms.Reveal
+             * @instance
+             */
+            Reveal.prototype.flow = false;
+    
+            /**
              * Creates a new Reveal instance using the specified properties.
              * @function create
              * @memberof ms.Reveal
@@ -337,6 +346,8 @@
                     writer.uint32(/* id 3, wireType 0 =*/24).int32(message.y);
                 if (message.playerId != null && Object.hasOwnProperty.call(message, "playerId"))
                     writer.uint32(/* id 4, wireType 0 =*/32).int32(message.playerId);
+                if (message.flow != null && Object.hasOwnProperty.call(message, "flow"))
+                    writer.uint32(/* id 5, wireType 0 =*/40).bool(message.flow);
                 return writer;
             };
     
@@ -389,6 +400,10 @@
                             message.playerId = reader.int32();
                             break;
                         }
+                    case 5: {
+                            message.flow = reader.bool();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -438,6 +453,9 @@
                 if (message.playerId != null && message.hasOwnProperty("playerId"))
                     if (!$util.isInteger(message.playerId))
                         return "playerId: integer expected";
+                if (message.flow != null && message.hasOwnProperty("flow"))
+                    if (typeof message.flow !== "boolean")
+                        return "flow: boolean expected";
                 return null;
             };
     
@@ -464,6 +482,8 @@
                     message.y = object.y | 0;
                 if (object.playerId != null)
                     message.playerId = object.playerId | 0;
+                if (object.flow != null)
+                    message.flow = Boolean(object.flow);
                 return message;
             };
     
@@ -485,6 +505,7 @@
                     object.x = 0;
                     object.y = 0;
                     object.playerId = 0;
+                    object.flow = false;
                 }
                 if (message.chunkId != null && message.hasOwnProperty("chunkId"))
                     object.chunkId = $root.ms.ChunkID.toObject(message.chunkId, options);
@@ -494,6 +515,8 @@
                     object.y = message.y;
                 if (message.playerId != null && message.hasOwnProperty("playerId"))
                     object.playerId = message.playerId;
+                if (message.flow != null && message.hasOwnProperty("flow"))
+                    object.flow = message.flow;
                 return object;
             };
     
