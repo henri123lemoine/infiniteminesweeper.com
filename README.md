@@ -44,6 +44,7 @@ make run-fast  # Quick development cycle
 ### Production
 
 Set required environment variables (see `.env.example`).
+Use `DEV=true` for a faster development setup.
 
 Run with Docker:
 
