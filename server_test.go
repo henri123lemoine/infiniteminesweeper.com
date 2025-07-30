@@ -176,6 +176,26 @@ func TestRevealContention(t *testing.T) {
 	}
 }
 
+func TestIsValidUsername(t *testing.T) {
+	tests := []struct {
+		name  string
+		valid bool
+	}{
+		{"abc", true},
+		{"A_B-C123", true},
+		{"ab", true},
+		{"thisnameiswaytoolongforvalidation", false},
+		{"bad!name", false},
+		{"space name", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if isValidUsername(tt.name) != tt.valid {
+			t.Errorf("isValidUsername(%q)=%v, want %v", tt.name, isValidUsername(tt.name), tt.valid)
+		}
+	}
+}
+
 // startTestServer spins up an HTTP server with the WebSocket handler and
 // leaderboard broadcaster. It returns the websocket URL and a cleanup function.
 func startTestServer(t *testing.T) (*Server, string, func()) {
