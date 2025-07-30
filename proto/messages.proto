@@ -46,11 +46,22 @@ message Unsubscribe {
   int32 chunkY = 2;
 }
 
+message FlagLocation {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+message FlagGroup {
+  string color = 1;
+  int32 playerId = 2;
+  repeated FlagLocation locations = 3;
+}
+
 message ChunkSync {
   ChunkID chunkId = 1;
   bytes seed = 2;  // 8‑byte little‑endian HMAC seed (exact 64 bits, JS‑safe).
-  repeated Reveal reveals = 3;
-  repeated Flag flags = 4;
+  bytes reveals = 3; // RLE compressed reveal bitset
+  repeated FlagGroup flagGroups = 4;
 }
 
 message RevealAck { bool ok = 1; }
