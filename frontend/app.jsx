@@ -11,9 +11,9 @@ import ReactDOM from "react-dom";
 const log = DEV_MODE ? console.log.bind(console) : () => {};
 
 const PB = protobuf.roots["default"].ms;
+const COMPRESS_THRESHOLD = 100;
 function encodeMsg(msg) {
   const buf = PB.Msg.encode(msg).finish();
-  // Debug logging for outgoing messages
   if (DEV_MODE) {
     console.log("OUTGOING:", {
       raw: msg,
@@ -21,17 +21,22 @@ function encodeMsg(msg) {
       message_type: Object.keys(msg)[0],
     });
   }
+  if (buf.length < COMPRESS_THRESHOLD) {
+    return buf;
+  }
   return pako.gzip(buf);
 }
 function decodeMsg(data) {
-  const decompressed = pako.ungzip(new Uint8Array(data));
-  const decoded = PB.Msg.decode(decompressed);
-  // Debug logging for incoming messages
+  let bytes = new Uint8Array(data);
+  if (bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    bytes = pako.ungzip(bytes);
+  }
+  const decoded = PB.Msg.decode(bytes);
   if (DEV_MODE) {
     console.log("INCOMING:", {
       raw: decoded,
       compressed_size: data.byteLength,
-      decompressed_size: decompressed.length,
+      decompressed_size: bytes.length,
       message_type: Object.keys(decoded)[0],
     });
   }
