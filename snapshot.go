@@ -313,6 +313,7 @@ func (s *Server) replayReveal(reveal Reveal) {
 	wordIndex := bitIndex / 64
 	bitOffset := bitIndex % 64
 	chunk[wordIndex] |= 1 << bitOffset
+	s.totalReveals++
 
 	// Track who revealed it
 	if s.cellOwners[reveal.ChunkID] == nil {

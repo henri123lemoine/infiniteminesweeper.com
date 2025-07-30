@@ -344,6 +344,25 @@ function App() {
     return { chunkX, chunkY, localX, localY };
   }, []);
 
+  // Check if a world coordinate is within two cells of any revealed cell
+  const hasNearbyReveal = useCallback(
+    (worldX, worldY) => {
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const { chunkX, chunkY, localX, localY } = worldToChunk(
+            worldX + dx,
+            worldY + dy,
+          );
+          const key = `${chunkX},${chunkY},${localX},${localY}`;
+          if (revealedCellsRef.current.has(key)) return true;
+        }
+      }
+      return false;
+    },
+    [worldToChunk],
+  );
+
   // Add getNumberColor for Minesweeper number coloring
   const getNumberColor = useCallback((num) => {
     const colors = {
@@ -447,6 +466,12 @@ function App() {
         // Skip if it's a mine
         if (isMine(seed, localX, localY)) continue;
 
+        if (
+          revealedCellsRef.current.size > 0 &&
+          !hasNearbyReveal(worldX, worldY)
+        )
+          continue;
+
         // Count adjacent mines
         const adjacentMines = await countAdjacentMines(
           chunkX,
@@ -523,6 +548,9 @@ function App() {
       if (!ws || !connected) return;
       if (DEV_MODE)
         console.log("CELL CLICK:", { worldX, worldY, isRightClick });
+
+      if (revealedCellsRef.current.size > 0 && !hasNearbyReveal(worldX, worldY))
+        return;
 
       const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
       const cellKey = `${chunkX},${chunkY},${localX},${localY}`;

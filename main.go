@@ -151,6 +151,8 @@ type Server struct {
 	scores     map[int32]int32                // playerID -> score
 	subs       map[ChunkID]map[int32]struct{} // who wants reveals for each chunk
 
+	totalReveals int // global count of revealed cells
+
 	// leaderboard cache
 	lbVersion    uint64
 	lbProto      []byte
@@ -305,6 +307,49 @@ func (s *Server) isValidCoordinate(x, y int) bool {
 	return x >= 0 && x < ChunkSize && y >= 0 && y < ChunkSize
 }
 
+// worldToChunk converts world coordinates to chunk ID and local coordinates.
+func (s *Server) worldToChunk(wx, wy int) (ChunkID, int, int) {
+	cx := wx / ChunkSize
+	if wx < 0 && wx%ChunkSize != 0 {
+		cx--
+	}
+	cy := wy / ChunkSize
+	if wy < 0 && wy%ChunkSize != 0 {
+		cy--
+	}
+	lx := wx - cx*ChunkSize
+	ly := wy - cy*ChunkSize
+	return ChunkID{X: int32(cx), Y: int32(cy)}, lx, ly
+}
+
+// isRevealedWorld checks if a given world coordinate is already revealed.
+func (s *Server) isRevealedWorld(wx, wy int) bool {
+	cid, lx, ly := s.worldToChunk(wx, wy)
+	chunk := s.chunks[cid]
+	if chunk == nil {
+		return false
+	}
+	idx := ly*ChunkSize + lx
+	return chunk[idx/64]&(1<<(idx%64)) != 0
+}
+
+// hasAdjacentReveal reports whether the given cell is within two cells of any revealed cell.
+func (s *Server) hasAdjacentReveal(chunkID ChunkID, x, y int) bool {
+	wx := int(chunkID.X)*ChunkSize + x
+	wy := int(chunkID.Y)*ChunkSize + y
+	for dy := -2; dy <= 2; dy++ {
+		for dx := -2; dx <= 2; dx++ {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			if s.isRevealedWorld(wx+dx, wy+dy) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // TODO: validate, and possibly add speed score
 // New scoring system:
 // - reveals = 1pt
@@ -339,6 +384,10 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 		if _, exists := s.flags[chunkID][bitIndex]; exists {
 			return false // Already flagged
 		}
+	}
+
+	if s.totalReveals > 0 && !s.hasAdjacentReveal(chunkID, x, y) {
+		return false
 	}
 
 	// Get player info (atomically under the same read‑lock)
@@ -516,8 +565,13 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 		return false // Already revealed
 	}
 
+	if s.totalReveals > 0 && !s.hasAdjacentReveal(chunkID, x, y) {
+		return false
+	}
+
 	// Set the bit (mark as revealed)
 	chunk[wordIndex] |= 1 << bitOffset
+	s.totalReveals++
 
 	// Determine if this cell is a mine
 	seed := s.generateChunkSeed(chunkID)

@@ -372,9 +372,28 @@ func TestFullStackIntegration(t *testing.T) {
 	}
 
 	// Phase 2: each client reveals its own unique safe cell
+	// pick unique safe cells within two cells of (1,1)
+	coords := make([][2]int, 0, clients)
+	seed := srv.generateChunkSeed(ChunkID{X: 0, Y: 0})
+	for dx := -2; dx <= 2 && len(coords) < clients; dx++ {
+		for dy := -2; dy <= 2 && len(coords) < clients; dy++ {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			wx := 1 + dx
+			wy := 1 + dy
+			_, lx, ly := srv.worldToChunk(wx, wy)
+			if !srv.isMine(seed, lx, ly) {
+				coords = append(coords, [2]int{wx, wy})
+			}
+		}
+	}
+
 	successes := 0
 	for i, conn := range conns {
-		reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{ChunkId: &pb.ChunkID{X: 0, Y: 0}, X: int32(i), Y: int32(i + 2)}}}
+		c := coords[i]
+		cid, lx, ly := srv.worldToChunk(c[0], c[1])
+		reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{ChunkId: &pb.ChunkID{X: cid.X, Y: cid.Y}, X: int32(lx), Y: int32(ly)}}}
 		if err := conn.WriteMessage(websocket.BinaryMessage, encodeMsg(reveal)); err != nil {
 			t.Fatalf("write unique %d: %v", i, err)
 		}
