@@ -32,10 +32,21 @@ import (
 var content embed.FS
 
 const (
-	ChunkSize        = 64
-	SendBufSize      = 4096  // outbound msgs kept per player before back‑pressure
-	MineCount        = 20    // mines per 100 cells (20% chance)
-	MaxRevealsPerMin = 10000 // relaxed flood‑fill budget
+	ChunkSize   = 64
+	SendBufSize = 4096 // outbound msgs kept per player before back‑pressure
+	MineCount   = 20   // mines per 100 cells (20% chance)
+
+	// Extremely permissive rate limits. These are high enough that normal
+	// gameplay should never hit them. They simply provide a ceiling so we
+	// can detect or throttle obvious abuse.
+	MaxRevealsPerMin = 10000
+	MaxFlagsPerMin   = 5000
+	MaxFlowPerMin    = 20000
+	MaxSubsPerMin    = 5000
+
+	// No IP will realistically hit this value; it's a placeholder to allow
+	// future banning logic without affecting current players.
+	ipBanThreshold = 1_000_000_000
 )
 
 type ChunkID struct {
@@ -71,6 +82,13 @@ type Player struct {
 	Color             string
 	RevealWindowStart time.Time
 	RevealCount       int
+	FlagWindowStart   time.Time
+	FlagCount         int
+	FlowWindowStart   time.Time
+	FlowCount         int
+	SubWindowStart    time.Time
+	SubCount          int
+	IP                string
 
 	// Leaderboard version already sent (protected by mailbox now)
 	LastLBVersion uint64
@@ -93,6 +111,62 @@ type Player struct {
 type TokenBucket struct {
 	tokens     int
 	lastRefill time.Time
+}
+
+// IPStats tracks per-IP usage metrics used for rate limiting. Counts are
+// reset every minute. Banned marks an IP as blocked (currently never set in
+// code, but the field enables future admin actions).
+type IPStats struct {
+	RevealWindowStart time.Time
+	RevealCount       int
+	FlagWindowStart   time.Time
+	FlagCount         int
+	FlowWindowStart   time.Time
+	FlowCount         int
+	SubWindowStart    time.Time
+	SubCount          int
+	Banned            bool
+}
+
+// addAndCheck increments the counter for the given window and returns whether
+// the updated count is within the provided limit.
+func addAndCheck(start *time.Time, count *int, limit int) bool {
+	now := time.Now()
+	if now.Sub(*start) > time.Minute {
+		*start = now
+		*count = 0
+	}
+	*count = *count + 1
+	return *count <= limit
+}
+
+func (s *Server) checkIP(ip string, kind string, limit int) bool {
+	s.ipStatsMu.Lock()
+	stats := s.ipStats[ip]
+	if stats == nil {
+		stats = &IPStats{}
+		s.ipStats[ip] = stats
+	}
+	var ok bool
+	switch kind {
+	case "reveal":
+		ok = addAndCheck(&stats.RevealWindowStart, &stats.RevealCount, limit)
+	case "flag":
+		ok = addAndCheck(&stats.FlagWindowStart, &stats.FlagCount, limit)
+	case "flow":
+		ok = addAndCheck(&stats.FlowWindowStart, &stats.FlowCount, limit)
+	case "sub":
+		ok = addAndCheck(&stats.SubWindowStart, &stats.SubCount, limit)
+	}
+	banned := stats.Banned
+	s.ipStatsMu.Unlock()
+	if banned {
+		return false
+	}
+	if !ok {
+		log.Printf("rate limit exceeded (%s) from IP %s", kind, ip)
+	}
+	return ok
 }
 
 func (tb *TokenBucket) Take() bool {
@@ -164,6 +238,10 @@ type Server struct {
 	playerNames  map[int32]string
 	nextPlayerID int32
 
+	// IP statistics for rate limiting
+	ipStatsMu sync.Mutex
+	ipStats   map[string]*IPStats
+
 	// Seed cache for performance
 	seedCache   map[ChunkID]uint64
 	seedCacheMu sync.RWMutex
@@ -196,6 +274,7 @@ func NewServer() *Server {
 		playerViews:  make(map[int32]struct{ X, Y int32 }),
 		seedCache:    make(map[ChunkID]uint64),
 		nextPlayerID: 1,
+		ipStats:      make(map[string]*IPStats),
 		dataDir:      "data",
 		upgrader: websocket.Upgrader{
 			// Reject cross-site WebSocket requests (prevents CSRF via <iframe>).
@@ -637,6 +716,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ip := strings.Split(r.RemoteAddr, ":")[0]
+	if !s.checkIP(ip, "flow", MaxFlowPerMin) {
+		conn.Close()
+		return
+	}
+
 	// connection hygiene
 	conn.SetReadLimit(1 << 20)                             // max 1 MiB frame
 	conn.SetReadDeadline(time.Now().Add(35 * time.Second)) // liveness timer
@@ -701,9 +786,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		TokenBucket:       TokenBucket{tokens: 200},
 		RevealWindowStart: time.Now(),
 		RevealCount:       0,
+		FlagWindowStart:   time.Now(),
+		FlowWindowStart:   time.Now(),
+		SubWindowStart:    time.Now(),
 		Name:              hello.Name,
 		Color:             hello.Color,
 		Score:             initScore, // preserve previous score
+		IP:                ip,
 		done:              make(chan struct{}),
 	}
 	s.players[playerID][player] = struct{}{}
@@ -776,43 +865,62 @@ func (s *Server) readPump(player *Player) {
 			continue
 		}
 
+		if !s.checkIP(player.IP, "flow", MaxFlowPerMin) {
+			continue
+		}
+		player.Mailbox <- func(pl *Player) {
+			addAndCheck(&pl.FlowWindowStart, &pl.FlowCount, MaxFlowPerMin)
+		}
+
 		switch t := msg.Payload.(type) {
 		case *pb.Msg_Reveal:
 			r := t.Reveal
 
-			// Rate limiting
+			allowed := s.checkIP(player.IP, "reveal", MaxRevealsPerMin)
 			player.Mailbox <- func(pl *Player) {
-				now := time.Now()
-				if now.Sub(pl.RevealWindowStart) > time.Minute {
-					pl.RevealWindowStart = now
-					pl.RevealCount = 0
-				}
-				if pl.RevealCount >= MaxRevealsPerMin {
+				if !addAndCheck(&pl.RevealWindowStart, &pl.RevealCount, MaxRevealsPerMin) {
 					pl.SusRevealOverflow++
 				}
-				pl.RevealCount++
 			}
-
-			chunkID := ChunkID{X: r.ChunkId.X, Y: r.ChunkId.Y}
-			ok := s.reveal(player.ID, chunkID, int(r.X), int(r.Y))
-
-			ack := &pb.Msg{Payload: &pb.Msg_RevealAck{RevealAck: &pb.RevealAck{Ok: ok}}}
+			if allowed {
+				chunkID := ChunkID{X: r.ChunkId.X, Y: r.ChunkId.Y}
+				allowed = s.reveal(player.ID, chunkID, int(r.X), int(r.Y))
+			}
+			ack := &pb.Msg{Payload: &pb.Msg_RevealAck{RevealAck: &pb.RevealAck{Ok: allowed}}}
 			s.sendToPlayer(player.ID, mustProto(ack))
 
 		case *pb.Msg_Flag:
 			m := t.Flag
-			chunkID := ChunkID{X: m.ChunkId.X, Y: m.ChunkId.Y}
-			ok := s.flag(player.ID, chunkID, int(m.X), int(m.Y))
-			ack := &pb.Msg{Payload: &pb.Msg_FlagAck{FlagAck: &pb.FlagAck{Ok: ok}}}
+			allowed := s.checkIP(player.IP, "flag", MaxFlagsPerMin)
+			player.Mailbox <- func(pl *Player) {
+				addAndCheck(&pl.FlagWindowStart, &pl.FlagCount, MaxFlagsPerMin)
+			}
+			var ok bool
+			if allowed {
+				chunkID := ChunkID{X: m.ChunkId.X, Y: m.ChunkId.Y}
+				ok = s.flag(player.ID, chunkID, int(m.X), int(m.Y))
+				allowed = ok
+			}
+			ack := &pb.Msg{Payload: &pb.Msg_FlagAck{FlagAck: &pb.FlagAck{Ok: allowed}}}
 			s.sendToPlayer(player.ID, mustProto(ack))
 
 		case *pb.Msg_Subscribe:
 			m := t.Subscribe
-			s.subscribeToChunk(player.ID, ChunkID{X: m.ChunkX, Y: m.ChunkY})
+			if s.checkIP(player.IP, "sub", MaxSubsPerMin) {
+				player.Mailbox <- func(pl *Player) {
+					addAndCheck(&pl.SubWindowStart, &pl.SubCount, MaxSubsPerMin)
+				}
+				s.subscribeToChunk(player.ID, ChunkID{X: m.ChunkX, Y: m.ChunkY})
+			}
 
 		case *pb.Msg_Unsubscribe:
 			m := t.Unsubscribe
-			s.unsubscribeFromChunk(player.ID, ChunkID{X: m.ChunkX, Y: m.ChunkY})
+			if s.checkIP(player.IP, "sub", MaxSubsPerMin) {
+				player.Mailbox <- func(pl *Player) {
+					addAndCheck(&pl.SubWindowStart, &pl.SubCount, MaxSubsPerMin)
+				}
+				s.unsubscribeFromChunk(player.ID, ChunkID{X: m.ChunkX, Y: m.ChunkY})
+			}
 		case *pb.Msg_ViewUpdate:
 			m := t.ViewUpdate
 			s.stateMu.Lock()
