@@ -3,23 +3,30 @@ package ms;
 option go_package = "infinite-minesweeper/proto";
 
 message ChunkID {
-  int32 X = 1;
-  int32 Y = 2;
+  // Variable-length signed chunk coordinates for a theoretically infinite board
+  sint64 X = 1;
+  sint64 Y = 2;
 }
 
+// Compact coordinate referencing a specific cell in a chunk. The cell field is
+// a 12-bit value (0..4095) representing y*64 + x within the chunk.
+message CellCoord {
+  sint64 chunkX = 1;
+  sint64 chunkY = 2;
+  uint32 cell = 3; // 0..4095 index within the chunk
+}
+
+// Reveal a single cell specified using the compact CellCoord format.
 message Reveal {
-  ChunkID chunkId = 1;
-  int32 x = 2;
-  int32 y = 3;
-  int32 playerId = 4;
+  CellCoord coord = 1;
+  int32 playerId = 2;
 }
 
+// Flag placement encoded with CellCoord for compactness.
 message Flag {
-  ChunkID chunkId = 1;
-  int32 x = 2;
-  int32 y = 3;
-  int32 playerId = 4;
-  string color = 5;
+  CellCoord coord = 1;
+  int32 playerId = 2;
+  string color = 3;
 }
 
 message Hello {
@@ -32,18 +39,18 @@ message Welcome {
   int32 playerId = 1;
   string name = 2;
   string color = 3;
-  int32 viewX = 4;
-  int32 viewY = 5;
+  sint64 viewX = 4;
+  sint64 viewY = 5;
 }
 
 message Subscribe {
-  int32 chunkX = 1;
-  int32 chunkY = 2;
+  sint64 chunkX = 1;
+  sint64 chunkY = 2;
 }
 
 message Unsubscribe {
-  int32 chunkX = 1;
-  int32 chunkY = 2;
+  sint64 chunkX = 1;
+  sint64 chunkY = 2;
 }
 
 message ChunkSync {
@@ -69,14 +76,14 @@ message Leaderboard {
 
 message ScoreUpdate {
   int32 score = 1;
-  int32 worldX = 2;  // world X coordinate where the score change occurred
-  int32 worldY = 3;  // world Y coordinate where the score change occurred
+  sint64 worldX = 2;  // world X coordinate where the score change occurred
+  sint64 worldY = 3;  // world Y coordinate where the score change occurred
   int32 delta = 4;   // score change amount (positive or negative)
 }
 
 message ViewUpdate {
-  int32 viewX = 1;
-  int32 viewY = 2;
+  sint64 viewX = 1;
+  sint64 viewY = 2;
 }
 
 message Msg {

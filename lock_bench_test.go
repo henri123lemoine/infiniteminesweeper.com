@@ -114,7 +114,7 @@ func BenchmarkRevealHeavy(b *testing.B) {
 	chunks := make([]ChunkID, 0, grid*grid)
 	for x := -grid / 2; x < grid/2; x++ {
 		for y := -grid / 2; y < grid/2; y++ {
-			chunk := ChunkID{X: int32(x), Y: int32(y)}
+			chunk := ChunkID{X: int64(x), Y: int64(y)}
 			chunks = append(chunks, chunk)
 			// Touch each chunk once to ensure it's allocated
 			srv.reveal(1, chunk, 0, 0)
@@ -168,7 +168,7 @@ func BenchmarkRevealFreshVsExisting(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			// Each reveal hits a new chunk
-			chunk := ChunkID{X: int32(i), Y: int32(i)}
+			chunk := ChunkID{X: int64(i), Y: int64(i)}
 			srv.reveal(1, chunk, 0, 0)
 		}
 

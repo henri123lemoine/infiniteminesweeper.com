@@ -39,22 +39,20 @@ const (
 )
 
 type ChunkID struct {
-	X, Y int32
+	X, Y int64
 }
 
 type ChunkBits [64]uint64
 
 type Reveal struct {
 	ChunkID  ChunkID `json:"chunkId"`
-	X        int     `json:"x"`
-	Y        int     `json:"y"`
+	Cell     uint32  `json:"cell"`
 	PlayerID int32   `json:"playerId"`
 }
 
 type Flag struct {
 	ChunkID  ChunkID `json:"chunkId"`
-	X        int     `json:"x"`
-	Y        int     `json:"y"`
+	Cell     uint32  `json:"cell"`
 	PlayerID int32   `json:"playerId"`
 	Color    string  `json:"color"`
 }
@@ -156,7 +154,7 @@ type Server struct {
 	lbProto      []byte
 	lbDirty      bool
 	playerColors map[int32]string               // playerID -> color
-	playerViews  map[int32]struct{ X, Y int32 } // last known view position
+	playerViews  map[int32]struct{ X, Y int64 } // last known view position
 
 	// Players
 	playersMu    sync.RWMutex
@@ -193,7 +191,7 @@ func NewServer() *Server {
 		players:      make(map[int32]map[*Player]struct{}),
 		playerNames:  make(map[int32]string),
 		playerColors: make(map[int32]string),
-		playerViews:  make(map[int32]struct{ X, Y int32 }),
+		playerViews:  make(map[int32]struct{ X, Y int64 }),
 		seedCache:    make(map[ChunkID]uint64),
 		nextPlayerID: 1,
 		dataDir:      "data",
@@ -377,8 +375,7 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 			}
 			flag := Flag{
 				ChunkID:  chunkID,
-				X:        x,
-				Y:        y,
+				Cell:     uint32(bitIndex),
 				PlayerID: playerID,
 				Color:    playerColor,
 			}
@@ -411,7 +408,7 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 			s.cellOwners[chunkID][bitIndex] = playerID
 
 			// Write to WAL (auto-reveal from wrong flag)
-			reveal := Reveal{ChunkID: chunkID, X: x, Y: y, PlayerID: playerID}
+			reveal := Reveal{ChunkID: chunkID, Cell: uint32(bitIndex), PlayerID: playerID}
 			s.writeWALEntry("reveal", reveal)
 
 			// Broadcast the auto-reveal to all players who can see this chunk
@@ -437,8 +434,8 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 	s.lbDirty = true
 
 	// Send score update to player
-	worldX := int(chunkID.X)*ChunkSize + x
-	worldY := int(chunkID.Y)*ChunkSize + y
+	worldX := int64(chunkID.X)*ChunkSize + int64(x)
+	worldY := int64(chunkID.Y)*ChunkSize + int64(y)
 	s.sendScoreUpdate(playerID, score, worldX, worldY, delta)
 
 	return true
@@ -447,16 +444,16 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 func (s *Server) broadcastFlagTo3x3(flag Flag) {
 	// Caller already holds stateMu
 	pbFlag := &pb.Msg{Payload: &pb.Msg_Flag{Flag: &pb.Flag{
-		ChunkId: &pb.ChunkID{X: flag.ChunkID.X, Y: flag.ChunkID.Y},
-		X:       int32(flag.X), Y: int32(flag.Y),
-		PlayerId: flag.PlayerID, Color: flag.Color,
+		Coord:    &pb.CellCoord{ChunkX: flag.ChunkID.X, ChunkY: flag.ChunkID.Y, Cell: flag.Cell},
+		PlayerId: flag.PlayerID,
+		Color:    flag.Color,
 	}}}
 	payload := mustProto(pbFlag)
 	sent := make(map[int32]struct{})
 
 	for dy := int32(-1); dy <= 1; dy++ {
 		for dx := int32(-1); dx <= 1; dx++ {
-			chk := ChunkID{flag.ChunkID.X + dx, flag.ChunkID.Y + dy}
+			chk := ChunkID{flag.ChunkID.X + int64(dx), flag.ChunkID.Y + int64(dy)}
 			for pid := range s.subs[chk] {
 				if _, dup := sent[pid]; dup {
 					continue
@@ -471,15 +468,15 @@ func (s *Server) broadcastFlagTo3x3(flag Flag) {
 func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
 	// Caller already holds stateMu
 	pbReveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{
-		ChunkId: &pb.ChunkID{X: reveal.ChunkID.X, Y: reveal.ChunkID.Y},
-		X:       int32(reveal.X), Y: int32(reveal.Y), PlayerId: reveal.PlayerID,
+		Coord:    &pb.CellCoord{ChunkX: reveal.ChunkID.X, ChunkY: reveal.ChunkID.Y, Cell: reveal.Cell},
+		PlayerId: reveal.PlayerID,
 	}}}
 	payload := mustProto(pbReveal)
 	sent := make(map[int32]struct{})
 
 	for dy := int32(-1); dy <= 1; dy++ {
 		for dx := int32(-1); dx <= 1; dx++ {
-			chk := ChunkID{reveal.ChunkID.X + dx, reveal.ChunkID.Y + dy}
+			chk := ChunkID{reveal.ChunkID.X + int64(dx), reveal.ChunkID.Y + int64(dy)}
 			for pid := range s.subs[chk] {
 				if _, dup := sent[pid]; dup {
 					continue
@@ -553,8 +550,8 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 		}
 		prevScore := <-oldScore
 		newScore := <-res
-		worldX := int(chunkID.X)*ChunkSize + x
-		worldY := int(chunkID.Y)*ChunkSize + y
+		worldX := int64(chunkID.X)*ChunkSize + int64(x)
+		worldY := int64(chunkID.Y)*ChunkSize + int64(y)
 		delta := newScore - prevScore
 		s.sendScoreUpdate(playerID, newScore, worldX, worldY, delta)
 	}
@@ -577,8 +574,7 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	// Create reveal message
 	reveal := Reveal{
 		ChunkID:  chunkID,
-		X:        x,
-		Y:        y,
+		Cell:     uint32(bitIndex),
 		PlayerID: playerID,
 	}
 
@@ -593,11 +589,11 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	return true
 }
 
-func (s *Server) sendScoreUpdate(playerID int32, score int32, worldX, worldY int, delta int32) {
+func (s *Server) sendScoreUpdate(playerID int32, score int32, worldX, worldY int64, delta int32) {
 	msg := &pb.Msg{Payload: &pb.Msg_ScoreUpdate{ScoreUpdate: &pb.ScoreUpdate{
 		Score:  score,
-		WorldX: int32(worldX),
-		WorldY: int32(worldY),
+		WorldX: worldX,
+		WorldY: worldY,
 		Delta:  delta,
 	}}}
 	s.sendToPlayer(playerID, mustProto(msg))
@@ -738,7 +734,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	cy := int(view.Y) / ChunkSize
 	for dy := -1; dy <= 1; dy++ {
 		for dx := -1; dx <= 1; dx++ {
-			s.subscribeToChunk(playerID, ChunkID{X: int32(cx + dx), Y: int32(cy + dy)})
+			s.subscribeToChunk(playerID, ChunkID{X: int64(cx + dx), Y: int64(cy + dy)})
 		}
 	}
 	s.sendToPlayer(playerID, lbBytes)
@@ -793,16 +789,22 @@ func (s *Server) readPump(player *Player) {
 				pl.RevealCount++
 			}
 
-			chunkID := ChunkID{X: r.ChunkId.X, Y: r.ChunkId.Y}
-			ok := s.reveal(player.ID, chunkID, int(r.X), int(r.Y))
+			chunkID := ChunkID{X: r.Coord.ChunkX, Y: r.Coord.ChunkY}
+			cell := int(r.Coord.Cell)
+			x := cell % ChunkSize
+			y := cell / ChunkSize
+			ok := s.reveal(player.ID, chunkID, x, y)
 
 			ack := &pb.Msg{Payload: &pb.Msg_RevealAck{RevealAck: &pb.RevealAck{Ok: ok}}}
 			s.sendToPlayer(player.ID, mustProto(ack))
 
 		case *pb.Msg_Flag:
 			m := t.Flag
-			chunkID := ChunkID{X: m.ChunkId.X, Y: m.ChunkId.Y}
-			ok := s.flag(player.ID, chunkID, int(m.X), int(m.Y))
+			chunkID := ChunkID{X: m.Coord.ChunkX, Y: m.Coord.ChunkY}
+			cell := int(m.Coord.Cell)
+			x := cell % ChunkSize
+			y := cell / ChunkSize
+			ok := s.flag(player.ID, chunkID, x, y)
 			ack := &pb.Msg{Payload: &pb.Msg_FlagAck{FlagAck: &pb.FlagAck{Ok: ok}}}
 			s.sendToPlayer(player.ID, mustProto(ack))
 
@@ -816,7 +818,7 @@ func (s *Server) readPump(player *Player) {
 		case *pb.Msg_ViewUpdate:
 			m := t.ViewUpdate
 			s.stateMu.Lock()
-			s.playerViews[player.ID] = struct{ X, Y int32 }{X: m.ViewX, Y: m.ViewY}
+			s.playerViews[player.ID] = struct{ X, Y int64 }{X: m.ViewX, Y: m.ViewY}
 			s.stateMu.Unlock()
 		}
 	}
@@ -879,8 +881,7 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 
 					reveals = append(reveals, Reveal{
 						ChunkID:  chunkID,
-						X:        x,
-						Y:        y,
+						Cell:     uint32(bitIndex),
 						PlayerID: ownerID,
 					})
 				}
@@ -900,14 +901,15 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	}}}
 	for _, rv := range reveals {
 		cs.GetChunkSync().Reveals = append(cs.GetChunkSync().Reveals, &pb.Reveal{
-			ChunkId: &pb.ChunkID{X: rv.ChunkID.X, Y: rv.ChunkID.Y},
-			X:       int32(rv.X), Y: int32(rv.Y), PlayerId: rv.PlayerID,
+			Coord:    &pb.CellCoord{ChunkX: rv.ChunkID.X, ChunkY: rv.ChunkID.Y, Cell: rv.Cell},
+			PlayerId: rv.PlayerID,
 		})
 	}
 	for _, fl := range flags {
 		cs.GetChunkSync().Flags = append(cs.GetChunkSync().Flags, &pb.Flag{
-			ChunkId: &pb.ChunkID{X: fl.ChunkID.X, Y: fl.ChunkID.Y},
-			X:       int32(fl.X), Y: int32(fl.Y), PlayerId: fl.PlayerID, Color: fl.Color,
+			Coord:    &pb.CellCoord{ChunkX: fl.ChunkID.X, ChunkY: fl.ChunkID.Y, Cell: fl.Cell},
+			PlayerId: fl.PlayerID,
+			Color:    fl.Color,
 		})
 	}
 	s.sendToPlayer(playerID, mustProto(cs))
