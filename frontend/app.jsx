@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import ReactDOM from "react-dom";
 const DEV_MODE = true;
 const log = DEV_MODE ? console.log.bind(console) : () => {};
@@ -8,10 +14,10 @@ function encodeMsg(msg) {
   const buf = PB.Msg.encode(msg).finish();
   // Debug logging for outgoing messages
   if (DEV_MODE) {
-    console.log('OUTGOING:', {
+    console.log("OUTGOING:", {
       raw: msg,
       serialized_size: buf.length,
-      message_type: Object.keys(msg)[0]
+      message_type: Object.keys(msg)[0],
     });
   }
   return pako.gzip(buf);
@@ -21,19 +27,19 @@ function decodeMsg(data) {
   const decoded = PB.Msg.decode(decompressed);
   // Debug logging for incoming messages
   if (DEV_MODE) {
-    console.log('INCOMING:', {
+    console.log("INCOMING:", {
       raw: decoded,
       compressed_size: data.byteLength,
       decompressed_size: decompressed.length,
-      message_type: Object.keys(decoded)[0]
+      message_type: Object.keys(decoded)[0],
     });
   }
   return decoded;
 }
 
 function App() {
-  const storedId = parseInt(localStorage.getItem('playerId') || '0', 10);
-  const storedName = localStorage.getItem('username') || '';
+  const storedId = parseInt(localStorage.getItem("playerId") || "0", 10);
+  const storedName = localStorage.getItem("username") || "";
 
   const [ws, setWs] = useState(null);
   const [connected, setConnected] = useState(false);
@@ -46,10 +52,17 @@ function App() {
   const containerRef = useRef(null);
 
   // Camera/viewport state
-  const [viewX, setViewX] = useState(0);
-  const [viewY, setViewY] = useState(0);
+  const storedViewX = parseInt(sessionStorage.getItem("viewX") || "0", 10);
+  const storedViewY = parseInt(sessionStorage.getItem("viewY") || "0", 10);
+  const [viewX, setViewX] = useState(storedViewX);
+  const [viewY, setViewY] = useState(storedViewY);
   const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0, viewX: 0, viewY: 0 });
+  const [dragStart, setDragStart] = useState({
+    x: 0,
+    y: 0,
+    viewX: 0,
+    viewY: 0,
+  });
   const dragTimeoutRef = useRef(null);
 
   // Game state
@@ -63,19 +76,21 @@ function App() {
   const [leaderboardVisible, setLeaderboardVisible] = useState(true);
 
   // Player color state
-  const [playerColor, setPlayerColor] = useState(localStorage.getItem('playerColor') || '#FF0000');
+  const [playerColor, setPlayerColor] = useState(
+    localStorage.getItem("playerColor") || "#FF0000",
+  );
 
   const toggleLeaderboard = useCallback(() => {
-    setLeaderboardVisible(v => !v);
+    setLeaderboardVisible((v) => !v);
   }, []);
   const formatScore = useCallback((score) => {
     // Format scores into human‑friendly strings, e.g. 1.2k or 1.5M
     if (score >= 1000000) {
-      const val = (score / 1000000).toFixed(1).replace(/\.0$/, '');
+      const val = (score / 1000000).toFixed(1).replace(/\.0$/, "");
       return `${val}M`;
     }
     if (score >= 1000) {
-      const val = (score / 1000).toFixed(1).replace(/\.0$/, '');
+      const val = (score / 1000).toFixed(1).replace(/\.0$/, "");
       return `${val}k`;
     }
     return String(score);
@@ -125,7 +140,7 @@ function App() {
       g = Math.round((g + m) * 255);
       b = Math.round((b + m) * 255);
 
-      return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+      return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
     };
 
     const [h, s, v] = hexToHsv(value);
@@ -136,7 +151,7 @@ function App() {
     };
 
     const handleMouseMove = (e) => {
-      if (!isDragging && e.type === 'mousemove') return;
+      if (!isDragging && e.type === "mousemove") return;
 
       const rect = wheelRef.current?.getBoundingClientRect();
       if (!rect) return;
@@ -146,7 +161,7 @@ function App() {
       const x = e.clientX - rect.left - centerX;
       const y = e.clientY - rect.top - centerY;
 
-      const angle = (Math.atan2(y, x) * 180 / Math.PI + 90 + 360) % 360;
+      const angle = ((Math.atan2(y, x) * 180) / Math.PI + 90 + 360) % 360;
       const distance = Math.min(Math.sqrt(x * x + y * y), centerX - 10);
       const saturation = distance / (centerX - 10);
 
@@ -160,11 +175,11 @@ function App() {
 
     useEffect(() => {
       if (isDragging) {
-        document.addEventListener('mousemove', handleMouseMove);
-        document.addEventListener('mouseup', handleMouseUp);
+        document.addEventListener("mousemove", handleMouseMove);
+        document.addEventListener("mouseup", handleMouseUp);
         return () => {
-          document.removeEventListener('mousemove', handleMouseMove);
-          document.removeEventListener('mouseup', handleMouseUp);
+          document.removeEventListener("mousemove", handleMouseMove);
+          document.removeEventListener("mouseup", handleMouseUp);
         };
       }
     }, [isDragging]);
@@ -172,48 +187,48 @@ function App() {
     const wheelStyle = {
       width: 150,
       height: 150,
-      borderRadius: '50%',
+      borderRadius: "50%",
       background: `conic-gradient(
         hsl(0, 100%, 50%), hsl(60, 100%, 50%), hsl(120, 100%, 50%),
         hsl(180, 100%, 50%), hsl(240, 100%, 50%), hsl(300, 100%, 50%), hsl(0, 100%, 50%)
       ), radial-gradient(circle, transparent 0%, white 100%)`,
-      position: 'relative',
-      cursor: 'crosshair',
-      margin: '10px auto'
+      position: "relative",
+      cursor: "crosshair",
+      margin: "10px auto",
     };
 
-    const knobX = Math.cos((h - 90) * Math.PI / 180) * s * 65 + 75;
-    const knobY = Math.sin((h - 90) * Math.PI / 180) * s * 65 + 75;
+    const knobX = Math.cos(((h - 90) * Math.PI) / 180) * s * 65 + 75;
+    const knobY = Math.sin(((h - 90) * Math.PI) / 180) * s * 65 + 75;
 
     return (
-      <div style={{textAlign: 'center'}}>
-        <div
-          ref={wheelRef}
-          style={wheelStyle}
-          onMouseDown={handleMouseDown}
-        >
-          <div style={{
-            position: 'absolute',
-            left: knobX - 8,
-            top: knobY - 8,
-            width: 16,
-            height: 16,
-            borderRadius: '50%',
-            backgroundColor: value,
-            border: '2px solid white',
-            boxShadow: '0 0 3px rgba(0,0,0,0.5)',
-            pointerEvents: 'none'
-          }} />
+      <div style={{ textAlign: "center" }}>
+        <div ref={wheelRef} style={wheelStyle} onMouseDown={handleMouseDown}>
+          <div
+            style={{
+              position: "absolute",
+              left: knobX - 8,
+              top: knobY - 8,
+              width: 16,
+              height: 16,
+              borderRadius: "50%",
+              backgroundColor: value,
+              border: "2px solid white",
+              boxShadow: "0 0 3px rgba(0,0,0,0.5)",
+              pointerEvents: "none",
+            }}
+          />
         </div>
-        <div style={{
-          width: 30,
-          height: 30,
-          backgroundColor: value,
-          border: '2px solid #ccc',
-          borderRadius: 4,
-          margin: '10px auto',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-        }} />
+        <div
+          style={{
+            width: 30,
+            height: 30,
+            backgroundColor: value,
+            border: "2px solid #ccc",
+            borderRadius: 4,
+            margin: "10px auto",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
+          }}
+        />
       </div>
     );
   }, []);
@@ -225,32 +240,40 @@ function App() {
 
   // Deterministic helpers
   const splitmix64 = useCallback((state) => {
-    state = (state + 0x9e3779b97f4a7c15n) & 0xFFFFFFFFFFFFFFFFn;
-    state = ((state ^ (state >> 30n)) * 0xbf58476d1ce4e5b9n) & 0xFFFFFFFFFFFFFFFFn;
-    state = ((state ^ (state >> 27n)) * 0x94d049bb133111ebn) & 0xFFFFFFFFFFFFFFFFn;
+    state = (state + 0x9e3779b97f4a7c15n) & 0xffffffffffffffffn;
+    state =
+      ((state ^ (state >> 30n)) * 0xbf58476d1ce4e5b9n) & 0xffffffffffffffffn;
+    state =
+      ((state ^ (state >> 27n)) * 0x94d049bb133111ebn) & 0xffffffffffffffffn;
     return state ^ (state >> 31n);
   }, []);
 
-  const isMine = useCallback((seed, x, y) => {
-    const cellSeed = splitmix64(seed + BigInt(y * CHUNK + x));
-    return Number(cellSeed % 100n) < MINE_COUNT;
-  }, [splitmix64]);
+  const isMine = useCallback(
+    (seed, x, y) => {
+      const cellSeed = splitmix64(seed + BigInt(y * CHUNK + x));
+      return Number(cellSeed % 100n) < MINE_COUNT;
+    },
+    [splitmix64],
+  );
 
   // Convert screen coordinates to world coordinates
-  const screenToWorld = useCallback((screenX, screenY) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
+  const screenToWorld = useCallback(
+    (screenX, screenY) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return { x: 0, y: 0 };
 
-    const rect = canvas.getBoundingClientRect();
-    const canvasX = screenX - rect.left;
-    const canvasY = screenY - rect.top;
+      const rect = canvas.getBoundingClientRect();
+      const canvasX = screenX - rect.left;
+      const canvasY = screenY - rect.top;
 
-    // Convert canvas pixels to world coordinates
-    const worldX = Math.floor((canvasX + viewX) / CELL_SIZE);
-    const worldY = Math.floor((canvasY + viewY) / CELL_SIZE);
+      // Convert canvas pixels to world coordinates
+      const worldX = Math.floor((canvasX + viewX) / CELL_SIZE);
+      const worldY = Math.floor((canvasY + viewY) / CELL_SIZE);
 
-    return { x: worldX, y: worldY };
-  }, [viewX, viewY]);
+      return { x: worldX, y: worldY };
+    },
+    [viewX, viewY],
+  );
 
   // Convert world coordinates to chunk and local coordinates
   const worldToChunk = useCallback((worldX, worldY) => {
@@ -258,8 +281,8 @@ function App() {
     const chunkY = Math.floor(worldY / CHUNK);
 
     // Simpler local coordinate calculation
-    let localX = worldX - (chunkX * CHUNK);
-    let localY = worldY - (chunkY * CHUNK);
+    let localX = worldX - chunkX * CHUNK;
+    let localY = worldY - chunkY * CHUNK;
 
     // Ensure positive local coordinates
     if (localX < 0) localX += CHUNK;
@@ -268,327 +291,435 @@ function App() {
     return { chunkX, chunkY, localX, localY };
   }, []);
 
-
-
   // Add getNumberColor for Minesweeper number coloring
   const getNumberColor = useCallback((num) => {
     const colors = {
-      1: '#0000FF',
-      2: '#008000',
-      3: '#FF0000',
-      4: '#000080',
-      5: '#800000',
-      6: '#008080',
-      7: '#000000',
-      8: '#808080'
+      1: "#0000FF",
+      2: "#008000",
+      3: "#FF0000",
+      4: "#000080",
+      5: "#800000",
+      6: "#008080",
+      7: "#000000",
+      8: "#808080",
     };
-    return colors[num] || '#000000';
+    return colors[num] || "#000000";
   }, []);
 
-  const countAdjacentMines = useCallback(async (cx, cy, x, y) => {
-    let count = 0;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0) continue;
-        let nx = x + dx;
-        let ny = y + dy;
-        let ncx = cx;
-        let ncy = cy;
-        if (nx < 0) { ncx--; nx += CHUNK; }
-        else if (nx >= CHUNK) { ncx++; nx -= CHUNK; }
-        if (ny < 0) { ncy--; ny += CHUNK; }
-        else if (ny >= CHUNK) { ncy++; ny -= CHUNK; }
+  const countAdjacentMines = useCallback(
+    async (cx, cy, x, y) => {
+      let count = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          let nx = x + dx;
+          let ny = y + dy;
+          let ncx = cx;
+          let ncy = cy;
+          if (nx < 0) {
+            ncx--;
+            nx += CHUNK;
+          } else if (nx >= CHUNK) {
+            ncx++;
+            nx -= CHUNK;
+          }
+          if (ny < 0) {
+            ncy--;
+            ny += CHUNK;
+          } else if (ny >= CHUNK) {
+            ncy++;
+            ny -= CHUNK;
+          }
 
-        const nSeed = seedCache.current.get(`${ncx},${ncy}`);
-        if (!nSeed) continue;
-        if (isMine(nSeed, nx, ny)) count++;
+          const nSeed = seedCache.current.get(`${ncx},${ncy}`);
+          if (!nSeed) continue;
+          if (isMine(nSeed, nx, ny)) count++;
+        }
       }
-    }
-    return count;
-  }, [isMine]);
+      return count;
+    },
+    [isMine],
+  );
 
-  const ensureChunkSubscription = useCallback((chunkX, chunkY) => {
-    const key = `${chunkX},${chunkY}`;
-    if (!subscribedChunks.current.has(key) && ws && connected) {
-      subscribedChunks.current.add(key);
-      ws.send(encodeMsg(PB.Msg.create({ subscribe: { chunkX, chunkY } })));
-    }
-  }, [ws, connected]);
+  const ensureChunkSubscription = useCallback(
+    (chunkX, chunkY) => {
+      const key = `${chunkX},${chunkY}`;
+      if (!subscribedChunks.current.has(key) && ws && connected) {
+        subscribedChunks.current.add(key);
+        ws.send(encodeMsg(PB.Msg.create({ subscribe: { chunkX, chunkY } })));
+      }
+    },
+    [ws, connected],
+  );
 
-  const ensureChunkUnsubscription = useCallback((chunkX, chunkY) => {
-    const key = `${chunkX},${chunkY}`;
-    if (subscribedChunks.current.has(key) && ws && connected) {
-      subscribedChunks.current.delete(key);
-      ws.send(encodeMsg(PB.Msg.create({ unsubscribe: { chunkX, chunkY } })));
-    }
-  }, [ws, connected]);
+  const ensureChunkUnsubscription = useCallback(
+    (chunkX, chunkY) => {
+      const key = `${chunkX},${chunkY}`;
+      if (subscribedChunks.current.has(key) && ws && connected) {
+        subscribedChunks.current.delete(key);
+        ws.send(encodeMsg(PB.Msg.create({ unsubscribe: { chunkX, chunkY } })));
+      }
+    },
+    [ws, connected],
+  );
 
   // Flood fill reveal for cells with 0 adjacent mines
-  const floodFillReveal = useCallback(async (startWorldX, startWorldY) => {
-    const toReveal = new Set();
-    const visited = new Set();
-    const queue = [{ worldX: startWorldX, worldY: startWorldY }];
+  const floodFillReveal = useCallback(
+    async (startWorldX, startWorldY) => {
+      const toReveal = new Set();
+      const visited = new Set();
+      const queue = [{ worldX: startWorldX, worldY: startWorldY }];
 
-    // BFS to find all connected 0-mine cells
-    while (queue.length > 0) {
-      const { worldX, worldY } = queue.shift();
-      const coordKey = `${worldX},${worldY}`;
+      // BFS to find all connected 0-mine cells
+      while (queue.length > 0) {
+        const { worldX, worldY } = queue.shift();
+        const coordKey = `${worldX},${worldY}`;
 
-      if (visited.has(coordKey)) continue;
-      visited.add(coordKey);
+        if (visited.has(coordKey)) continue;
+        visited.add(coordKey);
 
-      const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
-      const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+        const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
+        const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
 
-      // Skip if already revealed
-      if (revealedCellsRef.current.has(cellKey)) continue;
+        // Skip if already revealed
+        if (revealedCellsRef.current.has(cellKey)) continue;
 
-      // Ensure we have the seed for this chunk
-      let seed = seedCache.current.get(`${chunkX},${chunkY}`);
-      if (!seed) {
-        // Skip chunks that don't have seeds yet
-        continue;
-      }
+        // Ensure we have the seed for this chunk
+        let seed = seedCache.current.get(`${chunkX},${chunkY}`);
+        if (!seed) {
+          // Skip chunks that don't have seeds yet
+          continue;
+        }
 
-      // Skip if it's a mine
-      if (isMine(seed, localX, localY)) continue;
+        // Skip if it's a mine
+        if (isMine(seed, localX, localY)) continue;
 
-      // Count adjacent mines
-      const adjacentMines = await countAdjacentMines(chunkX, chunkY, localX, localY);
+        // Count adjacent mines
+        const adjacentMines = await countAdjacentMines(
+          chunkX,
+          chunkY,
+          localX,
+          localY,
+        );
 
-      // Add to reveal list
-      toReveal.add({
-        worldX,
-        worldY,
-        chunkX,
-        chunkY,
-        localX,
-        localY,
-        adjacentMines,
-        cellKey
-      });
+        // Add to reveal list
+        toReveal.add({
+          worldX,
+          worldY,
+          chunkX,
+          chunkY,
+          localX,
+          localY,
+          adjacentMines,
+          cellKey,
+        });
 
-      // If this cell has 0 adjacent mines, add its neighbors to the queue
-      if (adjacentMines === 0) {
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dy === 0) continue;
-            const neighborWorldX = worldX + dx;
-            const neighborWorldY = worldY + dy;
-            const neighborCoordKey = `${neighborWorldX},${neighborWorldY}`;
+        // If this cell has 0 adjacent mines, add its neighbors to the queue
+        if (adjacentMines === 0) {
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const neighborWorldX = worldX + dx;
+              const neighborWorldY = worldY + dy;
+              const neighborCoordKey = `${neighborWorldX},${neighborWorldY}`;
 
-            if (!visited.has(neighborCoordKey)) {
-              queue.push({ worldX: neighborWorldX, worldY: neighborWorldY });
+              if (!visited.has(neighborCoordKey)) {
+                queue.push({ worldX: neighborWorldX, worldY: neighborWorldY });
+              }
             }
           }
         }
       }
-    }
 
-    // Create optimistic reveals and send to server
-    for (const cell of toReveal) {
-      const optimisticReveal = {
-        chunkId: { X: cell.chunkX, Y: cell.chunkY },
-        x: cell.localX,
-        y: cell.localY,
-        playerId: -1,
-        isMine: false,
-        adjacentMines: cell.adjacentMines
-      };
+      // Create optimistic reveals and send to server
+      for (const cell of toReveal) {
+        const optimisticReveal = {
+          chunkId: { X: cell.chunkX, Y: cell.chunkY },
+          x: cell.localX,
+          y: cell.localY,
+          playerId: -1,
+          isMine: false,
+          adjacentMines: cell.adjacentMines,
+        };
 
-      revealedCellsRef.current.set(cell.cellKey, optimisticReveal);
-      ensureChunkSubscription(cell.chunkX, cell.chunkY);
+        revealedCellsRef.current.set(cell.cellKey, optimisticReveal);
+        ensureChunkSubscription(cell.chunkX, cell.chunkY);
 
-      ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: cell.chunkX, Y: cell.chunkY }, x: cell.localX, y: cell.localY } })));
-    }
+        ws.send(
+          encodeMsg(
+            PB.Msg.create({
+              reveal: {
+                chunkId: { X: cell.chunkX, Y: cell.chunkY },
+                x: cell.localX,
+                y: cell.localY,
+              },
+            }),
+          ),
+        );
+      }
 
-    setTick(t => t + 1);
-    return toReveal.size;
-  }, [ws, worldToChunk, isMine, countAdjacentMines, ensureChunkSubscription]);
+      setTick((t) => t + 1);
+      return toReveal.size;
+    },
+    [ws, worldToChunk, isMine, countAdjacentMines, ensureChunkSubscription],
+  );
 
   // Handle cell click
-  const handleCellClick = useCallback(async (worldX, worldY, isRightClick = false) => {
-    if (!ws || !connected) return;
-    if (DEV_MODE) console.log('CELL CLICK:', { worldX, worldY, isRightClick });
+  const handleCellClick = useCallback(
+    async (worldX, worldY, isRightClick = false) => {
+      if (!ws || !connected) return;
+      if (DEV_MODE)
+        console.log("CELL CLICK:", { worldX, worldY, isRightClick });
 
-    const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
-    const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
-    const flagKey = `${worldX},${worldY}`;
+      const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
+      const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+      const flagKey = `${worldX},${worldY}`;
 
-    // Handle right-click for flagging
-    if (isRightClick) {
-      if (DEV_MODE) console.log('ATTEMPTING TO FLAG:', { chunkX, chunkY, localX, localY });
-      // Don't flag if already flagged
-      if (flaggedCellsRef.current.has(flagKey)) return;
+      // Handle right-click for flagging
+      if (isRightClick) {
+        if (DEV_MODE)
+          console.log("ATTEMPTING TO FLAG:", {
+            chunkX,
+            chunkY,
+            localX,
+            localY,
+          });
+        // Don't flag if already flagged
+        if (flaggedCellsRef.current.has(flagKey)) return;
 
-      // Don't flag revealed cells
-      if (revealedCellsRef.current.has(cellKey)) return;
+        // Don't flag revealed cells
+        if (revealedCellsRef.current.has(cellKey)) return;
 
-      // Send flag request to server
-      ws.send(encodeMsg(PB.Msg.create({ flag: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } })));
-      setTick(t => t + 1);
-      return;
-    }
+        // Send flag request to server
+        ws.send(
+          encodeMsg(
+            PB.Msg.create({
+              flag: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY },
+            }),
+          ),
+        );
+        setTick((t) => t + 1);
+        return;
+      }
 
-    // Handle left-click: check if it's chording or normal reveal
-    const revealedCell = revealedCellsRef.current.get(cellKey);
+      // Handle left-click: check if it's chording or normal reveal
+      const revealedCell = revealedCellsRef.current.get(cellKey);
 
-    // If clicking on a revealed cell with a number, try chording
-    if (revealedCell && !revealedCell.isMine && revealedCell.adjacentMines > 0) {
-      // Count flags and mines in 3x3 area
-      let flagCount = 0;
-      const cellsToReveal = [];
+      // If clicking on a revealed cell with a number, try chording
+      if (
+        revealedCell &&
+        !revealedCell.isMine &&
+        revealedCell.adjacentMines > 0
+      ) {
+        // Count flags and mines in 3x3 area
+        let flagCount = 0;
+        const cellsToReveal = [];
 
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
 
-          const neighborWorldX = worldX + dx;
-          const neighborWorldY = worldY + dy;
-          const neighborFlagKey = `${neighborWorldX},${neighborWorldY}`;
+            const neighborWorldX = worldX + dx;
+            const neighborWorldY = worldY + dy;
+            const neighborFlagKey = `${neighborWorldX},${neighborWorldY}`;
 
-          const { chunkX: nChunkX, chunkY: nChunkY, localX: nLocalX, localY: nLocalY } = worldToChunk(neighborWorldX, neighborWorldY);
-          const neighborCellKey = `${nChunkX},${nChunkY},${nLocalX},${nLocalY}`;
-          const neighborRevealed = revealedCellsRef.current.get(neighborCellKey);
+            const {
+              chunkX: nChunkX,
+              chunkY: nChunkY,
+              localX: nLocalX,
+              localY: nLocalY,
+            } = worldToChunk(neighborWorldX, neighborWorldY);
+            const neighborCellKey = `${nChunkX},${nChunkY},${nLocalX},${nLocalY}`;
+            const neighborRevealed =
+              revealedCellsRef.current.get(neighborCellKey);
 
-          // Count flags and revealed mines
-          if (flaggedCellsRef.current.has(neighborFlagKey) || (neighborRevealed && neighborRevealed.isMine)) {
-            flagCount++;
-          } else if (!neighborRevealed) {
-            // This cell can be revealed
-            cellsToReveal.push({ worldX: neighborWorldX, worldY: neighborWorldY });
+            // Count flags and revealed mines
+            if (
+              flaggedCellsRef.current.has(neighborFlagKey) ||
+              (neighborRevealed && neighborRevealed.isMine)
+            ) {
+              flagCount++;
+            } else if (!neighborRevealed) {
+              // This cell can be revealed
+              cellsToReveal.push({
+                worldX: neighborWorldX,
+                worldY: neighborWorldY,
+              });
+            }
           }
         }
-      }
 
-      // Only chord if flag count matches the number
-      if (flagCount === revealedCell.adjacentMines) {
-        // Reveal all unflagged, unrevealed neighbors
-        for (const cell of cellsToReveal) {
-          handleCellClick(cell.worldX, cell.worldY, false);
+        // Only chord if flag count matches the number
+        if (flagCount === revealedCell.adjacentMines) {
+          // Reveal all unflagged, unrevealed neighbors
+          for (const cell of cellsToReveal) {
+            handleCellClick(cell.worldX, cell.worldY, false);
+          }
         }
+        return;
       }
-      return;
-    }
 
-    ensureChunkSubscription(chunkX, chunkY);
+      ensureChunkSubscription(chunkX, chunkY);
 
-    const key = `${chunkX},${chunkY},${localX},${localY}`;
-    if (revealedCellsRef.current.has(key)) return;
+      const key = `${chunkX},${chunkY},${localX},${localY}`;
+      if (revealedCellsRef.current.has(key)) return;
 
-    // Don't reveal flagged cells
-    if (flaggedCellsRef.current.has(flagKey)) return;
+      // Don't reveal flagged cells
+      if (flaggedCellsRef.current.has(flagKey)) return;
 
-    let seed = seedCache.current.get(`${chunkX},${chunkY}`);
-    if (!seed) {
-      // Seed not available yet, user needs to wait for chunk sync
-      return;
-    }
+      let seed = seedCache.current.get(`${chunkX},${chunkY}`);
+      if (!seed) {
+        // Seed not available yet, user needs to wait for chunk sync
+        return;
+      }
 
-    // If it's a mine, just reveal the single cell
-    if (isMine(seed, localX, localY)) {
-      const optimisticReveal = {
-        chunkId: { X: chunkX, Y: chunkY },
-        x: localX,
-        y: localY,
-        playerId: -1,
-        isMine: true,
-        adjacentMines: 0
-      };
+      // If it's a mine, just reveal the single cell
+      if (isMine(seed, localX, localY)) {
+        const optimisticReveal = {
+          chunkId: { X: chunkX, Y: chunkY },
+          x: localX,
+          y: localY,
+          playerId: -1,
+          isMine: true,
+          adjacentMines: 0,
+        };
 
-      revealedCellsRef.current.set(key, optimisticReveal);
-      setTick(t => t + 1);
+        revealedCellsRef.current.set(key, optimisticReveal);
+        setTick((t) => t + 1);
 
-      ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } })));
-      return;
-    }
+        ws.send(
+          encodeMsg(
+            PB.Msg.create({
+              reveal: {
+                chunkId: { X: chunkX, Y: chunkY },
+                x: localX,
+                y: localY,
+              },
+            }),
+          ),
+        );
+        return;
+      }
 
-    // Check adjacent mines for this cell
-    const adjacent = await countAdjacentMines(chunkX, chunkY, localX, localY);
+      // Check adjacent mines for this cell
+      const adjacent = await countAdjacentMines(chunkX, chunkY, localX, localY);
 
-    // If it has 0 adjacent mines, do flood fill
-    if (adjacent === 0) {
-      const revealedCount = await floodFillReveal(worldX, worldY);
-      log(`Flood fill revealed ${revealedCount} cells`);
-    } else {
-      const optimisticReveal = {
-        chunkId: { X: chunkX, Y: chunkY },
-        x: localX,
-        y: localY,
-        playerId: -1,
-        isMine: false,
-        adjacentMines: adjacent
-      };
+      // If it has 0 adjacent mines, do flood fill
+      if (adjacent === 0) {
+        const revealedCount = await floodFillReveal(worldX, worldY);
+        log(`Flood fill revealed ${revealedCount} cells`);
+      } else {
+        const optimisticReveal = {
+          chunkId: { X: chunkX, Y: chunkY },
+          x: localX,
+          y: localY,
+          playerId: -1,
+          isMine: false,
+          adjacentMines: adjacent,
+        };
 
-      revealedCellsRef.current.set(key, optimisticReveal);
-      setTick(t => t + 1);
+        revealedCellsRef.current.set(key, optimisticReveal);
+        setTick((t) => t + 1);
 
-      ws.send(encodeMsg(PB.Msg.create({ reveal: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY } })));
-    }
-  }, [ws, connected, worldToChunk, ensureChunkSubscription, isMine, countAdjacentMines, floodFillReveal]);
+        ws.send(
+          encodeMsg(
+            PB.Msg.create({
+              reveal: {
+                chunkId: { X: chunkX, Y: chunkY },
+                x: localX,
+                y: localY,
+              },
+            }),
+          ),
+        );
+      }
+    },
+    [
+      ws,
+      connected,
+      worldToChunk,
+      ensureChunkSubscription,
+      isMine,
+      countAdjacentMines,
+      floodFillReveal,
+    ],
+  );
 
   // 3D cell drawing function
-  const draw3DCell = useCallback((ctx, x, y, size, isRevealed = false, isPressed = false) => {
-    const lightGray = '#f0f0f0';
-    const mediumGray = '#c0c0c0';
-    const darkGray = '#808080';
-    const veryDarkGray = '#404040';
+  const draw3DCell = useCallback(
+    (ctx, x, y, size, isRevealed = false, isPressed = false) => {
+      const lightGray = "#f0f0f0";
+      const mediumGray = "#c0c0c0";
+      const darkGray = "#808080";
+      const veryDarkGray = "#404040";
 
-    if (isRevealed) {
-      // Revealed cells: flat with subtle inset border
-      ctx.fillStyle = '#e8e8e8';
-      ctx.fillRect(x, y, size, size);
+      if (isRevealed) {
+        // Revealed cells: flat with subtle inset border
+        ctx.fillStyle = "#e8e8e8";
+        ctx.fillRect(x, y, size, size);
 
-      // Subtle inset effect
-      ctx.fillStyle = darkGray;
-      ctx.fillRect(x, y, size, 1); // top
-      ctx.fillRect(x, y, 1, size); // left
-    } else {
-      // Unrevealed cells: raised 3D effect
-      const bevelSize = 2;
-
-      // Main cell face
-      ctx.fillStyle = mediumGray;
-      ctx.fillRect(x + bevelSize, y + bevelSize, size - bevelSize * 2, size - bevelSize * 2);
-
-      if (isPressed) {
-        // Pressed/clicked state - inset
+        // Subtle inset effect
         ctx.fillStyle = darkGray;
-        ctx.fillRect(x, y, size, bevelSize); // top edge
-        ctx.fillRect(x, y, bevelSize, size); // left edge
-
-        ctx.fillStyle = lightGray;
-        ctx.fillRect(x, y + size - bevelSize, size, bevelSize); // bottom edge
-        ctx.fillRect(x + size - bevelSize, y, bevelSize, size); // right edge
+        ctx.fillRect(x, y, size, 1); // top
+        ctx.fillRect(x, y, 1, size); // left
       } else {
-        // Raised state - normal
-        ctx.fillStyle = lightGray;
-        ctx.fillRect(x, y, size, bevelSize); // top highlight
-        ctx.fillRect(x, y, bevelSize, size); // left highlight
+        // Unrevealed cells: raised 3D effect
+        const bevelSize = 2;
 
-        ctx.fillStyle = darkGray;
-        ctx.fillRect(x, y + size - bevelSize, size, bevelSize); // bottom shadow
-        ctx.fillRect(x + size - bevelSize, y, bevelSize, size); // right shadow
+        // Main cell face
+        ctx.fillStyle = mediumGray;
+        ctx.fillRect(
+          x + bevelSize,
+          y + bevelSize,
+          size - bevelSize * 2,
+          size - bevelSize * 2,
+        );
 
-        // Corner pixels for cleaner look
-        ctx.fillStyle = veryDarkGray;
-        ctx.fillRect(x + size - bevelSize, y + size - bevelSize, bevelSize, bevelSize); // bottom-right corner
+        if (isPressed) {
+          // Pressed/clicked state - inset
+          ctx.fillStyle = darkGray;
+          ctx.fillRect(x, y, size, bevelSize); // top edge
+          ctx.fillRect(x, y, bevelSize, size); // left edge
+
+          ctx.fillStyle = lightGray;
+          ctx.fillRect(x, y + size - bevelSize, size, bevelSize); // bottom edge
+          ctx.fillRect(x + size - bevelSize, y, bevelSize, size); // right edge
+        } else {
+          // Raised state - normal
+          ctx.fillStyle = lightGray;
+          ctx.fillRect(x, y, size, bevelSize); // top highlight
+          ctx.fillRect(x, y, bevelSize, size); // left highlight
+
+          ctx.fillStyle = darkGray;
+          ctx.fillRect(x, y + size - bevelSize, size, bevelSize); // bottom shadow
+          ctx.fillRect(x + size - bevelSize, y, bevelSize, size); // right shadow
+
+          // Corner pixels for cleaner look
+          ctx.fillStyle = veryDarkGray;
+          ctx.fillRect(
+            x + size - bevelSize,
+            y + size - bevelSize,
+            bevelSize,
+            bevelSize,
+          ); // bottom-right corner
+        }
       }
-    }
-  }, []);
+    },
+    [],
+  );
 
   // Canvas rendering
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext("2d");
     const rect = canvas.getBoundingClientRect();
 
     canvas.width = rect.width;
     canvas.height = rect.height;
 
-    ctx.fillStyle = '#c0c0c0';
+    ctx.fillStyle = "#c0c0c0";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const startWorldX = Math.floor(viewX / CELL_SIZE);
@@ -604,8 +735,12 @@ function App() {
         const screenY = worldY * CELL_SIZE - viewY;
 
         // Skip if not visible
-        if (screenX + CELL_SIZE < 0 || screenX > canvas.width ||
-            screenY + CELL_SIZE < 0 || screenY > canvas.height) {
+        if (
+          screenX + CELL_SIZE < 0 ||
+          screenX > canvas.width ||
+          screenY + CELL_SIZE < 0 ||
+          screenY > canvas.height
+        ) {
           continue;
         }
 
@@ -620,38 +755,38 @@ function App() {
       }
     }
 
-  // Removed chunk boundaries for now
-  //   // Draw chunk boundaries
-  //   ctx.strokeStyle = '#333';
-  //   ctx.lineWidth = 2;
-  //   ctx.beginPath();
+    // Removed chunk boundaries for now
+    //   // Draw chunk boundaries
+    //   ctx.strokeStyle = '#333';
+    //   ctx.lineWidth = 2;
+    //   ctx.beginPath();
 
-  //   const startChunkX = Math.floor(startWorldX / CHUNK);
-  //   const startChunkY = Math.floor(startWorldY / CHUNK);
-  //   const endChunkX = Math.ceil(endWorldX / CHUNK);
-  //   const endChunkY = Math.ceil(endWorldY / CHUNK);
+    //   const startChunkX = Math.floor(startWorldX / CHUNK);
+    //   const startChunkY = Math.floor(startWorldY / CHUNK);
+    //   const endChunkX = Math.ceil(endWorldX / CHUNK);
+    //   const endChunkY = Math.ceil(endWorldY / CHUNK);
 
-  //   for (let chunkX = startChunkX; chunkX <= endChunkX; chunkX++) {
-  //     const screenX = chunkX * CHUNK * CELL_SIZE - viewX;
-  //     ctx.moveTo(screenX, 0);
-  //     ctx.lineTo(screenX, canvas.height);
-  //   }
+    //   for (let chunkX = startChunkX; chunkX <= endChunkX; chunkX++) {
+    //     const screenX = chunkX * CHUNK * CELL_SIZE - viewX;
+    //     ctx.moveTo(screenX, 0);
+    //     ctx.lineTo(screenX, canvas.height);
+    //   }
 
-  //   for (let chunkY = startChunkY; chunkY <= endChunkY; chunkY++) {
-  //     const screenY = chunkY * CHUNK * CELL_SIZE - viewY;
-  //     ctx.moveTo(0, screenY);
-  //     ctx.lineTo(canvas.width, screenY);
-  //   }
+    //   for (let chunkY = startChunkY; chunkY <= endChunkY; chunkY++) {
+    //     const screenY = chunkY * CHUNK * CELL_SIZE - viewY;
+    //     ctx.moveTo(0, screenY);
+    //     ctx.lineTo(canvas.width, screenY);
+    //   }
 
-  //   ctx.stroke();
+    //   ctx.stroke();
 
     // Second pass: Draw revealed cells with 3D effect and content
-    ctx.font = 'bold 14px monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+    ctx.font = "bold 14px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
 
     revealedCellsRef.current.forEach((cellData, key) => {
-      const [chunkX, chunkY, localX, localY] = key.split(',').map(Number);
+      const [chunkX, chunkY, localX, localY] = key.split(",").map(Number);
       const worldX = chunkX * CHUNK + localX;
       const worldY = chunkY * CHUNK + localY;
 
@@ -659,8 +794,12 @@ function App() {
       const screenY = worldY * CELL_SIZE - viewY;
 
       // Skip if not visible
-      if (screenX + CELL_SIZE < 0 || screenX > canvas.width ||
-          screenY + CELL_SIZE < 0 || screenY > canvas.height) {
+      if (
+        screenX + CELL_SIZE < 0 ||
+        screenX > canvas.width ||
+        screenY + CELL_SIZE < 0 ||
+        screenY > canvas.height
+      ) {
         return;
       }
 
@@ -670,7 +809,7 @@ function App() {
         draw3DCell(ctx, screenX, screenY, CELL_SIZE, true, false);
 
         // Add red tint for mine
-        ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+        ctx.fillStyle = "rgba(255, 0, 0, 0.3)";
         ctx.fillRect(screenX + 1, screenY + 1, CELL_SIZE - 2, CELL_SIZE - 2);
       } else {
         // Normal revealed cell
@@ -679,24 +818,36 @@ function App() {
 
       // Draw cell content
       if (cellData.isMine) {
-        ctx.fillStyle = 'white';
-        ctx.fillText('💣', screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2 + 2);
+        ctx.fillStyle = "white";
+        ctx.fillText(
+          "💣",
+          screenX + CELL_SIZE / 2,
+          screenY + CELL_SIZE / 2 + 2,
+        );
       } else if (cellData.adjacentMines > 0) {
-        ctx.font = 'bold 14px monospace';
+        ctx.font = "bold 14px monospace";
         ctx.fillStyle = getNumberColor(cellData.adjacentMines);
-        ctx.fillText(cellData.adjacentMines.toString(), screenX + CELL_SIZE / 2, screenY + CELL_SIZE / 2 + 1.5);
+        ctx.fillText(
+          cellData.adjacentMines.toString(),
+          screenX + CELL_SIZE / 2,
+          screenY + CELL_SIZE / 2 + 1.5,
+        );
       }
     });
 
     // Draw flags
     flaggedCellsRef.current.forEach((flagData, flagKey) => {
-      const [worldX, worldY] = flagKey.split(',').map(Number);
+      const [worldX, worldY] = flagKey.split(",").map(Number);
       const screenX = worldX * CELL_SIZE - viewX;
       const screenY = worldY * CELL_SIZE - viewY;
 
       // Skip if not visible
-      if (screenX + CELL_SIZE < 0 || screenX > canvas.width ||
-          screenY + CELL_SIZE < 0 || screenY > canvas.height) {
+      if (
+        screenX + CELL_SIZE < 0 ||
+        screenX > canvas.width ||
+        screenY + CELL_SIZE < 0 ||
+        screenY > canvas.height
+      ) {
         return;
       }
 
@@ -716,7 +867,7 @@ function App() {
       const flagHeight = 6;
 
       // Draw flag pole (dark gray)
-      ctx.fillStyle = '#333';
+      ctx.fillStyle = "#333";
       ctx.fillRect(flagPoleX, flagTopY, 2, flagBottomY - flagTopY);
 
       // Draw flag triangle with flag color
@@ -730,12 +881,19 @@ function App() {
       ctx.fill();
 
       // Add a subtle border to the flag
-      ctx.strokeStyle = '#000';
+      ctx.strokeStyle = "#000";
       ctx.lineWidth = 0.5;
       ctx.stroke();
     });
-
-  }, [viewX, viewY, tick, getNumberColor, worldToChunk, playerColor, draw3DCell]);
+  }, [
+    viewX,
+    viewY,
+    tick,
+    getNumberColor,
+    worldToChunk,
+    playerColor,
+    draw3DCell,
+  ]);
 
   // Subscribe to visible chunks
   const subscribeToVisibleChunks = useCallback(() => {
@@ -766,117 +924,59 @@ function App() {
     }
 
     // Un‑subscribe chunks that scrolled off (>1 ring outside viewport)
-    subscribedChunks.current.forEach(key => {
+    subscribedChunks.current.forEach((key) => {
       if (!visibleNow.has(key)) {
-        const [cx, cy] = key.split(',').map(Number);
+        const [cx, cy] = key.split(",").map(Number);
         ensureChunkUnsubscription(cx, cy);
       }
     });
-  }, [ws, connected, viewX, viewY, ensureChunkSubscription, ensureChunkUnsubscription]);
+  }, [
+    ws,
+    connected,
+    viewX,
+    viewY,
+    ensureChunkSubscription,
+    ensureChunkUnsubscription,
+  ]);
 
   // Mouse event handlers
-  const handleMouseDown = useCallback((e) => {
-    e.preventDefault(); // Prevent context menu and other default behaviors
+  const handleMouseDown = useCallback(
+    (e) => {
+      e.preventDefault(); // Prevent context menu and other default behaviors
 
-    if (e.button === 2) { // Right click for flag
-      const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
-      handleCellClick(worldX, worldY, true);
-      return;
-    }
-
-    if (e.button !== 0) return;
-
-    setDragStart({
-      x: e.clientX,
-      y: e.clientY,
-      viewX,
-      viewY
-    });
-
-    // Set a timeout to enable dragging after a delay
-    dragTimeoutRef.current = setTimeout(() => {
-      setIsDragging(true);
-    }, 150); // delay before considering it a drag
-  }, [viewX, viewY, screenToWorld, handleCellClick]);
-
-  const handleMouseMove = useCallback((e) => {
-    if (!dragStart.x) return; // No mouse down recorded
-
-    const dx = Math.abs(e.clientX - dragStart.x);
-    const dy = Math.abs(e.clientY - dragStart.y);
-
-    // If mouse moved significantly, immediately enable dragging
-    if (dx > 50 || dy > 50) {
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-        dragTimeoutRef.current = null;
+      if (e.button === 2) {
+        // Right click for flag
+        const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
+        handleCellClick(worldX, worldY, true);
+        return;
       }
-      setIsDragging(true);
-    }
 
-    if (isDragging) {
-      const deltaX = e.clientX - dragStart.x;
-      const deltaY = e.clientY - dragStart.y;
+      if (e.button !== 0) return;
 
-      setViewX(dragStart.viewX - deltaX);
-      setViewY(dragStart.viewY - deltaY);
-    }
-  }, [isDragging, dragStart]);
-
-  const handleMouseUp = useCallback((e) => {
-    if (dragTimeoutRef.current) {
-      clearTimeout(dragTimeoutRef.current);
-      dragTimeoutRef.current = null;
-    }
-
-    if (!isDragging && dragStart.x) {
-      const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
-      const isRight = (e.button === 2) || (e.button === 0 && e.ctrlKey);
-      handleCellClick(worldX, worldY, isRight);
-    }
-
-    setIsDragging(false);
-    setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
-  }, [isDragging, dragStart, screenToWorld, handleCellClick]);
-
-  // Handle context menu (prevent default right-click menu)
-  const handleContextMenu = useCallback((e) => {
-    e.preventDefault();
-  }, []);
-
-  // Touch event handlers for mobile
-  const handleTouchStart = useCallback((e) => {
-    if (e.touches.length === 1) {
-      const touch = e.touches[0];
-      e.preventDefault(); // Prevent text selection
       setDragStart({
-        x: touch.clientX,
-        y: touch.clientY,
+        x: e.clientX,
+        y: e.clientY,
         viewX,
-        viewY
+        viewY,
       });
 
-      // Start long press timer for flagging
+      // Set a timeout to enable dragging after a delay
       dragTimeoutRef.current = setTimeout(() => {
-        // This is a long press - place a flag
-        const { x: worldX, y: worldY } = screenToWorld(touch.clientX, touch.clientY);
-        handleCellClick(worldX, worldY, true); // true = right click (flag)
+        setIsDragging(true);
+      }, 150); // delay before considering it a drag
+    },
+    [viewX, viewY, screenToWorld, handleCellClick],
+  );
 
-        // Clear drag start to prevent any further actions
-        setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
-      }, 200); // long press duration
-    }
-  }, [viewX, viewY, screenToWorld, handleCellClick]);
+  const handleMouseMove = useCallback(
+    (e) => {
+      if (!dragStart.x) return; // No mouse down recorded
 
-  const handleTouchMove = useCallback((e) => {
-    e.preventDefault(); // Prevent scrolling
-    if (e.touches.length === 1 && dragStart.x) {
-      const touch = e.touches[0];
-      const dx = Math.abs(touch.clientX - dragStart.x);
-      const dy = Math.abs(touch.clientY - dragStart.y);
+      const dx = Math.abs(e.clientX - dragStart.x);
+      const dy = Math.abs(e.clientY - dragStart.y);
 
-      // If touch moved significantly, cancel long press and enable dragging
-      if (dx > 10 || dy > 10) {
+      // If mouse moved significantly, immediately enable dragging
+      if (dx > 50 || dy > 50) {
         if (dragTimeoutRef.current) {
           clearTimeout(dragTimeoutRef.current);
           dragTimeoutRef.current = null;
@@ -885,41 +985,157 @@ function App() {
       }
 
       if (isDragging) {
-        const deltaX = touch.clientX - dragStart.x;
-        const deltaY = touch.clientY - dragStart.y;
+        const deltaX = e.clientX - dragStart.x;
+        const deltaY = e.clientY - dragStart.y;
 
         setViewX(dragStart.viewX - deltaX);
         setViewY(dragStart.viewY - deltaY);
       }
-    }
-  }, [isDragging, dragStart]);
+    },
+    [isDragging, dragStart],
+  );
 
-  const handleTouchEnd = useCallback((e) => {
-    // Clear the long press timeout
-    if (dragTimeoutRef.current) {
-      clearTimeout(dragTimeoutRef.current);
-      dragTimeoutRef.current = null;
-    }
+  const handleMouseUp = useCallback(
+    (e) => {
+      if (dragTimeoutRef.current) {
+        clearTimeout(dragTimeoutRef.current);
+        dragTimeoutRef.current = null;
+      }
 
-    if (!isDragging && dragStart.x && e.changedTouches.length === 1) {
-      // This was a short tap, not a drag or long press - reveal cell
-      const touch = e.changedTouches[0];
-      const { x: worldX, y: worldY } = screenToWorld(touch.clientX, touch.clientY);
-      handleCellClick(worldX, worldY, false); // false = left click (reveal)
-    }
+      if (!isDragging && dragStart.x) {
+        const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
+        const isRight = e.button === 2 || (e.button === 0 && e.ctrlKey);
+        handleCellClick(worldX, worldY, isRight);
+      }
 
-    setIsDragging(false);
-    setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
-  }, [isDragging, dragStart, screenToWorld, handleCellClick]);
+      setIsDragging(false);
+      setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
+      if (ws && connected) {
+        ws.send(
+          encodeMsg(
+            PB.Msg.create({
+              viewUpdate: {
+                viewX: Math.floor(viewX),
+                viewY: Math.floor(viewY),
+              },
+            }),
+          ),
+        );
+      }
+    },
+    [isDragging, dragStart, screenToWorld, handleCellClick],
+  );
+
+  // Handle context menu (prevent default right-click menu)
+  const handleContextMenu = useCallback((e) => {
+    e.preventDefault();
+  }, []);
+
+  // Touch event handlers for mobile
+  const handleTouchStart = useCallback(
+    (e) => {
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        e.preventDefault(); // Prevent text selection
+        setDragStart({
+          x: touch.clientX,
+          y: touch.clientY,
+          viewX,
+          viewY,
+        });
+
+        // Start long press timer for flagging
+        dragTimeoutRef.current = setTimeout(() => {
+          // This is a long press - place a flag
+          const { x: worldX, y: worldY } = screenToWorld(
+            touch.clientX,
+            touch.clientY,
+          );
+          handleCellClick(worldX, worldY, true); // true = right click (flag)
+
+          // Clear drag start to prevent any further actions
+          setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
+        }, 200); // long press duration
+      }
+    },
+    [viewX, viewY, screenToWorld, handleCellClick],
+  );
+
+  const handleTouchMove = useCallback(
+    (e) => {
+      e.preventDefault(); // Prevent scrolling
+      if (e.touches.length === 1 && dragStart.x) {
+        const touch = e.touches[0];
+        const dx = Math.abs(touch.clientX - dragStart.x);
+        const dy = Math.abs(touch.clientY - dragStart.y);
+
+        // If touch moved significantly, cancel long press and enable dragging
+        if (dx > 10 || dy > 10) {
+          if (dragTimeoutRef.current) {
+            clearTimeout(dragTimeoutRef.current);
+            dragTimeoutRef.current = null;
+          }
+          setIsDragging(true);
+        }
+
+        if (isDragging) {
+          const deltaX = touch.clientX - dragStart.x;
+          const deltaY = touch.clientY - dragStart.y;
+
+          setViewX(dragStart.viewX - deltaX);
+          setViewY(dragStart.viewY - deltaY);
+        }
+      }
+    },
+    [isDragging, dragStart],
+  );
+
+  const handleTouchEnd = useCallback(
+    (e) => {
+      // Clear the long press timeout
+      if (dragTimeoutRef.current) {
+        clearTimeout(dragTimeoutRef.current);
+        dragTimeoutRef.current = null;
+      }
+
+      if (!isDragging && dragStart.x && e.changedTouches.length === 1) {
+        // This was a short tap, not a drag or long press - reveal cell
+        const touch = e.changedTouches[0];
+        const { x: worldX, y: worldY } = screenToWorld(
+          touch.clientX,
+          touch.clientY,
+        );
+        handleCellClick(worldX, worldY, false); // false = left click (reveal)
+      }
+
+      setIsDragging(false);
+      setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
+      if (ws && connected) {
+        ws.send(
+          encodeMsg(
+            PB.Msg.create({
+              viewUpdate: {
+                viewX: Math.floor(viewX),
+                viewY: Math.floor(viewY),
+              },
+            }),
+          ),
+        );
+      }
+    },
+    [isDragging, dragStart, screenToWorld, handleCellClick],
+  );
 
   // WebSocket setup
   const connectWs = useCallback(() => {
     const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
     const websocket = new WebSocket(wsUrl);
-    websocket.binaryType = 'arraybuffer';
+    websocket.binaryType = "arraybuffer";
 
     websocket.onopen = () => {
-      const msg = PB.Msg.create({ hello: { playerId: playerId, name: nameInput, color: playerColor }});
+      const msg = PB.Msg.create({
+        hello: { playerId: playerId, name: nameInput, color: playerColor },
+      });
       websocket.send(encodeMsg(msg));
       setConnected(true);
       setWs(websocket);
@@ -935,43 +1151,64 @@ function App() {
 
       // Additional debug logging for message processing
       if (DEV_MODE) {
-        console.log('PROCESSING MESSAGE:', {
+        console.log("PROCESSING MESSAGE:", {
           type: Object.keys(m)[0],
-          payload: m
+          payload: m,
         });
       }
 
       let data = {};
       if (m.welcome) {
-        data = { type: 'welcome', playerId: m.welcome.playerId, name: m.welcome.name, color: m.welcome.color };
+        data = {
+          type: "welcome",
+          playerId: m.welcome.playerId,
+          name: m.welcome.name,
+          color: m.welcome.color,
+          viewX: m.welcome.viewX,
+          viewY: m.welcome.viewY,
+        };
       } else if (m.chunkSync) {
-        data = { type: 'chunkSync', chunkId: m.chunkSync.chunkId, seed: m.chunkSync.seed, reveals: m.chunkSync.reveals, flags: m.chunkSync.flags };
+        data = {
+          type: "chunkSync",
+          chunkId: m.chunkSync.chunkId,
+          seed: m.chunkSync.seed,
+          reveals: m.chunkSync.reveals,
+          flags: m.chunkSync.flags,
+        };
       } else if (m.revealAck) {
-        data = { type: 'revealAck', ok: m.revealAck.ok };
+        data = { type: "revealAck", ok: m.revealAck.ok };
       } else if (m.flagAck) {
-        data = { type: 'flagAck', ok: m.flagAck.ok };
+        data = { type: "flagAck", ok: m.flagAck.ok };
       } else if (m.leaderboard) {
-        data = { type: 'leaderboard', version: m.leaderboard.version, entries: m.leaderboard.entries };
+        data = {
+          type: "leaderboard",
+          version: m.leaderboard.version,
+          entries: m.leaderboard.entries,
+        };
       } else if (m.scoreUpdate) {
-        data = { type: 'scoreUpdate', score: m.scoreUpdate.score };
+        data = { type: "scoreUpdate", score: m.scoreUpdate.score };
       } else if (m.flag) {
         data = { ...m.flag, chunkId: m.flag.chunkId };
       } else if (m.reveal) {
         data = { ...m.reveal, chunkId: m.reveal.chunkId };
       }
 
-      if (data.type === 'welcome') {
+      if (data.type === "welcome") {
         setPlayerId(data.playerId);
-        setUsername(data.name || '');
-        localStorage.setItem('playerId', data.playerId);
-        localStorage.setItem('username', data.name || '');
+        setUsername(data.name || "");
+        localStorage.setItem("playerId", data.playerId);
+        localStorage.setItem("username", data.name || "");
+        setViewX(data.viewX || 0);
+        setViewY(data.viewY || 0);
+        sessionStorage.setItem("viewX", String(data.viewX || 0));
+        sessionStorage.setItem("viewY", String(data.viewY || 0));
         return;
       }
 
-      if (data.type === 'chunkSync') {
+      if (data.type === "chunkSync") {
         // Helper to convert Uint8Array (protobuf bytes) to BigInt
         const bytesToBig = (u8) =>
-          (new DataView(u8.buffer, u8.byteOffset, 8)).getBigUint64(0, true);
+          new DataView(u8.buffer, u8.byteOffset, 8).getBigUint64(0, true);
 
         const key = `${data.chunkId.X},${data.chunkId.Y}`;
         seedCache.current.set(key, bytesToBig(data.seed));
@@ -985,10 +1222,10 @@ function App() {
 
             flaggedCellsRef.current.set(flagKey, {
               color: flag.color,
-              playerId: flag.playerId
+              playerId: flag.playerId,
             });
           }
-          setTick(t => t + 1);
+          setTick((t) => t + 1);
         }
 
         if (Array.isArray(data.reveals)) {
@@ -1006,10 +1243,20 @@ function App() {
                   let ny = cell.y + dy;
                   let ncx = cell.chunkId.X;
                   let ncy = cell.chunkId.Y;
-                  if (nx < 0) { ncx--; nx += CHUNK; }
-                  else if (nx >= CHUNK) { ncx++; nx -= CHUNK; }
-                  if (ny < 0) { ncy--; ny += CHUNK; }
-                  else if (ny >= CHUNK) { ncy++; ny -= CHUNK; }
+                  if (nx < 0) {
+                    ncx--;
+                    nx += CHUNK;
+                  } else if (nx >= CHUNK) {
+                    ncx++;
+                    nx -= CHUNK;
+                  }
+                  if (ny < 0) {
+                    ncy--;
+                    ny += CHUNK;
+                  } else if (ny >= CHUNK) {
+                    ncy++;
+                    ny -= CHUNK;
+                  }
 
                   const nSeed = seedCache.current.get(`${ncx},${ncy}`);
                   if (nSeed && isMine(nSeed, nx, ny)) adjacentMines++;
@@ -1021,29 +1268,40 @@ function App() {
             revealedCellsRef.current.set(cellKey, {
               ...cell,
               isMine: cellIsMine,
-              adjacentMines
+              adjacentMines,
             });
           }
-          setTick(t => t + 1);
+          setTick((t) => t + 1);
         }
-      } else if (data.type === 'flagAck') {
+      } else if (data.type === "flagAck") {
         // Simple acknowledgment - just indicates success or failure
         if (!data.ok) {
           // Flag failed - could show user feedback here if needed
-          console.log('Flag failed');
+          console.log("Flag failed");
         }
-      } else if (data.type === 'revealAck') {
+      } else if (data.type === "revealAck") {
         if (!data.ok) {
           // Optimistic reveal lost → resync this chunk
           const key = `${data.chunkId.X},${data.chunkId.Y},${data.x},${data.y}`;
           revealedCellsRef.current.delete(key);
 
           // Force a re‑subscribe to get authoritative state
-          ws.send(encodeMsg(PB.Msg.create({ subscribe: { chunkX: data.chunkId.X, chunkY: data.chunkId.Y } })));
+          ws.send(
+            encodeMsg(
+              PB.Msg.create({
+                subscribe: { chunkX: data.chunkId.X, chunkY: data.chunkId.Y },
+              }),
+            ),
+          );
 
-          setTick(t => t + 1);
+          setTick((t) => t + 1);
         }
-      } else if (data.chunkId && typeof data.x === 'number' && typeof data.y === 'number' && data.color) {
+      } else if (
+        data.chunkId &&
+        typeof data.x === "number" &&
+        typeof data.y === "number" &&
+        data.color
+      ) {
         // This is a flag broadcast from server
         const flagWorldX = data.chunkId.X * CHUNK + data.x;
         const flagWorldY = data.chunkId.Y * CHUNK + data.y;
@@ -1051,14 +1309,22 @@ function App() {
 
         flaggedCellsRef.current.set(flagKey, {
           color: data.color,
-          playerId: data.playerId
+          playerId: data.playerId,
         });
 
-        setTick(t => t + 1);
-
-      } else if (data.chunkId && typeof data.x === 'number' && typeof data.y === 'number' && typeof data.playerId === 'number' && !data.color) {
+        setTick((t) => t + 1);
+      } else if (
+        data.chunkId &&
+        typeof data.x === "number" &&
+        typeof data.y === "number" &&
+        typeof data.playerId === "number" &&
+        !data.color
+      ) {
         // This is a reveal broadcast from server (e.g., from wrong flag)
-        const { chunkX, chunkY, localX, localY } = worldToChunk(data.chunkId.X * CHUNK + data.x, data.chunkId.Y * CHUNK + data.y);
+        const { chunkX, chunkY, localX, localY } = worldToChunk(
+          data.chunkId.X * CHUNK + data.x,
+          data.chunkId.Y * CHUNK + data.y,
+        );
         const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
 
         // Get the seed for this chunk to determine if it's a mine
@@ -1076,10 +1342,20 @@ function App() {
                 let ny = localY + dy;
                 let ncx = chunkX;
                 let ncy = chunkY;
-                if (nx < 0) { ncx--; nx += CHUNK; }
-                else if (nx >= CHUNK) { ncx++; nx -= CHUNK; }
-                if (ny < 0) { ncy--; ny += CHUNK; }
-                else if (ny >= CHUNK) { ncy++; ny -= CHUNK; }
+                if (nx < 0) {
+                  ncx--;
+                  nx += CHUNK;
+                } else if (nx >= CHUNK) {
+                  ncx++;
+                  nx -= CHUNK;
+                }
+                if (ny < 0) {
+                  ncy--;
+                  ny += CHUNK;
+                } else if (ny >= CHUNK) {
+                  ncy++;
+                  ny -= CHUNK;
+                }
 
                 const nSeed = seedCache.current.get(`${ncx},${ncy}`);
                 if (nSeed && isMine(nSeed, nx, ny)) adjacentMines++;
@@ -1093,29 +1369,30 @@ function App() {
             y: localY,
             playerId: data.playerId,
             isMine: cellIsMine,
-            adjacentMines
+            adjacentMines,
           });
 
-          setTick(t => t + 1);
+          setTick((t) => t + 1);
         }
-
-      } else if (data.type === 'leaderboard') {
+      } else if (data.type === "leaderboard") {
         if (data.entries) {
-          const list = data.entries.map(e => {
-            let num = e.score;
-            if (num.endsWith('k')) {
-              num = parseFloat(num.slice(0, -1)) * 1000;
-            } else if (num.endsWith('M')) {
-              num = parseFloat(num.slice(0, -1)) * 1000000;
-            } else {
-              num = parseInt(num) || 0;
-            }
-            return { playerId: e.playerId, name: e.name || '', score: num };
-          }).sort((a,b)=>b.score-a.score);
+          const list = data.entries
+            .map((e) => {
+              let num = e.score;
+              if (num.endsWith("k")) {
+                num = parseFloat(num.slice(0, -1)) * 1000;
+              } else if (num.endsWith("M")) {
+                num = parseFloat(num.slice(0, -1)) * 1000000;
+              } else {
+                num = parseInt(num) || 0;
+              }
+              return { playerId: e.playerId, name: e.name || "", score: num };
+            })
+            .sort((a, b) => b.score - a.score);
           setLeaderboard(list);
         }
-      } else if (data.type === 'scoreUpdate') {
-        if (typeof data.score === 'number') {
+      } else if (data.type === "scoreUpdate") {
+        if (typeof data.score === "number") {
           setPlayerScore(data.score);
         }
       }
@@ -1143,6 +1420,11 @@ function App() {
     subscribeToVisibleChunks();
   }, [subscribeToVisibleChunks]);
 
+  useEffect(() => {
+    sessionStorage.setItem("viewX", String(viewX));
+    sessionStorage.setItem("viewY", String(viewY));
+  }, [viewX, viewY]);
+
   // Render when view or game state changes
   useEffect(() => {
     render();
@@ -1151,11 +1433,11 @@ function App() {
   // Handle window resize
   useEffect(() => {
     const handleResize = () => {
-      setTick(t => t + 1);
+      setTick((t) => t + 1);
     };
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   const topPlayers = useMemo(() => {
@@ -1163,46 +1445,79 @@ function App() {
   }, [leaderboard]);
 
   // Calculate current world position for debugging
-  const centerWorldX = Math.floor((viewX + (canvasRef.current?.width || 0) / 2) / CELL_SIZE);
-  const centerWorldY = Math.floor((viewY + (canvasRef.current?.height || 0) / 2) / CELL_SIZE);
-  const { chunkX: centerChunkX, chunkY: centerChunkY } = worldToChunk(centerWorldX, centerWorldY);
+  const centerWorldX = Math.floor(
+    (viewX + (canvasRef.current?.width || 0) / 2) / CELL_SIZE,
+  );
+  const centerWorldY = Math.floor(
+    (viewY + (canvasRef.current?.height || 0) / 2) / CELL_SIZE,
+  );
+  const { chunkX: centerChunkX, chunkY: centerChunkY } = worldToChunk(
+    centerWorldX,
+    centerWorldY,
+  );
 
   return (
     <div className="game-container">
       {!username && (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:20}}>
-          <div style={{background:'white',padding:20,borderRadius:8,textAlign:'center',maxWidth:300}}>
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 20,
+          }}
+        >
+          <div
+            style={{
+              background: "white",
+              padding: 20,
+              borderRadius: 8,
+              textAlign: "center",
+              maxWidth: 300,
+            }}
+          >
             <h3>Enter username</h3>
             <input
               value={nameInput}
-              onChange={e=>setNameInput(e.target.value)}
-              style={{padding:8, marginBottom:10, borderRadius:4, border:'1px solid #ccc', width:'80%'}}
+              onChange={(e) => setNameInput(e.target.value)}
+              style={{
+                padding: 8,
+                marginBottom: 10,
+                borderRadius: 4,
+                border: "1px solid #ccc",
+                width: "80%",
+              }}
               placeholder="Your name"
             />
-            <div style={{margin:'15px 0'}}>
-              <div style={{marginBottom:'10px', fontWeight:'bold'}}>Choose your color:</div>
+            <div style={{ margin: "15px 0" }}>
+              <div style={{ marginBottom: "10px", fontWeight: "bold" }}>
+                Choose your color:
+              </div>
               <ColorWheel
                 value={playerColor}
                 onChange={(color) => {
                   setPlayerColor(color);
-                  localStorage.setItem('playerColor', color);
+                  localStorage.setItem("playerColor", color);
                 }}
               />
             </div>
             <button
-              onClick={()=>{
+              onClick={() => {
                 if (nameInput.trim()) {
                   setUsername(nameInput.trim());
                 }
               }}
               style={{
-                padding:'10px 20px',
-                backgroundColor:'#4CAF50',
-                color:'white',
-                border:'none',
-                borderRadius:4,
-                cursor:'pointer',
-                fontSize:16
+                padding: "10px 20px",
+                backgroundColor: "#4CAF50",
+                color: "white",
+                border: "none",
+                borderRadius: 4,
+                cursor: "pointer",
+                fontSize: 16,
               }}
               disabled={!nameInput.trim()}
             >
@@ -1213,13 +1528,13 @@ function App() {
       )}
 
       {/* Player Score Display */}
-      <div className="player-score">
-        Score: {playerScore}
-      </div>
+      <div className="player-score">Score: {playerScore}</div>
 
       <div className="header">
         <div className="status">
-          <div className={`connection-status ${connected ? "connected" : "disconnected"}`}>
+          <div
+            className={`connection-status ${connected ? "connected" : "disconnected"}`}
+          >
             {connected ? "Connected" : "Disconnected"}
           </div>
         </div>
@@ -1228,7 +1543,7 @@ function App() {
       <div className="board-container">
         <div
           ref={containerRef}
-          className={`canvas-container ${isDragging ? 'dragging' : ''}`}
+          className={`canvas-container ${isDragging ? "dragging" : ""}`}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -1237,17 +1552,19 @@ function App() {
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
-          style={{touchAction: 'none'}} // Prevent default touch behaviors
+          style={{ touchAction: "none" }} // Prevent default touch behaviors
         >
           <canvas ref={canvasRef} id="game-canvas" />
 
           {DEV_MODE && (
             <div className="coordinates-debug">
-              <div className={`connection-status ${connected ? "connected" : "disconnected"}`}>
+              <div
+                className={`connection-status ${connected ? "connected" : "disconnected"}`}
+              >
                 {connected ? "Connected" : "Disconnected"}
               </div>
-              View: ({Math.round(viewX)}, {Math.round(viewY)})<br/>
-              Center: ({centerWorldX}, {centerWorldY})<br/>
+              View: ({Math.round(viewX)}, {Math.round(viewY)})<br />
+              Center: ({centerWorldX}, {centerWorldY})<br />
               Chunk: ({centerChunkX}, {centerChunkY})
             </div>
           )}
@@ -1255,19 +1572,26 @@ function App() {
       </div>
 
       <div className="leaderboard">
-        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-          <h3 style={{margin:0}}>Leaderboard</h3>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <h3 style={{ margin: 0 }}>Leaderboard</h3>
           <button onClick={toggleLeaderboard}>
-            {leaderboardVisible ? 'Hide' : 'Show'}
+            {leaderboardVisible ? "Hide" : "Show"}
           </button>
         </div>
         {leaderboardVisible && (
           <>
             {topPlayers.length > 0 ? (
               <ol>
-                {topPlayers.map(p => (
+                {topPlayers.map((p) => (
                   <li key={p.playerId}>
-                    {p.name ? p.name : `Player ${p.playerId}`}: {formatScore(p.score)}
+                    {p.name ? p.name : `Player ${p.playerId}`}:{" "}
+                    {formatScore(p.score)}
                   </li>
                 ))}
               </ol>
