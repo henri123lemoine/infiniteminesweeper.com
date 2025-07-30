@@ -1042,10 +1042,10 @@ function App() {
 
       // Skip if not visible
       if (
-        screenX + CELL_SIZE < -viewRef.current.x / zoom ||
-        screenX > (-viewRef.current.x + width) / zoom ||
-        screenY + CELL_SIZE < -viewRef.current.y / zoom ||
-        screenY > (-viewRef.current.y + height) / zoom
+        screenX + CELL_SIZE < 0 ||
+        screenX > width / zoom ||
+        screenY + CELL_SIZE < 0 ||
+        screenY > height / zoom
       )
         return;
 
