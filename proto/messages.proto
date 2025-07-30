@@ -32,6 +32,8 @@ message Welcome {
   int32 playerId = 1;
   string name = 2;
   string color = 3;
+  int32 viewX = 4;
+  int32 viewY = 5;
 }
 
 message Subscribe {
@@ -72,6 +74,11 @@ message ScoreUpdate {
   int32 delta = 4;   // score change amount (positive or negative)
 }
 
+message ViewUpdate {
+  int32 viewX = 1;
+  int32 viewY = 2;
+}
+
 message Msg {
   oneof payload {
     Hello hello = 1;
@@ -85,5 +92,6 @@ message Msg {
     FlagAck flagAck = 9;
     Leaderboard leaderboard = 10;
     ScoreUpdate scoreUpdate = 11;
+    ViewUpdate viewUpdate = 12;
   }
 }

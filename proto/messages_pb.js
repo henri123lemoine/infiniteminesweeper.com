@@ -1090,6 +1090,8 @@
              * @property {number|null} [playerId] Welcome playerId
              * @property {string|null} [name] Welcome name
              * @property {string|null} [color] Welcome color
+             * @property {number|null} [viewX] Welcome viewX
+             * @property {number|null} [viewY] Welcome viewY
              */
     
             /**
@@ -1132,6 +1134,22 @@
             Welcome.prototype.color = "";
     
             /**
+             * Welcome viewX.
+             * @member {number} viewX
+             * @memberof ms.Welcome
+             * @instance
+             */
+            Welcome.prototype.viewX = 0;
+    
+            /**
+             * Welcome viewY.
+             * @member {number} viewY
+             * @memberof ms.Welcome
+             * @instance
+             */
+            Welcome.prototype.viewY = 0;
+    
+            /**
              * Creates a new Welcome instance using the specified properties.
              * @function create
              * @memberof ms.Welcome
@@ -1161,6 +1179,10 @@
                     writer.uint32(/* id 2, wireType 2 =*/18).string(message.name);
                 if (message.color != null && Object.hasOwnProperty.call(message, "color"))
                     writer.uint32(/* id 3, wireType 2 =*/26).string(message.color);
+                if (message.viewX != null && Object.hasOwnProperty.call(message, "viewX"))
+                    writer.uint32(/* id 4, wireType 0 =*/32).int32(message.viewX);
+                if (message.viewY != null && Object.hasOwnProperty.call(message, "viewY"))
+                    writer.uint32(/* id 5, wireType 0 =*/40).int32(message.viewY);
                 return writer;
             };
     
@@ -1209,6 +1231,14 @@
                             message.color = reader.string();
                             break;
                         }
+                    case 4: {
+                            message.viewX = reader.int32();
+                            break;
+                        }
+                    case 5: {
+                            message.viewY = reader.int32();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -1253,6 +1283,12 @@
                 if (message.color != null && message.hasOwnProperty("color"))
                     if (!$util.isString(message.color))
                         return "color: string expected";
+                if (message.viewX != null && message.hasOwnProperty("viewX"))
+                    if (!$util.isInteger(message.viewX))
+                        return "viewX: integer expected";
+                if (message.viewY != null && message.hasOwnProperty("viewY"))
+                    if (!$util.isInteger(message.viewY))
+                        return "viewY: integer expected";
                 return null;
             };
     
@@ -1274,6 +1310,10 @@
                     message.name = String(object.name);
                 if (object.color != null)
                     message.color = String(object.color);
+                if (object.viewX != null)
+                    message.viewX = object.viewX | 0;
+                if (object.viewY != null)
+                    message.viewY = object.viewY | 0;
                 return message;
             };
     
@@ -1294,6 +1334,8 @@
                     object.playerId = 0;
                     object.name = "";
                     object.color = "";
+                    object.viewX = 0;
+                    object.viewY = 0;
                 }
                 if (message.playerId != null && message.hasOwnProperty("playerId"))
                     object.playerId = message.playerId;
@@ -1301,6 +1343,10 @@
                     object.name = message.name;
                 if (message.color != null && message.hasOwnProperty("color"))
                     object.color = message.color;
+                if (message.viewX != null && message.hasOwnProperty("viewX"))
+                    object.viewX = message.viewX;
+                if (message.viewY != null && message.hasOwnProperty("viewY"))
+                    object.viewY = message.viewY;
                 return object;
             };
     
@@ -3325,6 +3371,235 @@
             return ScoreUpdate;
         })();
     
+        ms.ViewUpdate = (function() {
+    
+            /**
+             * Properties of a ViewUpdate.
+             * @memberof ms
+             * @interface IViewUpdate
+             * @property {number|null} [viewX] ViewUpdate viewX
+             * @property {number|null} [viewY] ViewUpdate viewY
+             */
+    
+            /**
+             * Constructs a new ViewUpdate.
+             * @memberof ms
+             * @classdesc Represents a ViewUpdate.
+             * @implements IViewUpdate
+             * @constructor
+             * @param {ms.IViewUpdate=} [properties] Properties to set
+             */
+            function ViewUpdate(properties) {
+                if (properties)
+                    for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                        if (properties[keys[i]] != null)
+                            this[keys[i]] = properties[keys[i]];
+            }
+    
+            /**
+             * ViewUpdate viewX.
+             * @member {number} viewX
+             * @memberof ms.ViewUpdate
+             * @instance
+             */
+            ViewUpdate.prototype.viewX = 0;
+    
+            /**
+             * ViewUpdate viewY.
+             * @member {number} viewY
+             * @memberof ms.ViewUpdate
+             * @instance
+             */
+            ViewUpdate.prototype.viewY = 0;
+    
+            /**
+             * Creates a new ViewUpdate instance using the specified properties.
+             * @function create
+             * @memberof ms.ViewUpdate
+             * @static
+             * @param {ms.IViewUpdate=} [properties] Properties to set
+             * @returns {ms.ViewUpdate} ViewUpdate instance
+             */
+            ViewUpdate.create = function create(properties) {
+                return new ViewUpdate(properties);
+            };
+    
+            /**
+             * Encodes the specified ViewUpdate message. Does not implicitly {@link ms.ViewUpdate.verify|verify} messages.
+             * @function encode
+             * @memberof ms.ViewUpdate
+             * @static
+             * @param {ms.IViewUpdate} message ViewUpdate message or plain object to encode
+             * @param {$protobuf.Writer} [writer] Writer to encode to
+             * @returns {$protobuf.Writer} Writer
+             */
+            ViewUpdate.encode = function encode(message, writer) {
+                if (!writer)
+                    writer = $Writer.create();
+                if (message.viewX != null && Object.hasOwnProperty.call(message, "viewX"))
+                    writer.uint32(/* id 1, wireType 0 =*/8).int32(message.viewX);
+                if (message.viewY != null && Object.hasOwnProperty.call(message, "viewY"))
+                    writer.uint32(/* id 2, wireType 0 =*/16).int32(message.viewY);
+                return writer;
+            };
+    
+            /**
+             * Encodes the specified ViewUpdate message, length delimited. Does not implicitly {@link ms.ViewUpdate.verify|verify} messages.
+             * @function encodeDelimited
+             * @memberof ms.ViewUpdate
+             * @static
+             * @param {ms.IViewUpdate} message ViewUpdate message or plain object to encode
+             * @param {$protobuf.Writer} [writer] Writer to encode to
+             * @returns {$protobuf.Writer} Writer
+             */
+            ViewUpdate.encodeDelimited = function encodeDelimited(message, writer) {
+                return this.encode(message, writer).ldelim();
+            };
+    
+            /**
+             * Decodes a ViewUpdate message from the specified reader or buffer.
+             * @function decode
+             * @memberof ms.ViewUpdate
+             * @static
+             * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+             * @param {number} [length] Message length if known beforehand
+             * @returns {ms.ViewUpdate} ViewUpdate
+             * @throws {Error} If the payload is not a reader or valid buffer
+             * @throws {$protobuf.util.ProtocolError} If required fields are missing
+             */
+            ViewUpdate.decode = function decode(reader, length, error) {
+                if (!(reader instanceof $Reader))
+                    reader = $Reader.create(reader);
+                var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.ViewUpdate();
+                while (reader.pos < end) {
+                    var tag = reader.uint32();
+                    if (tag === error)
+                        break;
+                    switch (tag >>> 3) {
+                    case 1: {
+                            message.viewX = reader.int32();
+                            break;
+                        }
+                    case 2: {
+                            message.viewY = reader.int32();
+                            break;
+                        }
+                    default:
+                        reader.skipType(tag & 7);
+                        break;
+                    }
+                }
+                return message;
+            };
+    
+            /**
+             * Decodes a ViewUpdate message from the specified reader or buffer, length delimited.
+             * @function decodeDelimited
+             * @memberof ms.ViewUpdate
+             * @static
+             * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+             * @returns {ms.ViewUpdate} ViewUpdate
+             * @throws {Error} If the payload is not a reader or valid buffer
+             * @throws {$protobuf.util.ProtocolError} If required fields are missing
+             */
+            ViewUpdate.decodeDelimited = function decodeDelimited(reader) {
+                if (!(reader instanceof $Reader))
+                    reader = new $Reader(reader);
+                return this.decode(reader, reader.uint32());
+            };
+    
+            /**
+             * Verifies a ViewUpdate message.
+             * @function verify
+             * @memberof ms.ViewUpdate
+             * @static
+             * @param {Object.<string,*>} message Plain object to verify
+             * @returns {string|null} `null` if valid, otherwise the reason why it is not
+             */
+            ViewUpdate.verify = function verify(message) {
+                if (typeof message !== "object" || message === null)
+                    return "object expected";
+                if (message.viewX != null && message.hasOwnProperty("viewX"))
+                    if (!$util.isInteger(message.viewX))
+                        return "viewX: integer expected";
+                if (message.viewY != null && message.hasOwnProperty("viewY"))
+                    if (!$util.isInteger(message.viewY))
+                        return "viewY: integer expected";
+                return null;
+            };
+    
+            /**
+             * Creates a ViewUpdate message from a plain object. Also converts values to their respective internal types.
+             * @function fromObject
+             * @memberof ms.ViewUpdate
+             * @static
+             * @param {Object.<string,*>} object Plain object
+             * @returns {ms.ViewUpdate} ViewUpdate
+             */
+            ViewUpdate.fromObject = function fromObject(object) {
+                if (object instanceof $root.ms.ViewUpdate)
+                    return object;
+                var message = new $root.ms.ViewUpdate();
+                if (object.viewX != null)
+                    message.viewX = object.viewX | 0;
+                if (object.viewY != null)
+                    message.viewY = object.viewY | 0;
+                return message;
+            };
+    
+            /**
+             * Creates a plain object from a ViewUpdate message. Also converts values to other types if specified.
+             * @function toObject
+             * @memberof ms.ViewUpdate
+             * @static
+             * @param {ms.ViewUpdate} message ViewUpdate
+             * @param {$protobuf.IConversionOptions} [options] Conversion options
+             * @returns {Object.<string,*>} Plain object
+             */
+            ViewUpdate.toObject = function toObject(message, options) {
+                if (!options)
+                    options = {};
+                var object = {};
+                if (options.defaults) {
+                    object.viewX = 0;
+                    object.viewY = 0;
+                }
+                if (message.viewX != null && message.hasOwnProperty("viewX"))
+                    object.viewX = message.viewX;
+                if (message.viewY != null && message.hasOwnProperty("viewY"))
+                    object.viewY = message.viewY;
+                return object;
+            };
+    
+            /**
+             * Converts this ViewUpdate to JSON.
+             * @function toJSON
+             * @memberof ms.ViewUpdate
+             * @instance
+             * @returns {Object.<string,*>} JSON object
+             */
+            ViewUpdate.prototype.toJSON = function toJSON() {
+                return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+            };
+    
+            /**
+             * Gets the default type url for ViewUpdate
+             * @function getTypeUrl
+             * @memberof ms.ViewUpdate
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            ViewUpdate.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.ViewUpdate";
+            };
+    
+            return ViewUpdate;
+        })();
+    
         ms.Msg = (function() {
     
             /**
@@ -3342,6 +3617,7 @@
              * @property {ms.IFlagAck|null} [flagAck] Msg flagAck
              * @property {ms.ILeaderboard|null} [leaderboard] Msg leaderboard
              * @property {ms.IScoreUpdate|null} [scoreUpdate] Msg scoreUpdate
+             * @property {ms.IViewUpdate|null} [viewUpdate] Msg viewUpdate
              */
     
             /**
@@ -3447,17 +3723,25 @@
              */
             Msg.prototype.scoreUpdate = null;
     
+            /**
+             * Msg viewUpdate.
+             * @member {ms.IViewUpdate|null|undefined} viewUpdate
+             * @memberof ms.Msg
+             * @instance
+             */
+            Msg.prototype.viewUpdate = null;
+    
             // OneOf field names bound to virtual getters and setters
             var $oneOfFields;
     
             /**
              * Msg payload.
-             * @member {"hello"|"welcome"|"reveal"|"flag"|"subscribe"|"unsubscribe"|"chunkSync"|"revealAck"|"flagAck"|"leaderboard"|"scoreUpdate"|undefined} payload
+             * @member {"hello"|"welcome"|"reveal"|"flag"|"subscribe"|"unsubscribe"|"chunkSync"|"revealAck"|"flagAck"|"leaderboard"|"scoreUpdate"|"viewUpdate"|undefined} payload
              * @memberof ms.Msg
              * @instance
              */
             Object.defineProperty(Msg.prototype, "payload", {
-                get: $util.oneOfGetter($oneOfFields = ["hello", "welcome", "reveal", "flag", "subscribe", "unsubscribe", "chunkSync", "revealAck", "flagAck", "leaderboard", "scoreUpdate"]),
+                get: $util.oneOfGetter($oneOfFields = ["hello", "welcome", "reveal", "flag", "subscribe", "unsubscribe", "chunkSync", "revealAck", "flagAck", "leaderboard", "scoreUpdate", "viewUpdate"]),
                 set: $util.oneOfSetter($oneOfFields)
             });
     
@@ -3507,6 +3791,8 @@
                     $root.ms.Leaderboard.encode(message.leaderboard, writer.uint32(/* id 10, wireType 2 =*/82).fork()).ldelim();
                 if (message.scoreUpdate != null && Object.hasOwnProperty.call(message, "scoreUpdate"))
                     $root.ms.ScoreUpdate.encode(message.scoreUpdate, writer.uint32(/* id 11, wireType 2 =*/90).fork()).ldelim();
+                if (message.viewUpdate != null && Object.hasOwnProperty.call(message, "viewUpdate"))
+                    $root.ms.ViewUpdate.encode(message.viewUpdate, writer.uint32(/* id 12, wireType 2 =*/98).fork()).ldelim();
                 return writer;
             };
     
@@ -3585,6 +3871,10 @@
                         }
                     case 11: {
                             message.scoreUpdate = $root.ms.ScoreUpdate.decode(reader, reader.uint32());
+                            break;
+                        }
+                    case 12: {
+                            message.viewUpdate = $root.ms.ViewUpdate.decode(reader, reader.uint32());
                             break;
                         }
                     default:
@@ -3731,6 +4021,16 @@
                             return "scoreUpdate." + error;
                     }
                 }
+                if (message.viewUpdate != null && message.hasOwnProperty("viewUpdate")) {
+                    if (properties.payload === 1)
+                        return "payload: multiple values";
+                    properties.payload = 1;
+                    {
+                        var error = $root.ms.ViewUpdate.verify(message.viewUpdate);
+                        if (error)
+                            return "viewUpdate." + error;
+                    }
+                }
                 return null;
             };
     
@@ -3800,6 +4100,11 @@
                     if (typeof object.scoreUpdate !== "object")
                         throw TypeError(".ms.Msg.scoreUpdate: object expected");
                     message.scoreUpdate = $root.ms.ScoreUpdate.fromObject(object.scoreUpdate);
+                }
+                if (object.viewUpdate != null) {
+                    if (typeof object.viewUpdate !== "object")
+                        throw TypeError(".ms.Msg.viewUpdate: object expected");
+                    message.viewUpdate = $root.ms.ViewUpdate.fromObject(object.viewUpdate);
                 }
                 return message;
             };
@@ -3871,6 +4176,11 @@
                     object.scoreUpdate = $root.ms.ScoreUpdate.toObject(message.scoreUpdate, options);
                     if (options.oneofs)
                         object.payload = "scoreUpdate";
+                }
+                if (message.viewUpdate != null && message.hasOwnProperty("viewUpdate")) {
+                    object.viewUpdate = $root.ms.ViewUpdate.toObject(message.viewUpdate, options);
+                    if (options.oneofs)
+                        object.payload = "viewUpdate";
                 }
                 return object;
             };

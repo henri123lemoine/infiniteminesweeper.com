@@ -155,7 +155,8 @@ type Server struct {
 	lbVersion    uint64
 	lbProto      []byte
 	lbDirty      bool
-	playerColors map[int32]string // playerID -> color
+	playerColors map[int32]string               // playerID -> color
+	playerViews  map[int32]struct{ X, Y int32 } // last known view position
 
 	// Players
 	playersMu    sync.RWMutex
@@ -192,6 +193,7 @@ func NewServer() *Server {
 		players:      make(map[int32]map[*Player]struct{}),
 		playerNames:  make(map[int32]string),
 		playerColors: make(map[int32]string),
+		playerViews:  make(map[int32]struct{ X, Y int32 }),
 		seedCache:    make(map[ChunkID]uint64),
 		nextPlayerID: 1,
 		dataDir:      "data",
@@ -722,13 +724,23 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	lbBytes := s.lbProto
 	lbVer := s.lbVersion
+	view := s.playerViews[playerID]
 	s.stateMu.Unlock()
 
 	go s.writePump(player)
 	go s.readPump(player)
 
-	welcomeMsg := &pb.Msg{Payload: &pb.Msg_Welcome{Welcome: &pb.Welcome{PlayerId: playerID, Name: hello.Name, Color: hello.Color}}}
+	welcomeMsg := &pb.Msg{Payload: &pb.Msg_Welcome{Welcome: &pb.Welcome{PlayerId: playerID, Name: hello.Name, Color: hello.Color, ViewX: view.X, ViewY: view.Y}}}
 	s.sendToPlayer(playerID, mustProto(welcomeMsg))
+
+	// auto-subscribe to surrounding chunks
+	cx := int(view.X) / ChunkSize
+	cy := int(view.Y) / ChunkSize
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			s.subscribeToChunk(playerID, ChunkID{X: int32(cx + dx), Y: int32(cy + dy)})
+		}
+	}
 	s.sendToPlayer(playerID, lbBytes)
 	player.LastLBVersion = lbVer
 
@@ -801,6 +813,11 @@ func (s *Server) readPump(player *Player) {
 		case *pb.Msg_Unsubscribe:
 			m := t.Unsubscribe
 			s.unsubscribeFromChunk(player.ID, ChunkID{X: m.ChunkX, Y: m.ChunkY})
+		case *pb.Msg_ViewUpdate:
+			m := t.ViewUpdate
+			s.stateMu.Lock()
+			s.playerViews[player.ID] = struct{ X, Y int32 }{X: m.ViewX, Y: m.ViewY}
+			s.stateMu.Unlock()
 		}
 	}
 }

@@ -282,6 +282,8 @@ type Welcome struct {
 	PlayerId      int32                  `protobuf:"varint,1,opt,name=playerId,proto3" json:"playerId,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Color         string                 `protobuf:"bytes,3,opt,name=color,proto3" json:"color,omitempty"`
+	ViewX         int32                  `protobuf:"varint,4,opt,name=viewX,proto3" json:"viewX,omitempty"`
+	ViewY         int32                  `protobuf:"varint,5,opt,name=viewY,proto3" json:"viewY,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -335,6 +337,20 @@ func (x *Welcome) GetColor() string {
 		return x.Color
 	}
 	return ""
+}
+
+func (x *Welcome) GetViewX() int32 {
+	if x != nil {
+		return x.ViewX
+	}
+	return 0
+}
+
+func (x *Welcome) GetViewY() int32 {
+	if x != nil {
+		return x.ViewY
+	}
+	return 0
 }
 
 type Subscribe struct {
@@ -777,6 +793,58 @@ func (x *ScoreUpdate) GetDelta() int32 {
 	return 0
 }
 
+type ViewUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ViewX         int32                  `protobuf:"varint,1,opt,name=viewX,proto3" json:"viewX,omitempty"`
+	ViewY         int32                  `protobuf:"varint,2,opt,name=viewY,proto3" json:"viewY,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ViewUpdate) Reset() {
+	*x = ViewUpdate{}
+	mi := &file_proto_messages_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ViewUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ViewUpdate) ProtoMessage() {}
+
+func (x *ViewUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_messages_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ViewUpdate.ProtoReflect.Descriptor instead.
+func (*ViewUpdate) Descriptor() ([]byte, []int) {
+	return file_proto_messages_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ViewUpdate) GetViewX() int32 {
+	if x != nil {
+		return x.ViewX
+	}
+	return 0
+}
+
+func (x *ViewUpdate) GetViewY() int32 {
+	if x != nil {
+		return x.ViewY
+	}
+	return 0
+}
+
 type Msg struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Payload:
@@ -792,6 +860,7 @@ type Msg struct {
 	//	*Msg_FlagAck
 	//	*Msg_Leaderboard
 	//	*Msg_ScoreUpdate
+	//	*Msg_ViewUpdate
 	Payload       isMsg_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -799,7 +868,7 @@ type Msg struct {
 
 func (x *Msg) Reset() {
 	*x = Msg{}
-	mi := &file_proto_messages_proto_msgTypes[13]
+	mi := &file_proto_messages_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -811,7 +880,7 @@ func (x *Msg) String() string {
 func (*Msg) ProtoMessage() {}
 
 func (x *Msg) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_messages_proto_msgTypes[13]
+	mi := &file_proto_messages_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -824,7 +893,7 @@ func (x *Msg) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Msg.ProtoReflect.Descriptor instead.
 func (*Msg) Descriptor() ([]byte, []int) {
-	return file_proto_messages_proto_rawDescGZIP(), []int{13}
+	return file_proto_messages_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Msg) GetPayload() isMsg_Payload {
@@ -933,6 +1002,15 @@ func (x *Msg) GetScoreUpdate() *ScoreUpdate {
 	return nil
 }
 
+func (x *Msg) GetViewUpdate() *ViewUpdate {
+	if x != nil {
+		if x, ok := x.Payload.(*Msg_ViewUpdate); ok {
+			return x.ViewUpdate
+		}
+	}
+	return nil
+}
+
 type isMsg_Payload interface {
 	isMsg_Payload()
 }
@@ -981,6 +1059,10 @@ type Msg_ScoreUpdate struct {
 	ScoreUpdate *ScoreUpdate `protobuf:"bytes,11,opt,name=scoreUpdate,proto3,oneof"`
 }
 
+type Msg_ViewUpdate struct {
+	ViewUpdate *ViewUpdate `protobuf:"bytes,12,opt,name=viewUpdate,proto3,oneof"`
+}
+
 func (*Msg_Hello) isMsg_Payload() {}
 
 func (*Msg_Welcome) isMsg_Payload() {}
@@ -1002,6 +1084,8 @@ func (*Msg_FlagAck) isMsg_Payload() {}
 func (*Msg_Leaderboard) isMsg_Payload() {}
 
 func (*Msg_ScoreUpdate) isMsg_Payload() {}
+
+func (*Msg_ViewUpdate) isMsg_Payload() {}
 
 var File_proto_messages_proto protoreflect.FileDescriptor
 
@@ -1025,11 +1109,13 @@ const file_proto_messages_proto_rawDesc = "" +
 	"\x05Hello\x12\x1a\n" +
 	"\bplayerId\x18\x01 \x01(\x05R\bplayerId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
-	"\x05color\x18\x03 \x01(\tR\x05color\"O\n" +
+	"\x05color\x18\x03 \x01(\tR\x05color\"{\n" +
 	"\aWelcome\x12\x1a\n" +
 	"\bplayerId\x18\x01 \x01(\x05R\bplayerId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
-	"\x05color\x18\x03 \x01(\tR\x05color\";\n" +
+	"\x05color\x18\x03 \x01(\tR\x05color\x12\x14\n" +
+	"\x05viewX\x18\x04 \x01(\x05R\x05viewX\x12\x14\n" +
+	"\x05viewY\x18\x05 \x01(\x05R\x05viewY\";\n" +
 	"\tSubscribe\x12\x16\n" +
 	"\x06chunkX\x18\x01 \x01(\x05R\x06chunkX\x12\x16\n" +
 	"\x06chunkY\x18\x02 \x01(\x05R\x06chunkY\"=\n" +
@@ -1057,7 +1143,11 @@ const file_proto_messages_proto_rawDesc = "" +
 	"\x05score\x18\x01 \x01(\x05R\x05score\x12\x16\n" +
 	"\x06worldX\x18\x02 \x01(\x05R\x06worldX\x12\x16\n" +
 	"\x06worldY\x18\x03 \x01(\x05R\x06worldY\x12\x14\n" +
-	"\x05delta\x18\x04 \x01(\x05R\x05delta\"\xf7\x03\n" +
+	"\x05delta\x18\x04 \x01(\x05R\x05delta\"8\n" +
+	"\n" +
+	"ViewUpdate\x12\x14\n" +
+	"\x05viewX\x18\x01 \x01(\x05R\x05viewX\x12\x14\n" +
+	"\x05viewY\x18\x02 \x01(\x05R\x05viewY\"\xa9\x04\n" +
 	"\x03Msg\x12!\n" +
 	"\x05hello\x18\x01 \x01(\v2\t.ms.HelloH\x00R\x05hello\x12'\n" +
 	"\awelcome\x18\x02 \x01(\v2\v.ms.WelcomeH\x00R\awelcome\x12$\n" +
@@ -1071,7 +1161,10 @@ const file_proto_messages_proto_rawDesc = "" +
 	"\aflagAck\x18\t \x01(\v2\v.ms.FlagAckH\x00R\aflagAck\x123\n" +
 	"\vleaderboard\x18\n" +
 	" \x01(\v2\x0f.ms.LeaderboardH\x00R\vleaderboard\x123\n" +
-	"\vscoreUpdate\x18\v \x01(\v2\x0f.ms.ScoreUpdateH\x00R\vscoreUpdateB\t\n" +
+	"\vscoreUpdate\x18\v \x01(\v2\x0f.ms.ScoreUpdateH\x00R\vscoreUpdate\x120\n" +
+	"\n" +
+	"viewUpdate\x18\f \x01(\v2\x0e.ms.ViewUpdateH\x00R\n" +
+	"viewUpdateB\t\n" +
 	"\apayloadB\x1cZ\x1ainfinite-minesweeper/protob\x06proto3"
 
 var (
@@ -1086,7 +1179,7 @@ func file_proto_messages_proto_rawDescGZIP() []byte {
 	return file_proto_messages_proto_rawDescData
 }
 
-var file_proto_messages_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_proto_messages_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_proto_messages_proto_goTypes = []any{
 	(*ChunkID)(nil),          // 0: ms.ChunkID
 	(*Reveal)(nil),           // 1: ms.Reveal
@@ -1101,7 +1194,8 @@ var file_proto_messages_proto_goTypes = []any{
 	(*LeaderboardEntry)(nil), // 10: ms.LeaderboardEntry
 	(*Leaderboard)(nil),      // 11: ms.Leaderboard
 	(*ScoreUpdate)(nil),      // 12: ms.ScoreUpdate
-	(*Msg)(nil),              // 13: ms.Msg
+	(*ViewUpdate)(nil),       // 13: ms.ViewUpdate
+	(*Msg)(nil),              // 14: ms.Msg
 }
 var file_proto_messages_proto_depIdxs = []int32{
 	0,  // 0: ms.Reveal.chunkId:type_name -> ms.ChunkID
@@ -1121,11 +1215,12 @@ var file_proto_messages_proto_depIdxs = []int32{
 	9,  // 14: ms.Msg.flagAck:type_name -> ms.FlagAck
 	11, // 15: ms.Msg.leaderboard:type_name -> ms.Leaderboard
 	12, // 16: ms.Msg.scoreUpdate:type_name -> ms.ScoreUpdate
-	17, // [17:17] is the sub-list for method output_type
-	17, // [17:17] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	13, // 17: ms.Msg.viewUpdate:type_name -> ms.ViewUpdate
+	18, // [18:18] is the sub-list for method output_type
+	18, // [18:18] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_proto_messages_proto_init() }
@@ -1133,7 +1228,7 @@ func file_proto_messages_proto_init() {
 	if File_proto_messages_proto != nil {
 		return
 	}
-	file_proto_messages_proto_msgTypes[13].OneofWrappers = []any{
+	file_proto_messages_proto_msgTypes[14].OneofWrappers = []any{
 		(*Msg_Hello)(nil),
 		(*Msg_Welcome)(nil),
 		(*Msg_Reveal)(nil),
@@ -1145,6 +1240,7 @@ func file_proto_messages_proto_init() {
 		(*Msg_FlagAck)(nil),
 		(*Msg_Leaderboard)(nil),
 		(*Msg_ScoreUpdate)(nil),
+		(*Msg_ViewUpdate)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1152,7 +1248,7 @@ func file_proto_messages_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_messages_proto_rawDesc), len(file_proto_messages_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

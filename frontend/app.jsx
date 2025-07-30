@@ -52,8 +52,10 @@ function App() {
   const containerRef = useRef(null);
 
   // Camera/viewport state
-  const [viewX, setViewX] = useState(0);
-  const [viewY, setViewY] = useState(0);
+  const storedViewX = parseInt(sessionStorage.getItem("viewX") || "0", 10);
+  const storedViewY = parseInt(sessionStorage.getItem("viewY") || "0", 10);
+  const [viewX, setViewX] = useState(storedViewX);
+  const [viewY, setViewY] = useState(storedViewY);
   const [zoom, setZoom] = useState(1);
   const handleZoom = useCallback(
     (delta) => {
@@ -1217,6 +1219,18 @@ function App() {
 
       setIsDragging(false);
       setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
+      if (ws && connected) {
+        ws.send(
+          encodeMsg(
+            PB.Msg.create({
+              viewUpdate: {
+                viewX: Math.floor(viewX),
+                viewY: Math.floor(viewY),
+              },
+            }),
+          ),
+        );
+      }
     },
     [isDragging, dragStart, screenToWorld, handleCellClick],
   );
@@ -1305,6 +1319,18 @@ function App() {
 
       setIsDragging(false);
       setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
+      if (ws && connected) {
+        ws.send(
+          encodeMsg(
+            PB.Msg.create({
+              viewUpdate: {
+                viewX: Math.floor(viewX),
+                viewY: Math.floor(viewY),
+              },
+            }),
+          ),
+        );
+      }
     },
     [isDragging, dragStart, screenToWorld, handleCellClick],
   );
@@ -1347,6 +1373,8 @@ function App() {
           playerId: m.welcome.playerId,
           name: m.welcome.name,
           color: m.welcome.color,
+          viewX: m.welcome.viewX,
+          viewY: m.welcome.viewY,
         };
       } else if (m.chunkSync) {
         data = {
@@ -1385,6 +1413,10 @@ function App() {
         setUsername(data.name || "");
         localStorage.setItem("playerId", data.playerId);
         localStorage.setItem("username", data.name || "");
+        setViewX(data.viewX || 0);
+        setViewY(data.viewY || 0);
+        sessionStorage.setItem("viewX", String(data.viewX || 0));
+        sessionStorage.setItem("viewY", String(data.viewY || 0));
         return;
       }
 
@@ -1624,6 +1656,11 @@ function App() {
   useEffect(() => {
     subscribeToVisibleChunks();
   }, [subscribeToVisibleChunks]);
+
+  useEffect(() => {
+    sessionStorage.setItem("viewX", String(viewX));
+    sessionStorage.setItem("viewY", String(viewY));
+  }, [viewX, viewY]);
 
   // Render when view or game state changes
   useEffect(() => {
