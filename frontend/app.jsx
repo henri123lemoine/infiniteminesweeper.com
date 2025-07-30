@@ -6,13 +6,14 @@ import React, {
   useMemo,
 } from "react";
 import ReactDOM from "react-dom";
-const DEV_MODE = true;
+
+// DEV_MODE is set by esbuild in build.js
 const log = DEV_MODE ? console.log.bind(console) : () => {};
 
 const PB = protobuf.roots["default"].ms;
+const COMPRESS_THRESHOLD = 100;
 function encodeMsg(msg) {
   const buf = PB.Msg.encode(msg).finish();
-  // Debug logging for outgoing messages
   if (DEV_MODE) {
     console.log("OUTGOING:", {
       raw: msg,
@@ -20,17 +21,22 @@ function encodeMsg(msg) {
       message_type: Object.keys(msg)[0],
     });
   }
+  if (buf.length < COMPRESS_THRESHOLD) {
+    return buf;
+  }
   return pako.gzip(buf);
 }
 function decodeMsg(data) {
-  const decompressed = pako.ungzip(new Uint8Array(data));
-  const decoded = PB.Msg.decode(decompressed);
-  // Debug logging for incoming messages
+  let bytes = new Uint8Array(data);
+  if (bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    bytes = pako.ungzip(bytes);
+  }
+  const decoded = PB.Msg.decode(bytes);
   if (DEV_MODE) {
     console.log("INCOMING:", {
       raw: decoded,
       compressed_size: data.byteLength,
-      decompressed_size: decompressed.length,
+      decompressed_size: bytes.length,
       message_type: Object.keys(decoded)[0],
     });
   }
@@ -50,29 +56,52 @@ function App() {
   const [nameInput, setNameInput] = useState(storedName);
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
+  const canvasSizeRef = useRef({ w: 0, h: 0, dpr: 1 });
 
   // Camera/viewport state
   const storedViewX = parseInt(sessionStorage.getItem("viewX") || "0", 10);
   const storedViewY = parseInt(sessionStorage.getItem("viewY") || "0", 10);
   const [viewX, setViewX] = useState(storedViewX);
   const [viewY, setViewY] = useState(storedViewY);
+  const viewRef = useRef({ x: storedViewX, y: storedViewY });
+  const rafRef = useRef(null);
+
+  const commitViewRef = useCallback(() => {
+    setViewX(viewRef.current.x);
+    setViewY(viewRef.current.y);
+  }, []);
+
+  const scheduleViewUpdate = useCallback(
+    (x, y) => {
+      viewRef.current.x = x;
+      viewRef.current.y = y;
+      if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = null;
+          commitViewRef();
+        });
+      }
+    },
+    [commitViewRef],
+  );
   const [zoom, setZoom] = useState(1);
   const handleZoom = useCallback(
     (delta) => {
       setZoom((z) => {
         const newZoom = Math.min(Math.max(z + delta, 0.5), 3);
-        const canvas = canvasRef.current;
-        if (canvas) {
-          const rect = canvas.getBoundingClientRect();
-          const centerX = (viewX + rect.width / 2) / z;
-          const centerY = (viewY + rect.height / 2) / z;
-          setViewX(newZoom * centerX - rect.width / 2);
-          setViewY(newZoom * centerY - rect.height / 2);
+        const container = containerRef.current;
+        if (container) {
+          const centerX = (viewRef.current.x + container.clientWidth / 2) / z;
+          const centerY = (viewRef.current.y + container.clientHeight / 2) / z;
+          scheduleViewUpdate(
+            newZoom * centerX - container.clientWidth / 2,
+            newZoom * centerY - container.clientHeight / 2,
+          );
         }
         return newZoom;
       });
     },
-    [viewX, viewY],
+    [scheduleViewUpdate],
   );
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({
@@ -82,6 +111,10 @@ function App() {
     viewY: 0,
   });
   const dragTimeoutRef = useRef(null);
+
+  // Rendering optimization refs
+  const lastRenderTime = useRef(0);
+  const renderRequestId = useRef(null);
 
   // Game state
   const seedCache = useRef(new Map());
@@ -289,7 +322,7 @@ function App() {
   const MINE_COUNT = 20;
   const MINIMAP_SIZE = 200;
   const BASE_CELL_SIZE = 32;
-  const CELL_SIZE = BASE_CELL_SIZE * zoom;
+  const CELL_SIZE = BASE_CELL_SIZE; // Remove zoom from CELL_SIZE calculation
 
   // Deterministic helpers
   const splitmix64 = useCallback((state) => {
@@ -312,20 +345,20 @@ function App() {
   // Convert screen coordinates to world coordinates
   const screenToWorld = useCallback(
     (screenX, screenY) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return { x: 0, y: 0 };
+      const container = containerRef.current;
+      if (!container) return { x: 0, y: 0 };
 
-      const rect = canvas.getBoundingClientRect();
-      const canvasX = screenX - rect.left;
-      const canvasY = screenY - rect.top;
+      const rect = container.getBoundingClientRect();
+      const canvasX = (screenX - rect.left) / zoom;
+      const canvasY = (screenY - rect.top) / zoom;
 
       // Convert canvas pixels to world coordinates
-      const worldX = Math.floor((canvasX + viewX) / CELL_SIZE);
-      const worldY = Math.floor((canvasY + viewY) / CELL_SIZE);
+      const worldX = Math.floor((canvasX + viewRef.current.x) / CELL_SIZE);
+      const worldY = Math.floor((canvasY + viewRef.current.y) / CELL_SIZE);
 
       return { x: worldX, y: worldY };
     },
-    [viewX, viewY, CELL_SIZE],
+    [zoom, CELL_SIZE],
   );
 
   // Convert world coordinates to chunk and local coordinates
@@ -923,45 +956,66 @@ function App() {
 
   // Main Canvas Rendering
   const render = useCallback(() => {
+    // Throttle rendering to 120fps max
+    const now = performance.now();
+    if (now - lastRenderTime.current < 8.33) {
+      if (!renderRequestId.current) {
+        renderRequestId.current = requestAnimationFrame(() => {
+          renderRequestId.current = null;
+          render();
+        });
+      }
+      return;
+    }
+    lastRenderTime.current = now;
+
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
 
     const ctx = canvas.getContext("2d");
-    const rect = canvas.getBoundingClientRect();
+    const width = container.clientWidth;
+    const height = container.clientHeight;
     const dpr = window.devicePixelRatio || 1;
 
-    // Setup canvas
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Only resize canvas when necessary
+    if (
+      width !== canvasSizeRef.current.w ||
+      height !== canvasSizeRef.current.h ||
+      dpr !== canvasSizeRef.current.dpr
+    ) {
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      canvasSizeRef.current = { w: width, h: height, dpr };
+    }
+
+    // Apply zoom and DPR scaling
+    ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, 0, 0);
 
     // Clear background
     ctx.fillStyle = "#c0c0c0";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(
+      -viewRef.current.x / zoom,
+      -viewRef.current.y / zoom,
+      width / zoom,
+      height / zoom,
+    );
 
     // Calculate visible world coordinates
-    const startWorldX = Math.floor(viewX / CELL_SIZE);
-    const startWorldY = Math.floor(viewY / CELL_SIZE);
-    const endWorldX = Math.ceil((viewX + rect.width) / CELL_SIZE);
-    const endWorldY = Math.ceil((viewY + rect.height) / CELL_SIZE);
-
-    // Helper function to check if cell is visible
-    const isCellVisible = (screenX, screenY) => {
-      return !(
-        screenX + CELL_SIZE < 0 ||
-        screenX > rect.width ||
-        screenY + CELL_SIZE < 0 ||
-        screenY > rect.height
-      );
-    };
+    const startWorldX = Math.floor(viewRef.current.x / CELL_SIZE);
+    const startWorldY = Math.floor(viewRef.current.y / CELL_SIZE);
+    const endWorldX = Math.ceil((viewRef.current.x + width / zoom) / CELL_SIZE);
+    const endWorldY = Math.ceil(
+      (viewRef.current.y + height / zoom) / CELL_SIZE,
+    );
 
     // Render all cells in the visible area
     for (let worldY = startWorldY; worldY <= endWorldY; worldY++) {
       for (let worldX = startWorldX; worldX <= endWorldX; worldX++) {
-        const screenX = worldX * CELL_SIZE - viewX;
-        const screenY = worldY * CELL_SIZE - viewY;
-
-        if (!isCellVisible(screenX, screenY)) continue;
+        const screenX = worldX * CELL_SIZE - viewRef.current.x;
+        const screenY = worldY * CELL_SIZE - viewRef.current.y;
 
         const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
         const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
@@ -984,10 +1038,17 @@ function App() {
     // Render flags on top of unrevealed cells
     flaggedCellsRef.current.forEach((flagData, flagKey) => {
       const [worldX, worldY] = flagKey.split(",").map(Number);
-      const screenX = worldX * CELL_SIZE - viewX;
-      const screenY = worldY * CELL_SIZE - viewY;
+      const screenX = worldX * CELL_SIZE - viewRef.current.x;
+      const screenY = worldY * CELL_SIZE - viewRef.current.y;
 
-      if (!isCellVisible(screenX, screenY)) return;
+      // Skip if not visible
+      if (
+        screenX + CELL_SIZE < 0 ||
+        screenX > width / zoom ||
+        screenY + CELL_SIZE < 0 ||
+        screenY > height / zoom
+      )
+        return;
 
       // Don't draw flag if cell is revealed
       const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
@@ -997,15 +1058,7 @@ function App() {
       const flagColor = flagData?.color || playerColor;
       drawFlag(ctx, screenX, screenY, CELL_SIZE, flagColor);
     });
-  }, [
-    viewX,
-    viewY,
-    tick,
-    getNumberColor,
-    worldToChunk,
-    playerColor,
-    draw3DCell,
-  ]);
+  }, [tick, zoom, getNumberColor, worldToChunk, playerColor, draw3DCell]);
 
   // Minimap rendering
   const renderMinimap = useCallback(() => {
@@ -1022,12 +1075,14 @@ function App() {
 
     // Center chunk based on view
     const gameCanvas = canvasRef.current;
-    const gameRect = gameCanvas?.getBoundingClientRect();
+    const container = containerRef.current;
+    const width = container?.clientWidth || 0;
+    const height = container?.clientHeight || 0;
     const centerWorldX = Math.floor(
-      (viewX + (gameRect?.width || 0) / 2) / CELL_SIZE,
+      (viewRef.current.x + width / 2 / zoom) / CELL_SIZE,
     );
     const centerWorldY = Math.floor(
-      (viewY + (gameRect?.height || 0) / 2) / CELL_SIZE,
+      (viewRef.current.y + height / 2 / zoom) / CELL_SIZE,
     );
 
     // Calculate minimap center in pixels
@@ -1089,10 +1144,10 @@ function App() {
     }
 
     // Draw fixed viewport indicator in center of minimap
-    if (gameRect) {
+    if (width > 0 && height > 0) {
       // Calculate viewport size in world cells
-      const viewWidthCells = Math.ceil(gameRect.width / CELL_SIZE);
-      const viewHeightCells = Math.ceil(gameRect.height / CELL_SIZE);
+      const viewWidthCells = Math.ceil(width / zoom / CELL_SIZE);
+      const viewHeightCells = Math.ceil(height / zoom / CELL_SIZE);
 
       // Draw viewport box centered on minimap
       const boxLeft = minimapCenterX - viewWidthCells / 2;
@@ -1102,20 +1157,32 @@ function App() {
       ctx.lineWidth = 1;
       ctx.strokeRect(boxLeft, boxTop, viewWidthCells, viewHeightCells);
     }
-  }, [viewX, viewY, tick, minimapChunks, worldToChunk, isMine, CELL_SIZE]);
+  }, [
+    viewX,
+    viewY,
+    tick,
+    minimapChunks,
+    worldToChunk,
+    isMine,
+    zoom,
+    CELL_SIZE,
+  ]);
 
   // Subscribe to visible chunks
   const subscribeToVisibleChunks = useCallback(() => {
     if (!ws || !connected) return;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const container = containerRef.current;
+    if (!container) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const startWorldX = Math.floor(viewX / CELL_SIZE);
-    const startWorldY = Math.floor(viewY / CELL_SIZE);
-    const endWorldX = Math.ceil((viewX + rect.width) / CELL_SIZE);
-    const endWorldY = Math.ceil((viewY + rect.height) / CELL_SIZE);
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    const startWorldX = Math.floor(viewRef.current.x / CELL_SIZE);
+    const startWorldY = Math.floor(viewRef.current.y / CELL_SIZE);
+    const endWorldX = Math.ceil((viewRef.current.x + width / zoom) / CELL_SIZE);
+    const endWorldY = Math.ceil(
+      (viewRef.current.y + height / zoom) / CELL_SIZE,
+    );
 
     const startChunkX = Math.floor(startWorldX / CHUNK) - 1;
     const startChunkY = Math.floor(startWorldY / CHUNK) - 1;
@@ -1142,8 +1209,7 @@ function App() {
   }, [
     ws,
     connected,
-    viewX,
-    viewY,
+    zoom,
     ensureChunkSubscription,
     ensureChunkUnsubscription,
     CELL_SIZE,
@@ -1166,8 +1232,8 @@ function App() {
       setDragStart({
         x: e.clientX,
         y: e.clientY,
-        viewX,
-        viewY,
+        viewX: viewRef.current.x,
+        viewY: viewRef.current.y,
       });
 
       // Set a timeout to enable dragging after a delay
@@ -1175,7 +1241,7 @@ function App() {
         setIsDragging(true);
       }, 150); // delay before considering it a drag
     },
-    [viewX, viewY, screenToWorld, handleCellClick],
+    [screenToWorld, handleCellClick],
   );
 
   const handleMouseMove = useCallback(
@@ -1195,14 +1261,13 @@ function App() {
       }
 
       if (isDragging) {
-        const deltaX = e.clientX - dragStart.x;
-        const deltaY = e.clientY - dragStart.y;
+        const deltaX = (e.clientX - dragStart.x) / zoom;
+        const deltaY = (e.clientY - dragStart.y) / zoom;
 
-        setViewX(dragStart.viewX - deltaX);
-        setViewY(dragStart.viewY - deltaY);
+        scheduleViewUpdate(dragStart.viewX - deltaX, dragStart.viewY - deltaY);
       }
     },
-    [isDragging, dragStart],
+    [isDragging, dragStart, zoom, scheduleViewUpdate],
   );
 
   const handleMouseUp = useCallback(
@@ -1220,20 +1285,36 @@ function App() {
 
       setIsDragging(false);
       setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
+
+      // Cancel any pending RAF and commit final view
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        commitViewRef();
+      }
+
       if (ws && connected) {
         ws.send(
           encodeMsg(
             PB.Msg.create({
               viewUpdate: {
-                viewX: Math.floor(viewX),
-                viewY: Math.floor(viewY),
+                viewX: Math.floor(viewRef.current.x),
+                viewY: Math.floor(viewRef.current.y),
               },
             }),
           ),
         );
       }
     },
-    [isDragging, dragStart, screenToWorld, handleCellClick],
+    [
+      isDragging,
+      dragStart,
+      screenToWorld,
+      handleCellClick,
+      commitViewRef,
+      ws,
+      connected,
+    ],
   );
 
   // Handle context menu (prevent default right-click menu)
@@ -1250,8 +1331,8 @@ function App() {
         setDragStart({
           x: touch.clientX,
           y: touch.clientY,
-          viewX,
-          viewY,
+          viewX: viewRef.current.x,
+          viewY: viewRef.current.y,
         });
 
         // Start long press timer for flagging
@@ -1268,7 +1349,7 @@ function App() {
         }, 200); // long press duration
       }
     },
-    [viewX, viewY, screenToWorld, handleCellClick],
+    [screenToWorld, handleCellClick],
   );
 
   const handleTouchMove = useCallback(
@@ -1289,15 +1370,17 @@ function App() {
         }
 
         if (isDragging) {
-          const deltaX = touch.clientX - dragStart.x;
-          const deltaY = touch.clientY - dragStart.y;
+          const deltaX = (touch.clientX - dragStart.x) / zoom;
+          const deltaY = (touch.clientY - dragStart.y) / zoom;
 
-          setViewX(dragStart.viewX - deltaX);
-          setViewY(dragStart.viewY - deltaY);
+          scheduleViewUpdate(
+            dragStart.viewX - deltaX,
+            dragStart.viewY - deltaY,
+          );
         }
       }
     },
-    [isDragging, dragStart],
+    [isDragging, dragStart, zoom, scheduleViewUpdate],
   );
 
   const handleTouchEnd = useCallback(
@@ -1320,20 +1403,36 @@ function App() {
 
       setIsDragging(false);
       setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
+
+      // Cancel any pending RAF and commit final view
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        commitViewRef();
+      }
+
       if (ws && connected) {
         ws.send(
           encodeMsg(
             PB.Msg.create({
               viewUpdate: {
-                viewX: Math.floor(viewX),
-                viewY: Math.floor(viewY),
+                viewX: Math.floor(viewRef.current.x),
+                viewY: Math.floor(viewRef.current.y),
               },
             }),
           ),
         );
       }
     },
-    [isDragging, dragStart, screenToWorld, handleCellClick],
+    [
+      isDragging,
+      dragStart,
+      screenToWorld,
+      handleCellClick,
+      commitViewRef,
+      ws,
+      connected,
+    ],
   );
 
   // WebSocket setup
@@ -1414,8 +1513,7 @@ function App() {
         setUsername(data.name || "");
         localStorage.setItem("playerId", data.playerId);
         localStorage.setItem("username", data.name || "");
-        setViewX(data.viewX || 0);
-        setViewY(data.viewY || 0);
+        scheduleViewUpdate(data.viewX || 0, data.viewY || 0);
         sessionStorage.setItem("viewX", String(data.viewX || 0));
         sessionStorage.setItem("viewY", String(data.viewY || 0));
         return;
@@ -1618,19 +1716,22 @@ function App() {
             data.delta !== 0 &&
             (data.worldX !== 0 || data.worldY !== 0)
           ) {
-            const id = Math.random().toString(36).slice(2);
-            setScorePopups((p) => [
-              ...p,
-              {
-                id,
-                worldX: data.worldX,
-                worldY: data.worldY,
-                delta: data.delta,
-              },
-            ]);
-            setTimeout(() => {
-              setScorePopups((p) => p.filter((s) => s.id !== id));
-            }, 1000);
+            // Batch score popup updates to prevent blocking
+            requestAnimationFrame(() => {
+              const id = Math.random().toString(36).slice(2);
+              setScorePopups((p) => [
+                ...p,
+                {
+                  id,
+                  worldX: data.worldX,
+                  worldY: data.worldY,
+                  delta: data.delta,
+                },
+              ]);
+              setTimeout(() => {
+                setScorePopups((p) => p.filter((s) => s.id !== id));
+              }, 1000);
+            });
           }
         }
       }
@@ -1658,19 +1759,36 @@ function App() {
     subscribeToVisibleChunks();
   }, [subscribeToVisibleChunks]);
 
+  // Sync viewRef to sessionStorage
   useEffect(() => {
+    viewRef.current.x = viewX;
+    viewRef.current.y = viewY;
     sessionStorage.setItem("viewX", String(viewX));
     sessionStorage.setItem("viewY", String(viewY));
   }, [viewX, viewY]);
 
-  // Render when view or game state changes
+  // Cleanup RAF on unmount
   useEffect(() => {
-    render();
-  }, [render]);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (renderRequestId.current)
+        cancelAnimationFrame(renderRequestId.current);
+    };
+  }, []);
+
+  // Trigger re-render when game state changes
+  useEffect(() => {
+    if (!renderRequestId.current) {
+      renderRequestId.current = requestAnimationFrame(() => {
+        renderRequestId.current = null;
+        render();
+      });
+    }
+  }, [render, tick]);
 
   useEffect(() => {
     renderMinimap();
-  }, [renderMinimap]);
+  }, [renderMinimap, viewX, viewY]);
 
   // Handle window resize
   useEffect(() => {
@@ -1688,11 +1806,14 @@ function App() {
 
   // Calculate current world position for debugging
   const centerRect = canvasRef.current?.getBoundingClientRect();
+  const container = containerRef.current;
+  const containerWidth = container?.clientWidth || 0;
+  const containerHeight = container?.clientHeight || 0;
   const centerWorldX = Math.floor(
-    (viewX + (centerRect?.width || 0) / 2) / CELL_SIZE,
+    (viewX + containerWidth / 2 / zoom) / CELL_SIZE,
   );
   const centerWorldY = Math.floor(
-    (viewY + (centerRect?.height || 0) / 2) / CELL_SIZE,
+    (viewY + containerHeight / 2 / zoom) / CELL_SIZE,
   );
   const { chunkX: centerChunkX, chunkY: centerChunkY } = worldToChunk(
     centerWorldX,
@@ -1800,8 +1921,8 @@ function App() {
           <canvas ref={canvasRef} id="game-canvas" />
 
           {scorePopups.map((p) => {
-            const x = p.worldX * CELL_SIZE - viewX;
-            const y = p.worldY * CELL_SIZE - viewY;
+            const x = p.worldX * CELL_SIZE * zoom - viewX;
+            const y = p.worldY * CELL_SIZE * zoom - viewY;
             return (
               <div
                 key={p.id}
@@ -1826,7 +1947,8 @@ function App() {
               >
                 {connected ? "Connected" : "Disconnected"}
               </div>
-              View: ({Math.round(viewX)}, {Math.round(viewY)})<br />
+              View: ({Math.round(viewRef.current.x)},{" "}
+              {Math.round(viewRef.current.y)})<br />
               Center: ({centerWorldX}, {centerWorldY})<br />
               Chunk: ({centerChunkX}, {centerChunkY})
             </div>

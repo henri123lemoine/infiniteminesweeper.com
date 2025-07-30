@@ -21,23 +21,23 @@ import (
 )
 
 func encodeMsg(m *pb.Msg) []byte {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	b, _ := proto.Marshal(m)
-	gz.Write(b)
-	gz.Close()
-	return buf.Bytes()
+	return mustProto(m)
 }
 
 func decodeMsg(data []byte) (*pb.Msg, error) {
-	gz, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	b, err := io.ReadAll(gz)
-	gz.Close()
-	if err != nil {
-		return nil, err
+	var b []byte
+	if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
+		gz, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		b, err = io.ReadAll(gz)
+		gz.Close()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		b = data
 	}
 	var m pb.Msg
 	if err := proto.Unmarshal(b, &m); err != nil {
@@ -173,6 +173,26 @@ func TestRevealContention(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("success count = %d, want 1", count)
+	}
+}
+
+func TestIsValidUsername(t *testing.T) {
+	tests := []struct {
+		name  string
+		valid bool
+	}{
+		{"abc", true},
+		{"A_B-C123", true},
+		{"ab", true},
+		{"thisnameiswaytoolongforvalidation", false},
+		{"bad!name", false},
+		{"space name", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if isValidUsername(tt.name) != tt.valid {
+			t.Errorf("isValidUsername(%q)=%v, want %v", tt.name, isValidUsername(tt.name), tt.valid)
+		}
 	}
 }
 
