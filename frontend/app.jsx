@@ -517,7 +517,7 @@ function App() {
         }
       }
 
-      // Create optimistic reveals and send to server
+      // Apply optimistic reveals locally
       for (const cell of toReveal) {
         const optimisticReveal = {
           chunkId: { X: cell.chunkX, Y: cell.chunkY },
@@ -530,24 +530,12 @@ function App() {
 
         revealedCellsRef.current.set(cell.cellKey, optimisticReveal);
         ensureChunkSubscription(cell.chunkX, cell.chunkY);
-
-        ws.send(
-          encodeMsg(
-            PB.Msg.create({
-              reveal: {
-                chunkId: { X: cell.chunkX, Y: cell.chunkY },
-                x: cell.localX,
-                y: cell.localY,
-              },
-            }),
-          ),
-        );
       }
 
       setTick((t) => t + 1);
       return toReveal.size;
     },
-    [ws, worldToChunk, isMine, countAdjacentMines, ensureChunkSubscription],
+    [worldToChunk, isMine, countAdjacentMines, ensureChunkSubscription],
   );
 
   // Handle cell click
@@ -694,6 +682,19 @@ function App() {
       if (adjacent === 0) {
         const revealedCount = await floodFillReveal(worldX, worldY);
         log(`Flood fill revealed ${revealedCount} cells`);
+
+        ws.send(
+          encodeMsg(
+            PB.Msg.create({
+              reveal: {
+                chunkId: { X: chunkX, Y: chunkY },
+                x: localX,
+                y: localY,
+                flow: true,
+              },
+            }),
+          ),
+        );
       } else {
         const optimisticReveal = {
           chunkId: { X: chunkX, Y: chunkY },

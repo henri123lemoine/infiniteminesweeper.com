@@ -266,6 +266,41 @@ func (s *Server) isMine(seed uint64, x, y int) bool {
 	return (cellSeed % 100) < MineCount
 }
 
+func worldToChunk(x, y int) (ChunkID, int, int) {
+	cx := x / ChunkSize
+	if x < 0 && x%ChunkSize != 0 {
+		cx--
+	}
+	cy := y / ChunkSize
+	if y < 0 && y%ChunkSize != 0 {
+		cy--
+	}
+	lx := x - cx*ChunkSize
+	ly := y - cy*ChunkSize
+	return ChunkID{int32(cx), int32(cy)}, lx, ly
+}
+
+func (s *Server) countAdjacentMines(chunkID ChunkID, x, y int) int {
+	worldX := int(chunkID.X)*ChunkSize + x
+	worldY := int(chunkID.Y)*ChunkSize + y
+	count := 0
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			wx := worldX + dx
+			wy := worldY + dy
+			cid, lx, ly := worldToChunk(wx, wy)
+			seed := s.generateChunkSeed(cid)
+			if s.isMine(seed, lx, ly) {
+				count++
+			}
+		}
+	}
+	return count
+}
+
 // Leaderboard helpers
 
 type lbEntry struct {
@@ -508,6 +543,46 @@ func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
 	}
 }
 
+func (s *Server) broadcastRevealBatch(reveals []Reveal) {
+	// Caller already holds stateMu
+	byChunk := make(map[ChunkID][]Reveal)
+	for _, r := range reveals {
+		byChunk[r.ChunkID] = append(byChunk[r.ChunkID], r)
+	}
+
+	for chunkID, list := range byChunk {
+		seed := s.generateChunkSeed(chunkID)
+		var seedBytes [8]byte
+		binary.LittleEndian.PutUint64(seedBytes[:], seed)
+		msg := &pb.Msg{Payload: &pb.Msg_ChunkSync{ChunkSync: &pb.ChunkSync{
+			ChunkId: &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
+			Seed:    seedBytes[:],
+		}}}
+		for _, r := range list {
+			msg.GetChunkSync().Reveals = append(msg.GetChunkSync().Reveals, &pb.Reveal{
+				ChunkId:  &pb.ChunkID{X: r.ChunkID.X, Y: r.ChunkID.Y},
+				X:        int32(r.X),
+				Y:        int32(r.Y),
+				PlayerId: r.PlayerID,
+			})
+		}
+		payload := mustProto(msg)
+		sent := make(map[int32]struct{})
+		for dy := int32(-1); dy <= 1; dy++ {
+			for dx := int32(-1); dx <= 1; dx++ {
+				chk := ChunkID{chunkID.X + dx, chunkID.Y + dy}
+				for pid := range s.subs[chk] {
+					if _, dup := sent[pid]; dup {
+						continue
+					}
+					s.sendToPlayer(pid, payload)
+					sent[pid] = struct{}{}
+				}
+			}
+		}
+	}
+}
+
 func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 	// Bounds check
 	if !s.isValidCoordinate(x, y) {
@@ -607,6 +682,137 @@ func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
 
 	// persistence: mark dirty so that next snapshot loop rewrites file
 	s.lbDirty = true
+	return true
+}
+
+func (s *Server) floodReveal(playerID int32, chunkID ChunkID, x, y int) bool {
+	if !s.isValidCoordinate(x, y) {
+		return false
+	}
+
+	worldX := int(chunkID.X)*ChunkSize + x
+	worldY := int(chunkID.Y)*ChunkSize + y
+
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	chunk, exists := s.chunks[chunkID]
+	if !exists {
+		chunk = &ChunkBits{}
+		s.chunks[chunkID] = chunk
+	}
+	bitIndex := y*ChunkSize + x
+	wordIndex := bitIndex / 64
+	bitOffset := bitIndex % 64
+	if chunk[wordIndex]&(1<<bitOffset) != 0 {
+		return false
+	}
+
+	seed := s.generateChunkSeed(chunkID)
+	if s.isMine(seed, x, y) {
+		return false
+	}
+	if s.countAdjacentMines(chunkID, x, y) != 0 {
+		return false
+	}
+
+	type cell struct{ wx, wy int }
+	queue := []cell{{worldX, worldY}}
+	visited := make(map[cell]struct{})
+	var reveals []Reveal
+
+	for len(queue) > 0 {
+		c := queue[0]
+		queue = queue[1:]
+		if _, ok := visited[c]; ok {
+			continue
+		}
+		visited[c] = struct{}{}
+
+		cid, lx, ly := worldToChunk(c.wx, c.wy)
+		ch := s.chunks[cid]
+		if ch == nil {
+			ch = &ChunkBits{}
+			s.chunks[cid] = ch
+		}
+		bIdx := ly*ChunkSize + lx
+		wIdx := bIdx / 64
+		bOff := bIdx % 64
+		if ch[wIdx]&(1<<bOff) != 0 {
+			continue
+		}
+
+		seed := s.generateChunkSeed(cid)
+		if s.isMine(seed, lx, ly) {
+			continue
+		}
+
+		ch[wIdx] |= 1 << bOff
+
+		if s.cellOwners[cid] == nil {
+			s.cellOwners[cid] = make(map[int]int32)
+		}
+		s.cellOwners[cid][bIdx] = playerID
+
+		reveals = append(reveals, Reveal{ChunkID: cid, X: lx, Y: ly, PlayerID: playerID})
+
+		if s.countAdjacentMines(cid, lx, ly) == 0 {
+			for dy := -1; dy <= 1; dy++ {
+				for dx := -1; dx <= 1; dx++ {
+					if dx == 0 && dy == 0 {
+						continue
+					}
+					queue = append(queue, cell{c.wx + dx, c.wy + dy})
+				}
+			}
+		}
+	}
+
+	if len(reveals) == 0 {
+		return false
+	}
+
+	s.playersMu.RLock()
+	var player *Player
+	if conns, ok := s.players[playerID]; ok {
+		for p := range conns {
+			player = p
+			break
+		}
+	}
+	s.playersMu.RUnlock()
+
+	var delta int32
+	if player != nil {
+		res := make(chan int32, 1)
+		old := make(chan int32, 1)
+		player.Mailbox <- func(pl *Player) {
+			old <- pl.Score
+			pl.Score += int32(len(reveals))
+			if pl.Score < 0 {
+				pl.Score = 0
+			}
+			pl.LastActionTime = time.Now()
+			res <- pl.Score
+		}
+		prev := <-old
+		newScore := <-res
+		delta = newScore - prev
+		s.scores[playerID] = newScore
+		s.lbDirty = true
+		s.sendScoreUpdate(playerID, newScore, worldX, worldY, delta)
+	} else {
+		s.scores[playerID] += int32(len(reveals))
+		delta = int32(len(reveals))
+		s.lbDirty = true
+	}
+
+	for _, rv := range reveals {
+		s.writeWALEntry("reveal", rv)
+	}
+
+	s.broadcastRevealBatch(reveals)
+
 	return true
 }
 
@@ -824,7 +1030,12 @@ func (s *Server) readPump(player *Player) {
 			}
 
 			chunkID := ChunkID{X: r.ChunkId.X, Y: r.ChunkId.Y}
-			ok := s.reveal(player.ID, chunkID, int(r.X), int(r.Y))
+			var ok bool
+			if r.Flow {
+				ok = s.floodReveal(player.ID, chunkID, int(r.X), int(r.Y))
+			} else {
+				ok = s.reveal(player.ID, chunkID, int(r.X), int(r.Y))
+			}
 
 			ack := &pb.Msg{Payload: &pb.Msg_RevealAck{RevealAck: &pb.RevealAck{Ok: ok}}}
 			s.sendToPlayer(player.ID, mustProto(ack))
