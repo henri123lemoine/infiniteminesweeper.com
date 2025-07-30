@@ -11,7 +11,7 @@ Can be played at [infiniteminesweeper.com](https://infiniteminesweeper.com).
 - **Chunk-based World**: Efficient 64×64 cell chunks with optimistic updates
 - **Global Leaderboard**: Compete for highest score
 - **Single-Core Optimized**: Designed for high performance on limited hardware
-- **S3-based Persistence**: Robust data persistence with Write-Ahead Logging (WAL)
+- **Configurable Persistence**: Robust state saved via Write-Ahead Logging (WAL) to S3 or a local volume
 
 ## Quick Start
 
@@ -20,47 +20,36 @@ Can be played at [infiniteminesweeper.com](https://infiniteminesweeper.com).
 ```bash
 git clone https://github.com/henri123lemoine/infiniteminesweeper.com.git
 cd infiniteminesweeper.com
-go mod tidy
-go run .
+make run-fast
+# Then go to http://localhost:8080
 ```
 
-#### Running Tests
+#### Running Tests and Benchmarks
 
 ```bash
+# Run tests
 go test -v -race ./...
-```
-
-Running Benchmarks
-
-```bash
+# Run benchmarks
 go test -run=Bench -bench=. -v
 ```
 
-Generate protobuf files:
+#### Build Commands
 
 ```bash
-./proto/update-proto.sh
+make update    # Update frontend and proto files
+make build     # Full build including Docker image
+make run-fast  # Quick development cycle
 ```
 
 ### Production
 
-Set required environment variables:
-
-```bash
-export AWS_ACCESS_KEY_ID=your_access_key
-export AWS_SECRET_ACCESS_KEY=your_secret_key
-export AWS_REGION=us-east-1
-export S3_BUCKET_NAME=infiniteminesweeper
-```
+Set required environment variables (see `.env.example`).
 
 Run with Docker:
 
 ```bash
-docker build -t infinite-minesweeper .
-docker run --env-file .env -p 8080:8080 infinite-minesweeper
+make run
 ```
-
-The server will start on `http://localhost:8080`
 
 ### Deployment
 
@@ -69,5 +58,5 @@ Deploy to Fly.io:
 ```bash
 fly secrets set AWS_ACCESS_KEY_ID=your_access_key
 fly secrets set AWS_SECRET_ACCESS_KEY=your_secret_key
-fly deploy
+make deploy
 ```

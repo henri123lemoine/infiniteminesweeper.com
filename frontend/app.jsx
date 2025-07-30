@@ -56,6 +56,24 @@ function App() {
   const storedViewY = parseInt(sessionStorage.getItem("viewY") || "0", 10);
   const [viewX, setViewX] = useState(storedViewX);
   const [viewY, setViewY] = useState(storedViewY);
+  const [zoom, setZoom] = useState(1);
+  const handleZoom = useCallback(
+    (delta) => {
+      setZoom((z) => {
+        const newZoom = Math.min(Math.max(z + delta, 0.5), 3);
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          const centerX = (viewX + rect.width / 2) / z;
+          const centerY = (viewY + rect.height / 2) / z;
+          setViewX(newZoom * centerX - rect.width / 2);
+          setViewY(newZoom * centerY - rect.height / 2);
+        }
+        return newZoom;
+      });
+    },
+    [viewX, viewY],
+  );
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({
     x: 0,
@@ -70,6 +88,8 @@ function App() {
   const subscribedChunks = useRef(new Set());
   const revealedCellsRef = useRef(new Map());
   const flaggedCellsRef = useRef(new Map()); // worldX,worldY -> {color: string, playerId: number}
+  const playerColorsRef = useRef(new Map());
+  const [scorePopups, setScorePopups] = useState([]);
   const [tick, setTick] = useState(0);
 
   // Leaderboard visibility and number formatting
@@ -79,6 +99,37 @@ function App() {
   const [playerColor, setPlayerColor] = useState(
     localStorage.getItem("playerColor") || "#FF0000",
   );
+
+  // Score popup color function
+  /*
+  const getScoreColor = useCallback((delta) => {
+    if (delta > 0) {
+      // Green for positive scores, more intense for higher values
+      const intensity = Math.min(Math.abs(delta) / 20, 1); // Scale 0-1 based on delta
+      const green = Math.floor(100 + intensity * 155); // 100-255 range
+      return `rgb(0, ${green}, 0)`;
+    } else if (delta < 0) {
+      // Red for negative scores, more intense for larger losses
+      const intensity = Math.min(Math.abs(delta) / 100, 1); // Scale 0-1 based on delta (bombs are -100)
+      const red = Math.floor(150 + intensity * 105); // 150-255 range
+      return `rgb(${red}, 0, 0)`;
+    }
+    return "#666"; // Gray for zero delta (shouldn't happen)
+  }, []);
+  */
+  const getScoreColor = useCallback((delta) => {
+    if (delta > 0) return "#fff";
+    if (delta < 0) return "#f00";
+    return "#666"; // shouldn't happen
+  }, []);
+
+  // Minimap state
+  const minimapCanvasRef = useRef(null);
+  const [minimapChunks, setMinimapChunks] = useState(3); // 3x3 by default
+
+  const toggleMinimapSize = useCallback(() => {
+    setMinimapChunks((c) => (c === 1 ? 3 : c === 3 ? 5 : c === 5 ? 7 : 1));
+  }, []);
 
   const toggleLeaderboard = useCallback(() => {
     setLeaderboardVisible((v) => !v);
@@ -236,7 +287,9 @@ function App() {
   // Constants
   const CHUNK = 64;
   const MINE_COUNT = 20;
-  const CELL_SIZE = 20;
+  const MINIMAP_SIZE = 200;
+  const BASE_CELL_SIZE = 32;
+  const CELL_SIZE = BASE_CELL_SIZE * zoom;
 
   // Deterministic helpers
   const splitmix64 = useCallback((state) => {
@@ -272,7 +325,7 @@ function App() {
 
       return { x: worldX, y: worldY };
     },
-    [viewX, viewY],
+    [viewX, viewY, CELL_SIZE],
   );
 
   // Convert world coordinates to chunk and local coordinates
@@ -645,245 +698,303 @@ function App() {
     ],
   );
 
-  // 3D cell drawing function
-  const draw3DCell = useCallback(
-    (ctx, x, y, size, isRevealed = false, isPressed = false) => {
-      const lightGray = "#f0f0f0";
-      const mediumGray = "#c0c0c0";
-      const darkGray = "#808080";
-      const veryDarkGray = "#404040";
+  // 3D Cell Drawing Functions
+  const draw3DCell = (ctx, x, y, size, isRevealed) => {
+    const borderWidth = Math.max(1, size * 0.08);
+    const innerBorderWidth = Math.max(0.5, size * 0.04);
 
-      if (isRevealed) {
-        // Revealed cells: flat with subtle inset border
-        ctx.fillStyle = "#e8e8e8";
-        ctx.fillRect(x, y, size, size);
+    if (isRevealed) {
+      // Revealed cell - flat appearance
+      ctx.fillStyle = "#e0e0e0";
+      ctx.fillRect(x, y, size, size);
 
-        // Subtle inset effect
-        ctx.fillStyle = darkGray;
-        ctx.fillRect(x, y, size, 1); // top
-        ctx.fillRect(x, y, 1, size); // left
-      } else {
-        // Unrevealed cells: raised 3D effect
-        const bevelSize = 2;
+      // Subtle inset border
+      ctx.fillStyle = "rgba(0, 0, 0, 0.15)";
+      ctx.fillRect(x, y, size, borderWidth);
+      ctx.fillRect(x, y, borderWidth, size);
 
-        // Main cell face
-        ctx.fillStyle = mediumGray;
-        ctx.fillRect(
-          x + bevelSize,
-          y + bevelSize,
-          size - bevelSize * 2,
-          size - bevelSize * 2,
-        );
+      ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+      ctx.fillRect(
+        x + size - borderWidth,
+        y + borderWidth,
+        borderWidth,
+        size - borderWidth,
+      );
+      ctx.fillRect(
+        x + borderWidth,
+        y + size - borderWidth,
+        size - borderWidth,
+        borderWidth,
+      );
+    } else {
+      // Unrevealed cell - raised 3D appearance
+      ctx.fillStyle = "#c0c0c0";
+      ctx.fillRect(
+        x + borderWidth,
+        y + borderWidth,
+        size - 2 * borderWidth,
+        size - 2 * borderWidth,
+      );
 
-        if (isPressed) {
-          // Pressed/clicked state - inset
-          ctx.fillStyle = darkGray;
-          ctx.fillRect(x, y, size, bevelSize); // top edge
-          ctx.fillRect(x, y, bevelSize, size); // left edge
+      // Top and left highlights
+      ctx.fillStyle = "#d4d4d4";
+      ctx.fillRect(x, y, size, borderWidth);
+      ctx.fillRect(x, y, borderWidth, size);
 
-          ctx.fillStyle = lightGray;
-          ctx.fillRect(x, y + size - bevelSize, size, bevelSize); // bottom edge
-          ctx.fillRect(x + size - bevelSize, y, bevelSize, size); // right edge
-        } else {
-          // Raised state - normal
-          ctx.fillStyle = lightGray;
-          ctx.fillRect(x, y, size, bevelSize); // top highlight
-          ctx.fillRect(x, y, bevelSize, size); // left highlight
+      ctx.fillStyle = "rgba(212, 212, 212, 0.6)";
+      ctx.fillRect(
+        x + borderWidth,
+        y + borderWidth,
+        size - 2 * borderWidth,
+        innerBorderWidth,
+      );
+      ctx.fillRect(
+        x + borderWidth,
+        y + borderWidth,
+        innerBorderWidth,
+        size - 2 * borderWidth,
+      );
 
-          ctx.fillStyle = darkGray;
-          ctx.fillRect(x, y + size - bevelSize, size, bevelSize); // bottom shadow
-          ctx.fillRect(x + size - bevelSize, y, bevelSize, size); // right shadow
+      // Bottom and right shadows
+      ctx.fillStyle = "#808080";
+      ctx.fillRect(
+        x + borderWidth,
+        y + size - borderWidth,
+        size - borderWidth,
+        borderWidth,
+      );
+      ctx.fillRect(
+        x + size - borderWidth,
+        y + borderWidth,
+        borderWidth,
+        size - borderWidth,
+      );
 
-          // Corner pixels for cleaner look
-          ctx.fillStyle = veryDarkGray;
-          ctx.fillRect(
-            x + size - bevelSize,
-            y + size - bevelSize,
-            bevelSize,
-            bevelSize,
-          ); // bottom-right corner
-        }
-      }
-    },
-    [],
-  );
+      ctx.fillStyle = "rgba(128, 128, 128, 0.6)";
+      const innerShadowOffset = borderWidth + innerBorderWidth;
+      ctx.fillRect(
+        x + innerShadowOffset,
+        y + size - innerShadowOffset,
+        size - 2 * innerShadowOffset,
+        innerBorderWidth,
+      );
+      ctx.fillRect(
+        x + size - innerShadowOffset,
+        y + innerShadowOffset,
+        innerBorderWidth,
+        size - 2 * innerShadowOffset,
+      );
 
-  // Canvas rendering
+      // Corner highlights/shadows
+      ctx.fillStyle = "#d4d4d4";
+      ctx.fillRect(x, y, borderWidth, borderWidth);
+
+      ctx.fillStyle = "#606060";
+      ctx.fillRect(
+        x + size - borderWidth,
+        y + size - borderWidth,
+        borderWidth,
+        borderWidth,
+      );
+    }
+  };
+
+  // Content Drawing Functions
+  const drawMine = (ctx, x, y, size) => {
+    const mineScale = 0.8;
+    const centerX = x + size / 2;
+    const centerY = y + size / 2;
+    const radius = size * 0.25 * mineScale;
+
+    // Mine body
+    ctx.fillStyle = "#2a2a2a";
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Mine spikes
+    ctx.strokeStyle = "#2a2a2a";
+    ctx.lineWidth = Math.max(1, size * 0.06 * mineScale);
+    const spikeLength = radius * 0.8;
+
+    for (let i = 0; i < 8; i++) {
+      const angle = (i * Math.PI) / 4;
+      const startX = centerX + Math.cos(angle) * radius * 0.6;
+      const startY = centerY + Math.sin(angle) * radius * 0.6;
+      const endX = centerX + Math.cos(angle) * (radius + spikeLength);
+      const endY = centerY + Math.sin(angle) * (radius + spikeLength);
+
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+    }
+
+    // Highlight on mine
+    ctx.fillStyle = "#5a5a5a";
+    ctx.beginPath();
+    ctx.arc(
+      centerX - radius * 0.3,
+      centerY - radius * 0.3,
+      radius * 0.3,
+      0,
+      Math.PI * 2,
+    );
+    ctx.fill();
+  };
+
+  const drawNumber = (ctx, x, y, size, number, getNumberColor) => {
+    const fontSize = Math.max(8, size * 0.5);
+    ctx.font = `bold ${fontSize}px monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = getNumberColor(number);
+
+    // Add subtle shadow
+    ctx.shadowColor = "rgba(0, 0, 0, 0.2)";
+    ctx.shadowBlur = 1;
+    ctx.shadowOffsetX = 0.5;
+    ctx.shadowOffsetY = 0.5;
+
+    ctx.fillText(number.toString(), x + size / 2, y + size / 2 + 1.5);
+    ctx.shadowColor = "transparent";
+  };
+
+  const drawFlag = (ctx, x, y, size, flagColor) => {
+    const poleX = x + size * 0.175;
+    const poleTop = y + size * 0.15;
+    const poleHeight = size * 0.75;
+    const poleWidth = size * 0.08;
+    const flagWidth = size * 0.6;
+    const flagHeight = size * 0.4;
+    const poleOutline = Math.max(1, size * 0.04);
+    const flagOutline = Math.max(1, size * 0.04);
+
+    // Draw pole with black outline
+    ctx.fillStyle = "#333";
+    ctx.fillRect(poleX, poleTop, poleWidth, poleHeight);
+    ctx.save();
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = poleOutline;
+    ctx.strokeRect(poleX, poleTop, poleWidth, poleHeight);
+    ctx.restore();
+
+    // Draw flag with player color and black outline
+    ctx.fillStyle = flagColor;
+    ctx.fillRect(poleX + poleWidth, poleTop, flagWidth, flagHeight);
+    ctx.save();
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = flagOutline;
+    ctx.strokeRect(poleX + poleWidth, poleTop, flagWidth, flagHeight);
+    ctx.restore();
+  };
+
+  // Cell Rendering Logic
+  const renderCell = (
+    ctx,
+    screenX,
+    screenY,
+    cellSize,
+    cellData,
+    isRevealed,
+    getNumberColor,
+  ) => {
+    // Always draw the base cell first
+    draw3DCell(ctx, screenX, screenY, cellSize, isRevealed);
+
+    // If not revealed, we're done (content will be handled separately for flags)
+    if (!isRevealed) return;
+
+    // Draw revealed cell content
+    if (cellData.isMine) {
+      drawMine(ctx, screenX, screenY, cellSize);
+    } else if (cellData.adjacentMines > 0) {
+      drawNumber(
+        ctx,
+        screenX,
+        screenY,
+        cellSize,
+        cellData.adjacentMines,
+        getNumberColor,
+      );
+    }
+  };
+
+  // Main Canvas Rendering
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const ctx = canvas.getContext("2d");
     const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
 
-    canvas.width = rect.width;
-    canvas.height = rect.height;
+    // Setup canvas
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+    // Clear background
     ctx.fillStyle = "#c0c0c0";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    // Calculate visible world coordinates
     const startWorldX = Math.floor(viewX / CELL_SIZE);
     const startWorldY = Math.floor(viewY / CELL_SIZE);
-    const endWorldX = Math.ceil((viewX + canvas.width) / CELL_SIZE);
-    const endWorldY = Math.ceil((viewY + canvas.height) / CELL_SIZE);
+    const endWorldX = Math.ceil((viewX + rect.width) / CELL_SIZE);
+    const endWorldY = Math.ceil((viewY + rect.height) / CELL_SIZE);
 
-    // Draw all cells (unrevealed first, then revealed on top)
-    // First pass: Draw all unrevealed cells with 3D effect
+    // Helper function to check if cell is visible
+    const isCellVisible = (screenX, screenY) => {
+      return !(
+        screenX + CELL_SIZE < 0 ||
+        screenX > rect.width ||
+        screenY + CELL_SIZE < 0 ||
+        screenY > rect.height
+      );
+    };
+
+    // Render all cells in the visible area
     for (let worldY = startWorldY; worldY <= endWorldY; worldY++) {
       for (let worldX = startWorldX; worldX <= endWorldX; worldX++) {
         const screenX = worldX * CELL_SIZE - viewX;
         const screenY = worldY * CELL_SIZE - viewY;
 
-        // Skip if not visible
-        if (
-          screenX + CELL_SIZE < 0 ||
-          screenX > canvas.width ||
-          screenY + CELL_SIZE < 0 ||
-          screenY > canvas.height
-        ) {
-          continue;
-        }
+        if (!isCellVisible(screenX, screenY)) continue;
 
         const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
         const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
-        const isRevealed = revealedCellsRef.current.has(cellKey);
+        const cellData = revealedCellsRef.current.get(cellKey);
+        const isRevealed = cellData !== undefined;
 
-        if (!isRevealed) {
-          // Draw unrevealed cell with 3D effect
-          draw3DCell(ctx, screenX, screenY, CELL_SIZE, false, false);
-        }
+        // Render the cell
+        renderCell(
+          ctx,
+          screenX,
+          screenY,
+          CELL_SIZE,
+          cellData,
+          isRevealed,
+          getNumberColor,
+        );
       }
     }
 
-    // Removed chunk boundaries for now
-    //   // Draw chunk boundaries
-    //   ctx.strokeStyle = '#333';
-    //   ctx.lineWidth = 2;
-    //   ctx.beginPath();
-
-    //   const startChunkX = Math.floor(startWorldX / CHUNK);
-    //   const startChunkY = Math.floor(startWorldY / CHUNK);
-    //   const endChunkX = Math.ceil(endWorldX / CHUNK);
-    //   const endChunkY = Math.ceil(endWorldY / CHUNK);
-
-    //   for (let chunkX = startChunkX; chunkX <= endChunkX; chunkX++) {
-    //     const screenX = chunkX * CHUNK * CELL_SIZE - viewX;
-    //     ctx.moveTo(screenX, 0);
-    //     ctx.lineTo(screenX, canvas.height);
-    //   }
-
-    //   for (let chunkY = startChunkY; chunkY <= endChunkY; chunkY++) {
-    //     const screenY = chunkY * CHUNK * CELL_SIZE - viewY;
-    //     ctx.moveTo(0, screenY);
-    //     ctx.lineTo(canvas.width, screenY);
-    //   }
-
-    //   ctx.stroke();
-
-    // Second pass: Draw revealed cells with 3D effect and content
-    ctx.font = "bold 14px monospace";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-
-    revealedCellsRef.current.forEach((cellData, key) => {
-      const [chunkX, chunkY, localX, localY] = key.split(",").map(Number);
-      const worldX = chunkX * CHUNK + localX;
-      const worldY = chunkY * CHUNK + localY;
-
-      const screenX = worldX * CELL_SIZE - viewX;
-      const screenY = worldY * CELL_SIZE - viewY;
-
-      // Skip if not visible
-      if (
-        screenX + CELL_SIZE < 0 ||
-        screenX > canvas.width ||
-        screenY + CELL_SIZE < 0 ||
-        screenY > canvas.height
-      ) {
-        return;
-      }
-
-      // Draw revealed cell with 3D effect
-      if (cellData.isMine) {
-        // For mines, draw revealed cell then add red background
-        draw3DCell(ctx, screenX, screenY, CELL_SIZE, true, false);
-
-        // Add red tint for mine
-        ctx.fillStyle = "rgba(255, 0, 0, 0.3)";
-        ctx.fillRect(screenX + 1, screenY + 1, CELL_SIZE - 2, CELL_SIZE - 2);
-      } else {
-        // Normal revealed cell
-        draw3DCell(ctx, screenX, screenY, CELL_SIZE, true, false);
-      }
-
-      // Draw cell content
-      if (cellData.isMine) {
-        ctx.fillStyle = "white";
-        ctx.fillText(
-          "💣",
-          screenX + CELL_SIZE / 2,
-          screenY + CELL_SIZE / 2 + 2,
-        );
-      } else if (cellData.adjacentMines > 0) {
-        ctx.font = "bold 14px monospace";
-        ctx.fillStyle = getNumberColor(cellData.adjacentMines);
-        ctx.fillText(
-          cellData.adjacentMines.toString(),
-          screenX + CELL_SIZE / 2,
-          screenY + CELL_SIZE / 2 + 1.5,
-        );
-      }
-    });
-
-    // Draw flags
+    // Render flags on top of unrevealed cells
     flaggedCellsRef.current.forEach((flagData, flagKey) => {
       const [worldX, worldY] = flagKey.split(",").map(Number);
       const screenX = worldX * CELL_SIZE - viewX;
       const screenY = worldY * CELL_SIZE - viewY;
 
-      // Skip if not visible
-      if (
-        screenX + CELL_SIZE < 0 ||
-        screenX > canvas.width ||
-        screenY + CELL_SIZE < 0 ||
-        screenY > canvas.height
-      ) {
-        return;
-      }
+      if (!isCellVisible(screenX, screenY)) return;
 
       // Don't draw flag if cell is revealed
       const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
       const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
       if (revealedCellsRef.current.has(cellKey)) return;
 
-      // Flagged cells should already be drawn as unrevealed in first pass
-      // Just draw the flag content on top
-
-      // Draw custom flag with player color
-      const flagPoleX = screenX + CELL_SIZE / 2 - 1;
-      const flagTopY = screenY + 3;
-      const flagBottomY = screenY + CELL_SIZE - 3;
-      const flagWidth = 8;
-      const flagHeight = 6;
-
-      // Draw flag pole (dark gray)
-      ctx.fillStyle = "#333";
-      ctx.fillRect(flagPoleX, flagTopY, 2, flagBottomY - flagTopY);
-
-      // Draw flag triangle with flag color
       const flagColor = flagData?.color || playerColor;
-      ctx.fillStyle = flagColor;
-      ctx.beginPath();
-      ctx.moveTo(flagPoleX + 2, flagTopY);
-      ctx.lineTo(flagPoleX + 2 + flagWidth, flagTopY + flagHeight / 2);
-      ctx.lineTo(flagPoleX + 2, flagTopY + flagHeight);
-      ctx.closePath();
-      ctx.fill();
-
-      // Add a subtle border to the flag
-      ctx.strokeStyle = "#000";
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
+      drawFlag(ctx, screenX, screenY, CELL_SIZE, flagColor);
     });
   }, [
     viewX,
@@ -894,6 +1005,103 @@ function App() {
     playerColor,
     draw3DCell,
   ]);
+
+  // Minimap rendering
+  const renderMinimap = useCallback(() => {
+    const canvas = minimapCanvasRef.current;
+    if (!canvas) return;
+
+    const cellsPerSide = CHUNK * minimapChunks;
+    canvas.width = cellsPerSide;
+    canvas.height = cellsPerSide;
+    canvas.style.width = `${MINIMAP_SIZE}px`;
+    canvas.style.height = `${MINIMAP_SIZE}px`;
+
+    const ctx = canvas.getContext("2d");
+
+    // Center chunk based on view
+    const gameCanvas = canvasRef.current;
+    const gameRect = gameCanvas?.getBoundingClientRect();
+    const centerWorldX = Math.floor(
+      (viewX + (gameRect?.width || 0) / 2) / CELL_SIZE,
+    );
+    const centerWorldY = Math.floor(
+      (viewY + (gameRect?.height || 0) / 2) / CELL_SIZE,
+    );
+
+    // Calculate minimap center in pixels
+    const minimapCenterX = cellsPerSide / 2;
+    const minimapCenterY = cellsPerSide / 2;
+
+    // Calculate world coordinate range to display
+    const worldStartX = centerWorldX - Math.floor(cellsPerSide / 2);
+    const worldStartY = centerWorldY - Math.floor(cellsPerSide / 2);
+
+    // Clear canvas
+    ctx.fillStyle = "#808080";
+    ctx.fillRect(0, 0, cellsPerSide, cellsPerSide);
+
+    // Render each pixel of the minimap
+    for (let py = 0; py < cellsPerSide; py++) {
+      for (let px = 0; px < cellsPerSide; px++) {
+        const worldX = worldStartX + px;
+        const worldY = worldStartY + py;
+
+        const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
+        const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+        const flagKey = `${worldX},${worldY}`;
+        const seed = seedCache.current.get(`${chunkX},${chunkY}`);
+
+        let color = "#909090"; // Default unrevealed color
+        const flag = flaggedCellsRef.current.get(flagKey);
+        if (flag) {
+          color = flag.color || "#ff0000";
+        } else if (revealedCellsRef.current.has(cellKey)) {
+          const cell = revealedCellsRef.current.get(cellKey);
+          if (cell.isMine)
+            color = "#333333"; // Lighter than full black
+          else {
+            const n = cell.adjacentMines;
+            if (n === 0) color = "#e0e0e0";
+            else if (n === 1)
+              color = "#d0d0ff"; // Light blue tint
+            else if (n === 2)
+              color = "#d0ffd0"; // Light green tint
+            else if (n === 3)
+              color = "#ffd0d0"; // Light red tint
+            else if (n === 4)
+              color = "#d0d0d0"; // Light navy tint
+            else if (n === 5)
+              color = "#f0d0d0"; // Light maroon tint
+            else if (n === 6)
+              color = "#d0f0f0"; // Light cyan tint
+            else color = "#c0c0c0"; // Light gray
+          }
+        } else if (seed && isMine(seed, localX, localY)) {
+          // Unrevealed mine
+          color = "#909090";
+        }
+
+        ctx.fillStyle = color;
+        ctx.fillRect(px, py, 1, 1);
+      }
+    }
+
+    // Draw fixed viewport indicator in center of minimap
+    if (gameRect) {
+      // Calculate viewport size in world cells
+      const viewWidthCells = Math.ceil(gameRect.width / CELL_SIZE);
+      const viewHeightCells = Math.ceil(gameRect.height / CELL_SIZE);
+
+      // Draw viewport box centered on minimap
+      const boxLeft = minimapCenterX - viewWidthCells / 2;
+      const boxTop = minimapCenterY - viewHeightCells / 2;
+
+      ctx.strokeStyle = "rgba(200, 200, 200, 0.8)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(boxLeft, boxTop, viewWidthCells, viewHeightCells);
+    }
+  }, [viewX, viewY, tick, minimapChunks, worldToChunk, isMine, CELL_SIZE]);
 
   // Subscribe to visible chunks
   const subscribeToVisibleChunks = useCallback(() => {
@@ -937,6 +1145,7 @@ function App() {
     viewY,
     ensureChunkSubscription,
     ensureChunkUnsubscription,
+    CELL_SIZE,
   ]);
 
   // Mouse event handlers
@@ -1186,7 +1395,13 @@ function App() {
           entries: m.leaderboard.entries,
         };
       } else if (m.scoreUpdate) {
-        data = { type: "scoreUpdate", score: m.scoreUpdate.score };
+        data = {
+          type: "scoreUpdate",
+          score: m.scoreUpdate.score,
+          delta: m.scoreUpdate.delta,
+          worldX: m.scoreUpdate.worldX,
+          worldY: m.scoreUpdate.worldY,
+        };
       } else if (m.flag) {
         data = { ...m.flag, chunkId: m.flag.chunkId };
       } else if (m.reveal) {
@@ -1311,6 +1526,7 @@ function App() {
           color: data.color,
           playerId: data.playerId,
         });
+        playerColorsRef.current.set(data.playerId, data.color);
 
         setTick((t) => t + 1);
       } else if (
@@ -1394,6 +1610,27 @@ function App() {
       } else if (data.type === "scoreUpdate") {
         if (typeof data.score === "number") {
           setPlayerScore(data.score);
+
+          // Only show popup if there's a delta and valid coordinates (not initial score)
+          if (
+            data.delta &&
+            data.delta !== 0 &&
+            (data.worldX !== 0 || data.worldY !== 0)
+          ) {
+            const id = Math.random().toString(36).slice(2);
+            setScorePopups((p) => [
+              ...p,
+              {
+                id,
+                worldX: data.worldX,
+                worldY: data.worldY,
+                delta: data.delta,
+              },
+            ]);
+            setTimeout(() => {
+              setScorePopups((p) => p.filter((s) => s.id !== id));
+            }, 1000);
+          }
         }
       }
     };
@@ -1430,6 +1667,10 @@ function App() {
     render();
   }, [render]);
 
+  useEffect(() => {
+    renderMinimap();
+  }, [renderMinimap]);
+
   // Handle window resize
   useEffect(() => {
     const handleResize = () => {
@@ -1445,11 +1686,12 @@ function App() {
   }, [leaderboard]);
 
   // Calculate current world position for debugging
+  const centerRect = canvasRef.current?.getBoundingClientRect();
   const centerWorldX = Math.floor(
-    (viewX + (canvasRef.current?.width || 0) / 2) / CELL_SIZE,
+    (viewX + (centerRect?.width || 0) / 2) / CELL_SIZE,
   );
   const centerWorldY = Math.floor(
-    (viewY + (canvasRef.current?.height || 0) / 2) / CELL_SIZE,
+    (viewY + (centerRect?.height || 0) / 2) / CELL_SIZE,
   );
   const { chunkX: centerChunkX, chunkY: centerChunkY } = worldToChunk(
     centerWorldX,
@@ -1556,6 +1798,26 @@ function App() {
         >
           <canvas ref={canvasRef} id="game-canvas" />
 
+          {scorePopups.map((p) => {
+            const x = p.worldX * CELL_SIZE - viewX;
+            const y = p.worldY * CELL_SIZE - viewY;
+            return (
+              <div
+                key={p.id}
+                className="score-popup"
+                style={{
+                  left: x,
+                  top: y,
+                  color: getScoreColor(p.delta),
+                  fontWeight: "bold",
+                  textShadow: "1px 1px 2px rgba(0,0,0,0.8)",
+                }}
+              >
+                {p.delta > 0 ? `+${p.delta}` : p.delta}
+              </div>
+            );
+          })}
+
           {DEV_MODE && (
             <div className="coordinates-debug">
               <div
@@ -1570,6 +1832,12 @@ function App() {
           )}
         </div>
       </div>
+
+      <canvas
+        ref={minimapCanvasRef}
+        className="minimap"
+        onClick={toggleMinimapSize}
+      />
 
       <div className="leaderboard">
         <div
@@ -1590,6 +1858,13 @@ function App() {
               <ol>
                 {topPlayers.map((p) => (
                   <li key={p.playerId}>
+                    <span
+                      className="lb-flag"
+                      style={{
+                        backgroundColor:
+                          playerColorsRef.current.get(p.playerId) || "#ccc",
+                      }}
+                    />
                     {p.name ? p.name : `Player ${p.playerId}`}:{" "}
                     {formatScore(p.score)}
                   </li>
@@ -1600,6 +1875,10 @@ function App() {
             )}
           </>
         )}
+      </div>
+      <div className="zoom-controls">
+        <button onClick={() => handleZoom(0.25)}>+</button>
+        <button onClick={() => handleZoom(-0.25)}>-</button>
       </div>
     </div>
   );

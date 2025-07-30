@@ -21,16 +21,16 @@ browser (React + WebSocket)         // optimistic UI, rollback netcode-lite
 nginx   ──►  golang single-process server   // the interesting part
         │
 basic logging  ───►  stdout/stderr
-periodic saves  ───►  local disk
+periodic saves  ───►  S3 + local disk
 ```
 
-_No Redis, no DB._ Everything stays in RAM; we serialize snapshots to disk every few minutes for durability.
+_No Redis, no DB._ Everything stays in RAM; we serialize snapshots to S3 / local disk every few minutes for durability.
 
 ## 2. Server Responsibilities (authoritative)
 
 1. **Chunk-seed service**
 
-   - HMAC-SHA256(masterSecret, "cx:cy") – exactly as in the benchmark.
+   - HMAC-SHA256(masterSecret, "cx:cy").
    - Per-player _token bucket_ (minutes) to throttle discovery bots.
 
 2. **Reveal registry**
@@ -40,8 +40,7 @@ _No Redis, no DB._ Everything stays in RAM; we serialize snapshots to disk every
 
 3. **Leaderboard**
 
-   - `map[playerID]uint32` (atomic increment on successful reveal).
-   - On snapshot, dump as top-N list + full KV for cold storage.
+   - `map[playerID]uint32`.
 
 4. **Fan-out**
 
@@ -50,7 +49,7 @@ _No Redis, no DB._ Everything stays in RAM; we serialize snapshots to disk every
 
 5. **Persistence**
 
-   - Copy-on-write board mirror fed via channel; flushed to gzip'd protobuf every **2 min** or **5 k reveals**, whichever first.
+   - Copy-on-write board mirror fed via channel; flushed to gzip'd protobuf.
    - On start-up: load latest snapshot + replay tail of WAL.
 
 ## 3. Concurrency & Single-Core Discipline
@@ -58,49 +57,14 @@ _No Redis, no DB._ Everything stays in RAM; we serialize snapshots to disk every
 - `runtime.GOMAXPROCS(1)` at boot – no accidental multi-CPU wins.
 - **One global RWMutex** protects _mutating_ state (`revealed`, `leaderboard`, `subs`).
 
-  - Readers (seed fetch, already-revealed check) take RLock for ~50 ns.
-  - Writer (first-reveal) holds WLock < 2 µs (bit-test + set).
+  - Readers (seed fetch, already-revealed check) take RLock for ~100 ns.
+  - Writer (first-reveal) holds WLock < 1 µs (bit-test + set).
 
 - Per-player goroutine handles its own rate-limit counters & fan-in/out to avoid cross-player contention.
 
 We do NOT shard locks until profiling shows ≥ 5 % of wall time inside the mutex.
 
-## 4. Data Layout Details
-
-### 4.1 Coordinates
-
-```go
-const ChunkSize = 64  // cells
-type chunkID struct{ X, Y int32 }   // fits in 4 bytes
-
-// Bitset: 4096 bits → [64]uint64
-type chunkBits [64]uint64
-```
-
-### 4.2 World State
-
-```go
-type server struct {
-    secret []byte
-
-    // chunkID → *chunkBits  (reveals)
-    chunks   map[chunkID]*chunkBits
-    chunksMu sync.RWMutex
-
-    // pid → score
-    scores   map[int32]uint32
-    scoresMu sync.RWMutex
-
-    // subscriptions
-    subs   map[chunkID]map[int32]chan Reveal
-    subsMu sync.RWMutex
-}
-```
-
-_Memory math_:
-`chunks` grows only as players explore. 10 000 active chunks → ~5 MiB; fits easily.
-
-## 5. Protocol
+## 4. Protocol
 
 | Msg                           | Dir               | Payload               | Notes                          |
 | ----------------------------- | ----------------- | --------------------- | ------------------------------ |
@@ -113,7 +77,7 @@ _Memory math_:
 
 _All protobuf, zstd-compressed, batched ≤ 200 ms._
 
-### 5.1 WebSocket Connection Management
+### 4.1 WebSocket Connection Management
 
 **Connection Lifecycle:**
 
@@ -134,7 +98,7 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 - Chunk subscriptions include current reveal state
 - Clients maintain local optimistic board with rollback capability
 
-## 6. Game Mechanics
+## 5. Game Mechanics
 
 **Infinite Board Experience:**
 
@@ -159,88 +123,108 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 - Collaborative exploration of the infinite space
 - No player collision - multiple players can reveal same cell simultaneously
 
-## 7. Cheat & Abuse Mitigation
+## 6. Cheat & Abuse Mitigation
 
 1. **Seed mining** – limited by token bucket; at 200/min the entire 64×64 region around a player still costs 16 s wall time.
 2. **Reveal sniping** – first-writer wins based on server wall clock (`time.Now().UnixNano()` monotonic).
 3. **Message forgery / tamper** – WebSocket over TLS + HMAC on moves is overkill; TLS + rate-limit is fine.
 4. **Automation** – heuristics: abnormal seed-request streak → soft-ban (disconnect) via in-memory blacklist.
 
-## 8. Persistence & Recovery
+## 7. Persistence & Recovery
 
 - Snapshot file: `snapshot_<unix>.pb.gz` (chunks, scores, lastSeq).
 - WAL (`replay.log`): append compressed `Reveal` records; truncate after snapshot sync.
 - Cold storage: cron rsync to S3 every hour; keep last 100 snapshots.
 - On boot:
-
   1. Load newest snapshot.
   2. Replay WAL.
   3. Resume accepting connections (≤ 200 ms cold start).
 
-## 9. Monitoring & Observability
+## 8. Monitoring & Observability
 
 **Basic Logging:**
 
 - Key events: connections, reveals, rate limit hits, errors
 - Performance metrics: reveal latency, memory usage, active connections
 
-## A few additional notes
+## Implementation Notes
 
-- The content of cells should never be stored anywhere (determined from cell coordinates with SplitMix64). Nor seeds (determined from chunk coordinates).
-- The server stores the world state (as in, what cells are revealed) in a bitset, as well as the leaderboard.
+- Cell content is never stored (determined from cell coordinates with SplitMix64). Seeds are never stored (determined from chunk coordinates).
+- Server stores world state (revealed cells) in a bitset, the flags, and maintains the leaderboard.
 
-# OTHER TODOS
+# TODO List
 
-- [ ] Flow reveals should be sent in batches, not one by one. E.g.: user encounters a large flow, sends this full area (which may be incompassing multiple chunks) in a message to the server; the server checks that this is a single valid flow, and if so, gives score, counts this as 1 click for purposes of rate limiting, and broadcasts all the reveals to the 3x3 neighborhood, again in a single message.
-- [ ] Stop people from joining the game with a different id but the same exact username as someone else
-- [x] Better mobile support; e.g. u gotta reload when joining on mobile for some reason or else it disconnects or smth?
-- [x] Self score at the top
-- [x] Better scoring system
-- [ ] Server stores last known player location (x,y) and sends it to the client on join, as well as subscriptions to adjacent chunks. That way, instead of having to call hello, then call subscribe on each chunk in a 3x3 grid, you just call hello and the server deals with connecting you to what you need. Actually, maybe frontend also stores the offset to the center of the chunk you're in, so that all that the server need to store is the chunk you're in.
-- [ ] Minimap like in old game version
-- [ ] Implement the WAL sketched in the plan (`replay.log`) and truncate it when a snapshot succeeds
-- [ ] Origin check + SameSite cookies for CSRF
-- [ ] Per‑IP or per‑/24 subnet connection caps
-- [ ] Expose `/admin/debug/pprof` behind basic‑auth on Fly ≈ free profiling
-- [ ] Lazy‑load React via `defer`/`async` + bundle with esbuild for ~70% initial JS size
-- [ ] Use `devicePixelRatio` when sizing the `<canvas>` to avoid blurry tiles on mobile
-- [ ] Persist `viewX/viewY` in `sessionStorage` so refreshes don’t reset the camera
-- [ ] When the server finds itself being basically empty, it should check the latest snapshot for validation. In fact, the server should occasionally check this
-- [ ] Cells should be 32x32 pixels.
-
-- [x] Flags (can be client side only for now, as in you can right click to flag but it doesn't do anything concrete other than show a flag icon)
-- [x] Color wheel for user flags (on first join)
-  - [ ] Still needs a minor fix (misalignment between color wheel and selected color)
-- [x] Chords (client-side)
-- [ ] Cleaner looking flags
-- [x] Server-side flags for scoring system, remove undoing option
+## Performance & Optimization
 
 - [ ] Add message compression with zstd
-- [ ] Implement per-player token bucket for seed requests (200/min)
+- [ ] Flow reveals should be sent in batches, not one by one
+- [ ] If a chunk is fully revealed, send condensed message instead of full chunk data
+
+## Server Infrastructure & Security
+
+- [ ] When server is empty, validate against latest snapshot
+- [ ] Per-IP or per-/24 subnet connection caps
 - [ ] Add reveal rate limiting protection
+- [ ] Implement per-player token bucket for seed requests (200/min)
 - [ ] Create soft-ban mechanism for suspicious activity
 - [ ] Add rate limit violation logging
-- [ ] Add HTTP endpoint for leaderboard queries (/leaderboard)
-- [ ] Implement zoom controls
-- [ ] Add user flag appearance to leaderboard display component
+- [ ] Expose `/admin/debug/pprof` behind basic-auth on Fly for free profiling
+- [ ] Stop people from joining with different ID but same username
+
+## Client Features & UX
+
+- [x] Show score gained for reveals/flags next to where it happened
+  - [ ] Done, but must make it more performant, somehow, flow reveals are quite slow atm. This may be as simple as implementing the batch reveals, and setting that as a single score delta message.
+- [ ] Persist `viewX/viewY` in `sessionStorage` so refreshes don't reset camera
+- [ ] Server stores last known player location and auto-subscribes to adjacent chunks on join
+- [x] Implement zoom controls
+  - [ ] Perhaps instead of + and - zooming, zooming should be done with mouse wheel or similar.
 - [ ] Add connection status and player count indicators
-- [ ] Usernames max 20 characters (I hate fun)
-- [ ] Way to see user statistics (e.g. how many reveals, how many flags, how many exploded bombs, points over time, etc.)
-- [ ] Client should occasionally hash local chunk reveals and send that to server for validation that there is match. If there is a mismatch, the client is unsubscribe and must resubscribe to the chunk.
 
-## Game Fun
+## Data Integrity & Validation
 
-- [ ] Large-scale variance in bomb density. Some regions, which are rare but which you can reasonably gradient ascent towards, have a much higher density of bombs than others, and receive accordingly high point multipliers; while some regions are quite safe, with weaker players organically gravitating towards them (on the virtue of being less capable of solving the higher density regions).
-- [ ] More points for higher density of active players in a region. A button to pay coins to shoot yourself to this location of globally highest player density.
-- [ ] Reveals are only allowed for cells that are two-adjacent to a revealed cell. This encourages the revealed map into a
+- [ ] Client should occasionally hash local chunk reveals and send to server for validation
+- [ ] Add HTTP endpoint for leaderboard queries (/leaderboard)
+- [ ] Way to see user statistics (reveals, flags, exploded bombs, points over time, etc.)
+- [ ] Add user flag appearance to leaderboard display component
+- [ ] Website page; rather than just direct joining the game, with a button to join, if that makes sense? Pages for leaderboard, about, user profile / stats, etc.
 
-## Math
+## Game Balance & Fun
 
-In theory, a chunk should contain:
+- [ ] Rehash scoring system to make more sense (bomb = -100 always is too harsh for new players)
+- [ ] Large-scale variance in bomb density with regional multipliers
+- [ ] More points for higher density of active players in a region
+- [ ] Reveals only allowed for cells two-adjacent to revealed cells (encourages connected exploration)
 
-- 8 bytes per line x 64 lines = 512 bytes per chunk
-- Add to that flags
+## Quality of Life
 
-I think we might be able to handle more than a 3x3 grid of chunks per player. Something as large as 7x7 might make sense. Hmm, this could permit a minimap of variating sizes, possible to toggle between 3x3 and 5x5 and 7x7 chunks.
+- [ ] Usernames max 20 characters
+- [ ] Color wheel alignment fix for user flags
 
-Speaking of the minimap. It's basically an image. It's built and rendered entirely from the client. So we're basically just turning e.g. (3 chunks x 64 cells)^2 = 192x192 into a binary black-and-white image. Oh wait, maybe not binary; we chould have pixels that are the color of flags, or black for bomb, slightly red for revealed 1, slightly green for revealed 2, etc. That could be quite nice. One of the most important things though for this game to work is to get the strong feeling that the map is teeming with opponents, so we really need a live update of this minimap as we move around. Worried this is going to be expensive. Might need to look into video streaming, because this is basically what we're going to be doing.
+## Completed Items
+
+- [x] Flags (client-side implementation)
+- [x] Color wheel for user flags (on first join)
+- [x] Server-side flags for scoring system, remove undoing option
+- [x] Chords (client-side)
+- [x] Self score display at the top
+- [x] Better scoring system
+- [x] Implement WAL and truncation on snapshot success
+- [x] Cleaner looking flags
+- [x] Better mobile support fixes
+- [x] Minimap like in old game version
+- [x] Use `devicePixelRatio` when sizing the `<canvas>` to avoid blurry tiles on mobile
+- [x] Lazy-load React via `defer`/`async` + bundle with esbuild for ~70% initial JS size
+- [x] Origin check + SameSite cookies for CSRF
+
+## Miscellaneous
+
+- Might it make sense for the client to never ever bother to unsubscribe from chunks? The server could have a queue of chunks that the client is subscribed to, max 30 or so, when the client tries to subscribe to a new chunk it drops the oldest chunk from the queue and adds the new one, and when the client disconnects, the server could just clear the queue.
+
+## Technical Notes
+
+**Memory Calculations:**
+
+- 8 bytes per line × 64 lines = 512 bytes per chunk
+- Possible to handle larger than 3×3 chunk grids per player (up to 7×7)
+- Minimap: 3×3 chunks = (3×64)² = 192×192 binary image with color coding for flags/bombs/numbers

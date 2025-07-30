@@ -9,17 +9,24 @@ primary_region = 'ewr'
 [build]
 
 [env]
-  AWS_REGION = 'us-east-1'
-  PORT = '8080'
-  S3_BUCKET_NAME = 'infiniteminesweeper'
+AWS_REGION = 'us-east-1'
+S3_BUCKET_NAME = ''
+DATA_DIR = '/data'
+PORT = '8080'
+DEBUG = 'false'
+
+[[mounts]]
+source = 'storage'
+destination = '/data'
+processes = ['app']
 
 [http_service]
-  internal_port = 8080
-  force_https = true
-  auto_stop_machines = 'stop'
-  auto_start_machines = true
-  min_machines_running = 0
-  processes = ['app']
+internal_port = 8080
+force_https = true
+auto_stop_machines = 'stop'
+auto_start_machines = true
+min_machines_running = 0
+processes = ['app']
 
 [[vm]]
-  size = 'shared-cpu-1x'
+size = 'shared-cpu-1x'

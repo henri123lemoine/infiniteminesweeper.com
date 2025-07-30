@@ -67,7 +67,12 @@ message Leaderboard {
   repeated LeaderboardEntry entries = 2;
 }
 
-message ScoreUpdate { int32 score = 1; }
+message ScoreUpdate {
+  int32 score = 1;
+  int32 worldX = 2;  // world X coordinate where the score change occurred
+  int32 worldY = 3;  // world Y coordinate where the score change occurred
+  int32 delta = 4;   // score change amount (positive or negative)
+}
 
 message ViewUpdate {
   int32 viewX = 1;
