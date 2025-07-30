@@ -162,7 +162,6 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 
 ## Server Infrastructure & Security
 
-- [ ] When server is empty, validate against latest snapshot
 - [ ] Per-IP or per-/24 subnet connection caps
 - [ ] Add reveal rate limiting protection
 - [ ] Implement per-player token bucket for seed requests (200/min)
@@ -175,8 +174,8 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 
 - [x] Show score gained for reveals/flags next to where it happened
   - [ ] Done, but must make it more performant, somehow, flow reveals are quite slow atm. This may be as simple as implementing the batch reveals, and setting that as a single score delta message.
-- [ ] Persist `viewX/viewY` in `sessionStorage` so refreshes don't reset camera
-- [ ] Server stores last known player location and auto-subscribes to adjacent chunks on join
+- [x] Persist `viewX/viewY` in `sessionStorage` so refreshes don't reset camera
+- [x] Server stores last known player location and auto-subscribes to adjacent chunks on join
 - [x] Implement zoom controls
   - [ ] Perhaps instead of + and - zooming, zooming should be done with mouse wheel or similar.
 - [ ] Add connection status and player count indicators
@@ -186,7 +185,7 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 - [ ] Client should occasionally hash local chunk reveals and send to server for validation
 - [ ] Add HTTP endpoint for leaderboard queries (/leaderboard)
 - [ ] Way to see user statistics (reveals, flags, exploded bombs, points over time, etc.)
-- [ ] Add user flag appearance to leaderboard display component
+- [x] Add user flag appearance to leaderboard display component
 - [ ] Website page; rather than just direct joining the game, with a button to join, if that makes sense? Pages for leaderboard, about, user profile / stats, etc.
 
 ## Game Balance & Fun
