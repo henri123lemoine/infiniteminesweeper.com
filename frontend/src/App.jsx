@@ -7,6 +7,7 @@ import React, {
 } from "react";
 import pako from "pako";
 import { ms as PB } from "./generated/messages_pb.js";
+import Minimap from "./Minimap.jsx";
 
 const log = DEV_MODE ? console.log.bind(console) : () => {};
 
@@ -153,14 +154,6 @@ function App() {
     if (delta > 0) return "#fff";
     if (delta < 0) return "#f00";
     return "#666"; // shouldn't happen
-  }, []);
-
-  // Minimap state
-  const minimapCanvasRef = useRef(null);
-  const [minimapChunks, setMinimapChunks] = useState(3); // 3x3 by default
-
-  const toggleMinimapSize = useCallback(() => {
-    setMinimapChunks((c) => (c === 1 ? 3 : c === 3 ? 5 : c === 5 ? 7 : 1));
   }, []);
 
   const toggleLeaderboard = useCallback(() => {
@@ -1059,114 +1052,6 @@ function App() {
     });
   }, [tick, zoom, getNumberColor, worldToChunk, playerColor, draw3DCell]);
 
-  // Minimap rendering
-  const renderMinimap = useCallback(() => {
-    const canvas = minimapCanvasRef.current;
-    if (!canvas) return;
-
-    const cellsPerSide = CHUNK * minimapChunks;
-    canvas.width = cellsPerSide;
-    canvas.height = cellsPerSide;
-    canvas.style.width = `${MINIMAP_SIZE}px`;
-    canvas.style.height = `${MINIMAP_SIZE}px`;
-
-    const ctx = canvas.getContext("2d");
-
-    // Center chunk based on view
-    const gameCanvas = canvasRef.current;
-    const container = containerRef.current;
-    const width = container?.clientWidth || 0;
-    const height = container?.clientHeight || 0;
-    const centerWorldX = Math.floor(
-      (viewRef.current.x + width / 2 / zoom) / CELL_SIZE,
-    );
-    const centerWorldY = Math.floor(
-      (viewRef.current.y + height / 2 / zoom) / CELL_SIZE,
-    );
-
-    // Calculate minimap center in pixels
-    const minimapCenterX = cellsPerSide / 2;
-    const minimapCenterY = cellsPerSide / 2;
-
-    // Calculate world coordinate range to display
-    const worldStartX = centerWorldX - Math.floor(cellsPerSide / 2);
-    const worldStartY = centerWorldY - Math.floor(cellsPerSide / 2);
-
-    // Clear canvas
-    ctx.fillStyle = "#808080";
-    ctx.fillRect(0, 0, cellsPerSide, cellsPerSide);
-
-    // Render each pixel of the minimap
-    for (let py = 0; py < cellsPerSide; py++) {
-      for (let px = 0; px < cellsPerSide; px++) {
-        const worldX = worldStartX + px;
-        const worldY = worldStartY + py;
-
-        const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
-        const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
-        const flagKey = `${worldX},${worldY}`;
-        const seed = seedCache.current.get(`${chunkX},${chunkY}`);
-
-        let color = "#909090"; // Default unrevealed color
-        const flag = flaggedCellsRef.current.get(flagKey);
-        if (flag) {
-          color = flag.color || "#ff0000";
-        } else if (revealedCellsRef.current.has(cellKey)) {
-          const cell = revealedCellsRef.current.get(cellKey);
-          if (cell.isMine)
-            color = "#333333"; // Lighter than full black
-          else {
-            const n = cell.adjacentMines;
-            if (n === 0) color = "#e0e0e0";
-            else if (n === 1)
-              color = "#d0d0ff"; // Light blue tint
-            else if (n === 2)
-              color = "#d0ffd0"; // Light green tint
-            else if (n === 3)
-              color = "#ffd0d0"; // Light red tint
-            else if (n === 4)
-              color = "#d0d0d0"; // Light navy tint
-            else if (n === 5)
-              color = "#f0d0d0"; // Light maroon tint
-            else if (n === 6)
-              color = "#d0f0f0"; // Light cyan tint
-            else color = "#c0c0c0"; // Light gray
-          }
-        } else if (seed && isMine(seed, localX, localY)) {
-          // Unrevealed mine
-          color = "#909090";
-        }
-
-        ctx.fillStyle = color;
-        ctx.fillRect(px, py, 1, 1);
-      }
-    }
-
-    // Draw fixed viewport indicator in center of minimap
-    if (width > 0 && height > 0) {
-      // Calculate viewport size in world cells
-      const viewWidthCells = Math.ceil(width / zoom / CELL_SIZE);
-      const viewHeightCells = Math.ceil(height / zoom / CELL_SIZE);
-
-      // Draw viewport box centered on minimap
-      const boxLeft = minimapCenterX - viewWidthCells / 2;
-      const boxTop = minimapCenterY - viewHeightCells / 2;
-
-      ctx.strokeStyle = "rgba(200, 200, 200, 0.8)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(boxLeft, boxTop, viewWidthCells, viewHeightCells);
-    }
-  }, [
-    viewX,
-    viewY,
-    tick,
-    minimapChunks,
-    worldToChunk,
-    isMine,
-    zoom,
-    CELL_SIZE,
-  ]);
-
   // Subscribe to visible chunks
   const subscribeToVisibleChunks = useCallback(() => {
     if (!ws || !connected) return;
@@ -1785,10 +1670,6 @@ function App() {
     }
   }, [render, tick]);
 
-  useEffect(() => {
-    renderMinimap();
-  }, [renderMinimap, viewX, viewY]);
-
   // Handle window resize
   useEffect(() => {
     const handleResize = () => {
@@ -1955,10 +1836,19 @@ function App() {
         </div>
       </div>
 
-      <canvas
-        ref={minimapCanvasRef}
-        className="minimap"
-        onClick={toggleMinimapSize}
+      <Minimap
+        CHUNK={CHUNK}
+        CELL_SIZE={CELL_SIZE}
+        MINIMAP_SIZE={MINIMAP_SIZE}
+        zoom={zoom}
+        viewX={viewX}
+        viewY={viewY}
+        containerRef={containerRef}
+        seedCache={seedCache}
+        revealedCellsRef={revealedCellsRef}
+        flaggedCellsRef={flaggedCellsRef}
+        isMine={isMine}
+        worldToChunk={worldToChunk}
       />
 
       <div className="leaderboard">
