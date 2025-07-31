@@ -22,6 +22,8 @@ git clone https://github.com/henri123lemoine/infiniteminesweeper.com.git
 cd infiniteminesweeper.com
 make run-fast
 # Then go to http://localhost:8080
+# You may also run the following in another terminal to run the frontend in development mode
+cd frontend && npm run dev
 ```
 
 #### Running Tests and Benchmarks

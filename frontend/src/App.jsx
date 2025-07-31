@@ -5,12 +5,11 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import ReactDOM from "react-dom";
+import pako from "pako";
+import { ms as PB } from "./generated/messages_pb.js";
 
-// DEV_MODE is set by esbuild in build.js
 const log = DEV_MODE ? console.log.bind(console) : () => {};
 
-const PB = protobuf.roots["default"].ms;
 const COMPRESS_THRESHOLD = 100;
 function encodeMsg(msg) {
   const buf = PB.Msg.encode(msg).finish();
@@ -2007,4 +2006,4 @@ function App() {
   );
 }
 
-ReactDOM.render(<App />, document.getElementById("root"));
+export default App;

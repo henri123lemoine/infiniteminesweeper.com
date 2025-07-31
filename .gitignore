@@ -5,3 +5,4 @@ heavy.out
 server.test
 .env
 node_modules/
+dist/

@@ -9,18 +9,18 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
-
-	"regexp"
-	"strings"
 
 	pb "infinite-minesweeper/proto"
 
@@ -29,7 +29,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-//go:embed index.html proto/messages_pb.js bundle.js
+//go:embed dist/*
 var content embed.FS
 
 const (
@@ -1214,7 +1214,8 @@ func main() {
 	server.initPersistence()
 
 	http.HandleFunc("/ws", server.handleWebSocket)
-	http.Handle("/", http.FileServer(http.FS(content)))
+	distFS, _ := fs.Sub(content, "dist")
+	http.Handle("/", http.FileServer(http.FS(distFS)))
 
 	// Leaderboard broadcast loop (1 s cadence, only on version mismatch)
 	go func() {
