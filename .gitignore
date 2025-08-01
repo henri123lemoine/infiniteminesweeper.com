@@ -6,4 +6,3 @@ server.test
 .env
 node_modules/
 **/dist/
-**/gen/
