@@ -1,38 +1,40 @@
 default_settings:
   generate_colors: true
   unlocked: true
+  wavy: false
+  broken: false
+  pointing: 'side'
   # TODO: Obviously un-unlocked later
 
 sprites:
-  flag1:
-    name: 'Rectagular wavy flag'
+  flag0:
+    name: 'Rectangular Flag'
     type: 'flag'
-    pointing: 'side'
     shape: 'rectangle'
-    wavy: true
-    broken: false
-    cost: 5
+    cost: 0
+
+  flag1:
+    name: 'Triangle Flag'
+    type: 'flag'
+    shape: 'triangle'
+    cost: 0
 
   flag2:
-    name: 'Wavy Guidon flag'
+    name: 'Guidon Flag'
     type: 'flag'
-    pointing: 'side'
     shape: 'guidon'
-    wavy: true
-    cost: 30
+    cost: 0
 
   flag3:
     name: 'Very Wavy Guidon Flag'
     type: 'flag'
-    pointing: 'side'
     shape: 'guidon'
     wavy: true
-    cost: 30
+    cost: 40
 
   flag4:
     name: 'Very Wavy Triangle Flag'
     type: 'flag'
-    pointing: 'side'
     shape: 'triangle'
     wavy: true
     cost: 30
@@ -40,44 +42,35 @@ sprites:
   flag5:
     name: 'Broken Rectangular Flag'
     type: 'flag'
-    pointing: 'side'
     shape: 'rectangle'
-    wavy: false
     broken: true
     cost: 10
 
   flag6:
     name: 'Wavy Triangle Flag'
     type: 'flag'
-    pointing: 'side'
     shape: 'triangle'
     wavy: true
     cost: 30
 
   flag7:
-    name: 'Triangle Flag'
+    name: 'Rectagular wavy flag'
     type: 'flag'
-    pointing: 'side'
-    shape: 'triangle'
-    wavy: false
-    broken: false
-    cost: 1
+    shape: 'rectangle'
+    wavy: true
+    cost: 5
 
   flag8:
-    name: 'Guidon Flag'
+    name: 'Wavy Guidon flag'
     type: 'flag'
-    pointing: 'side'
     shape: 'guidon'
-    wavy: false
-    broken: false
-    cost: 1
+    wavy: true
+    cost: 25
 
   flag9:
     name: 'Broken Guidon Flag'
     type: 'flag'
-    pointing: 'side'
     shape: 'guidon'
-    wavy: false
     broken: true
     cost: 100
 
@@ -86,8 +79,6 @@ sprites:
     type: 'flag'
     pointing: 'down'
     shape: 'triangle'
-    wavy: false
-    broken: false
     cost: 20
 
   flag11:
@@ -95,8 +86,6 @@ sprites:
     type: 'flag'
     pointing: 'down'
     shape: 'rectangle'
-    wavy: false
-    broken: false
     cost: 20
 
   flag12:
@@ -104,8 +93,6 @@ sprites:
     type: 'flag'
     pointing: 'down'
     shape: 'guidon'
-    wavy: false
-    broken: false
     cost: 30
 
   flag13:
@@ -113,8 +100,6 @@ sprites:
     type: 'flag'
     pointing: 'down'
     shape: 'triangle'
-    wavy: false
-    broken: false
     cost: 30
 
   flag14:
@@ -122,24 +107,18 @@ sprites:
     type: 'flag'
     pointing: 'down'
     shape: 'guidon'
-    wavy: false
-    broken: false
     cost: 300
 
   flag15:
-    name: 'Back of Dragon Eye Flag Flag'
+    name: 'Black Down Guidon Flag'
     type: 'flag'
     pointing: 'down'
     shape: 'guidon'
-    wavy: false
-    broken: false
     cost: 100
     generate_colors: false
 
   flag16:
-    name: 'Fearsome Dragon Flag'
+    name: 'Dragon Flag'
     type: 'flag'
     shape: 'rectangle'
-    wavy: false
-    broken: false
     cost: 500
