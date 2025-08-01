@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	pb "infinite-minesweeper/backend/proto"
+	pb "infinite-minesweeper/backend/gen/proto"
 	"sort"
 	"strconv"
 	"time"

@@ -2,27 +2,24 @@
 SHELL := bash
 NVM_ENV := . ~/.nvm/nvm.sh && nvm use --silent
 
-.PHONY: help proto update build docker run-fast run deploy clean all
+.PHONY: help update build run-fast run deploy clean
 
 help:
 	@echo "Available targets:"
 	@echo "  update    - Update frontend and proto files"
-	@echo "  proto     - Regenerate Go/JS protobuf stubs"
 	@echo "  build     - Update + build Docker image (full build)"
-	@echo "  docker    - Build Docker image only"
 	@echo "  run-fast  - Update and run directly with Go (fast mode)"
 	@echo "  run       - Full build and run with Docker"
 	@echo "  deploy    - Deploy to Fly.io"
 	@echo "  clean     - Clean up Docker images"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make update    # Just update frontend/proto, don't build Docker"
-	@echo "  make build     # Full build including Docker image"
-	@echo "  make run-fast  # Quick development cycle (no Docker)"
-	@echo "  make run       # Full production-like build and run"
+	@echo "  make run-fast  # Quick development cycle"
+	@echo "  make run       # Full production-like build and run locally"
 	@echo "  make deploy    # Deploy to production"
+	@echo "  make clean     # Clean up Docker images"
 
-update: backend/dist/index.html backend/proto/messages.pb.go frontend/src/generated/messages_pb.js
+update: backend/dist/index.html backend/gen/proto/messages.pb.go frontend/src/gen/messages_pb.js
 	@echo "Updating frontend..."
 	cd frontend && $(NVM_ENV) && npm ci
 	@echo "Formatting front-end..."
@@ -36,11 +33,11 @@ backend/dist/index.html: $(FRONTEND_SRCS) frontend/vite.config.mjs
 	@echo "Building front-end (Vite)…"
 	cd frontend && $(NVM_ENV) && npm run build
 
-backend/proto/messages.pb.go: backend/proto/messages.proto
+backend/gen/proto/messages.pb.go: proto/messages.proto
 	@echo "Generating Go protobuf stubs..."
-	protoc --go_out=. --go_opt=paths=source_relative $<
+	protoc --go_out=backend/gen --go_opt=paths=source_relative $<
 
-frontend/src/generated/messages_pb.js: backend/proto/messages.proto
+frontend/src/gen/messages_pb.js: proto/messages.proto
 	@echo "Generating JS protobuf stubs..."
 	npx pbjs -t static-module -w es6 -o $@ $<
 

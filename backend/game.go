@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/binary"
-	pb "infinite-minesweeper/backend/proto"
+	pb "infinite-minesweeper/backend/gen/proto"
 	"regexp"
 	"time"
 )

@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 import pako from "pako";
-import { ms as PB } from "./generated/messages_pb.js";
+import { ms as PB } from "./gen/messages_pb.js";
 
 const log = DEV_MODE ? console.log.bind(console) : () => {};
 
