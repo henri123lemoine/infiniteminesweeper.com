@@ -5,7 +5,6 @@ fly.toml
 **/experiments
 **/.llm_info
 **/node_modules/
-**/dist/
 
 .gitignore
 .git/

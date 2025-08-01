@@ -15,14 +15,35 @@ Can be played at [infiniteminesweeper.com](https://infiniteminesweeper.com).
 
 ## Quick Start
 
-### Development
-
 ```bash
 git clone https://github.com/henri123lemoine/infiniteminesweeper.com.git
 cd infiniteminesweeper.com
-make run-fast
-# Then go to http://localhost:8080
 ```
+
+Then, set up the environment variables (see `.env.example`):
+
+```bash
+cp .env.example .env.shared
+cp .env.example .env.development
+cp .env.example .env.production
+```
+
+- `.env.shared` – variables common to all modes
+- `.env.development` – dev-only stuff (local path to persistence, verbose logs, etc.)
+- `.env.production` – prod-only stuff (S3 keys, etc.)
+
+Makefile should take care of loading the correct env file based on MODE provided.
+
+### Development
+
+Either of these will work:
+
+```bash
+MODE=development make go-run
+MODE=development make docker-run
+```
+
+Then go to http://localhost:8080
 
 #### Running Tests and Benchmarks
 
@@ -33,23 +54,12 @@ go test -v -race ./...
 go test -run=Bench -bench=. -v
 ```
 
-#### Build Commands
-
-```bash
-make update    # Update frontend and proto files
-make build     # Full build including Docker image
-make run-fast  # Quick development cycle
-```
-
 ### Production
-
-Set required environment variables (see `.env.example`).
-Use `DEV=true` for a faster development setup.
 
 Run with Docker:
 
 ```bash
-make run
+MODE=production make docker-run
 ```
 
 ### Deployment

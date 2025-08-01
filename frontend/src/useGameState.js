@@ -2,7 +2,7 @@ import { useState, useRef, useCallback } from "react";
 import pako from "pako";
 import { ms as PB } from "./gen/messages_pb.js";
 
-const log = DEV_MODE ? console.log.bind(console) : () => {};
+const log = __DEV__ ? console.log.bind(console) : () => {};
 
 export const CHUNK = 64;
 const COMPRESS_THRESHOLD = 50;
@@ -10,7 +10,7 @@ const MINE_COUNT = 20;
 
 function encodeMsg(msg) {
   const buf = PB.Msg.encode(msg).finish();
-  if (DEV_MODE) {
+  if (__DEV__) {
     console.log("OUTGOING:", {
       raw: msg,
       serialized_size: buf.length,
@@ -29,7 +29,7 @@ function decodeMsg(data) {
     bytes = pako.ungzip(bytes);
   }
   const decoded = PB.Msg.decode(bytes);
-  if (DEV_MODE) {
+  if (__DEV__) {
     console.log("INCOMING:", {
       raw: decoded,
       compressed_size: data.byteLength,
@@ -223,15 +223,14 @@ export const useGameState = () => {
   const handleCellClick = useCallback(
     async (worldX, worldY, isRightClick = false) => {
       if (!ws || !connected) return;
-      if (DEV_MODE)
-        console.log("CELL CLICK:", { worldX, worldY, isRightClick });
+      if (__DEV__) console.log("CELL CLICK:", { worldX, worldY, isRightClick });
 
       const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
       const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
       const flagKey = `${worldX},${worldY}`;
 
       if (isRightClick) {
-        if (DEV_MODE)
+        if (__DEV__)
           console.log("ATTEMPTING TO FLAG:", {
             chunkX,
             chunkY,
@@ -415,7 +414,7 @@ export const useGameState = () => {
       websocket.onmessage = (event) => {
         const m = decodeMsg(event.data);
 
-        if (DEV_MODE) {
+        if (__DEV__) {
           console.log("PROCESSING MESSAGE:", {
             type: Object.keys(m)[0],
             payload: m,

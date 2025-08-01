@@ -25,6 +25,8 @@ const (
 )
 
 func main() {
+	mustLoadEnv()
+
 	runtime.GOMAXPROCS(1)
 
 	// honour $PORT for Heroku/Fly style deploys

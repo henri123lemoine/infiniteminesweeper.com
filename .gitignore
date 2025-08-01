@@ -3,6 +3,8 @@ experiments/
 .llm_info
 heavy.out
 server.test
-.env
+.env*
+!.env.example
 node_modules/
 **/dist/
+.bin/

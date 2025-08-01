@@ -13,7 +13,7 @@ AWS_REGION = 'us-east-1'
 S3_BUCKET_NAME = ''
 DATA_DIR = '/data'
 PORT = '8080'
-DEV = 'false'
+MODE = 'production'
 
 [[mounts]]
 source = 'storage'

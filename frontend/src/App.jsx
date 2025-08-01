@@ -9,6 +9,9 @@ import Minimap from "./Minimap.jsx";
 import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 
+if (__DEV__) console.log("dev mode!");
+else console.log("production mode!");
+
 function App() {
   const storedName = localStorage.getItem("username") || "";
   const [nameInput, setNameInput] = useState(storedName);
@@ -826,7 +829,7 @@ function App() {
             );
           })}
 
-          {DEV_MODE && (
+          {import.meta.env.DEV && (
             <div className="coordinates-debug">
               <div
                 className={`connection-status ${connected ? "connected" : "disconnected"}`}

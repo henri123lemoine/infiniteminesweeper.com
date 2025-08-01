@@ -1,65 +1,70 @@
-# Make sure every recipe gets the right Node
-SHELL := bash
-NVM_ENV := . ~/.nvm/nvm.sh && nvm use --silent
+# Build / run Infinite Minesweeper
+#   MODE={development|production} make go-run      → local Go binary
+#   MODE={development|production} make docker-run  → Docker image & container
 
-.PHONY: help update build run-fast run deploy clean
+MODE          ?= development
+ENVFILE        = .env.$(MODE)
+SHELL          := bash
+NVM_ENV        = . ~/.nvm/nvm.sh && nvm use --silent
+
+FRONTEND_SRCS  := $(shell find frontend/src -type f)
+ENVFILE_PATH   := $(wildcard $(ENVFILE))
+
+.PHONY: help proto deps frontend-build go-build go-run docker-build docker-run deploy clean
 
 help:
-	@echo "Available targets:"
-	@echo "  update    - Update frontend and proto files"
-	@echo "  build     - Update + build Docker image (full build)"
-	@echo "  run-fast  - Update and run directly with Go (fast mode)"
-	@echo "  run       - Full build and run with Docker"
-	@echo "  deploy    - Deploy to Fly.io"
-	@echo "  clean     - Clean up Docker images"
-	@echo ""
-	@echo "Examples:"
-	@echo "  make run-fast  # Quick development cycle"
-	@echo "  make run       # Full production-like build and run locally"
-	@echo "  make deploy    # Deploy to production"
-	@echo "  make clean     # Clean up Docker images"
+	@echo "Targets:"
+	@echo "  go-run        - Build & run with Go (uses MODE=$(MODE))"
+	@echo "  docker-run    - Build image & run container (MODE=$(MODE))"
+	@echo "  deploy        - Run tests & fly deploy"
+	@echo "Use MODE=production for a prod bundle; default is development."
 
-update: backend/dist/index.html backend/gen/proto/messages.pb.go frontend/src/gen/messages_pb.js
-	@echo "Updating frontend..."
-	cd frontend && $(NVM_ENV) && npm ci
-	@echo "Formatting front-end..."
-	cd frontend && $(NVM_ENV) && npx prettier "src/**/*.{js,jsx,ts,tsx,css}" --write
-	@echo "Tidying Go modules..."
-	go mod tidy
-	@echo "Update complete!"
-
-FRONTEND_SRCS := $(shell find frontend/src -type f)
-backend/dist/index.html: $(FRONTEND_SRCS) frontend/vite.config.mjs
-	@echo "Building front-end (Vite)…"
-	cd frontend && $(NVM_ENV) && npm run build
+# code generation & deps
+proto: backend/gen/proto/messages.pb.go frontend/src/gen/messages_pb.js
 
 backend/gen/proto/messages.pb.go: proto/messages.proto
-	@echo "Generating Go protobuf stubs..."
+	@echo "Generating Go protobuf stubs…"
 	protoc --go_out=backend/gen --go_opt=paths=source_relative $<
 
 frontend/src/gen/messages_pb.js: proto/messages.proto
-	@echo "Generating JS protobuf stubs..."
+	@echo "Generating JS protobuf stubs…"
 	npx pbjs -t static-module -w es6 -o $@ $<
 
-build: update
-	@echo "Building Docker image..."
-	docker build -t infiniteminesweeper .
-	@echo "Full build complete!"
+deps:
+	cd frontend && $(NVM_ENV) && npm ci
+	go mod tidy
 
-run-fast: update
-	@echo "Running with Go (fast mode)..."
-	go run ./backend
+# front-end bundle
+frontend-build: $(FRONTEND_SRCS) frontend/vite.config.mjs $(ENVFILE_PATH) | proto deps
+	@echo "Building front-end (Vite) for $(MODE)…"
+	cd frontend && $(NVM_ENV) && npm run build:$(MODE)
 
-run: build
-	@echo "Running with Docker..."
-	docker run --env-file .env -v $(PWD)/data:/data -p 8080:8080 infiniteminesweeper
+# back-end binary
+go-build: frontend-build
+	@echo "Building backend…"
+	go build -o backend/dist/backend ./backend
 
+go-run: go-build
+	@echo "Running backend (MODE=$(MODE))…"
+	MODE=$(MODE) backend/dist/backend
+
+# Docker image/run
+docker-build: frontend-build proto
+	docker build --pull -t infiniteminesweeper .
+
+ENVFILE_MERGED := /tmp/.env.merged
+docker-run: docker-build $(ENVFILE) .env.shared
+	@echo "Merging env files…"
+	cat .env.shared $(ENVFILE) > $(ENVFILE_MERGED)
+	docker run --env-file $(ENVFILE_MERGED) \
+	           -v $(PWD)/data:/data -p 8080:8080 infiniteminesweeper
+
+# deploy / clean
 deploy:
 	go test ./...
-	@echo "Deploying to Fly.io..."
 	fly deploy
 
 clean:
-	@echo "Cleaning up Docker images..."
+	rm -rf backend/dist
 	docker rmi infiniteminesweeper 2>/dev/null || true
 	docker image prune -f
