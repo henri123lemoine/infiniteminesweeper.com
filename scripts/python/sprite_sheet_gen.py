@@ -24,14 +24,13 @@ import math
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import numpy as np
 import yaml
 from PIL import Image
 
 ### Palette - name -> hex.  Add / remove colours freely.
-palette: Dict[str, str] = {
+palette: dict[str, str] = {
     "Red": "#E6194B",
     "Green": "#3CB44B",
     "Blue": "#0082C8",
@@ -47,14 +46,14 @@ palette: Dict[str, str] = {
 ### Utility functions
 
 
-def hex_to_rgb(hex_colour: str) -> Tuple[float, float, float]:
+def hex_to_rgb(hex_colour: str) -> tuple[float, float, float]:
     r = int(hex_colour[1:3], 16) / 255.0
     g = int(hex_colour[3:5], 16) / 255.0
     b = int(hex_colour[5:7], 16) / 255.0
     return r, g, b
 
 
-def hex_to_hsv(hex_colour: str) -> Tuple[float, float, float]:
+def hex_to_hsv(hex_colour: str) -> tuple[float, float, float]:
     return colorsys.rgb_to_hsv(*hex_to_rgb(hex_colour))
 
 
@@ -65,7 +64,7 @@ def slug(name: str) -> str:
 
 ### Pre-compute palette hues
 # name -> hue° / sat / val
-palette_hsv: Dict[str, Tuple[float, float, float]] = {
+palette_hsv: dict[str, tuple[float, float, float]] = {
     n: (h * 360, s, v)
     for n, (h, s, v) in ((k, hex_to_hsv(v)) for k, v in palette.items())
 }
@@ -75,7 +74,7 @@ palette_hsv: Dict[str, Tuple[float, float, float]] = {
 
 def colour_variants(
     img: Image.Image, *, base_hue_range=(0, 20)
-) -> List[Tuple[Image.Image, str]]:
+) -> list[tuple[Image.Image, str]]:
     arr = np.array(img)
     if arr.shape[2] == 4:
         rgb, alpha = arr[:, :, :3], arr[:, :, 3]
@@ -95,7 +94,7 @@ def colour_variants(
         | (hsv[:, :, 0] <= 40)
     ) & (hsv[:, :, 1] > 0.2)  # ensure some saturation
 
-    variants: List[Tuple[Image.Image, str]] = []
+    variants: list[tuple[Image.Image, str]] = []
     for colour_name, (target_h, target_s, target_v) in palette_hsv.items():
         new_hsv = hsv.copy()
         new_hsv[red_mask, 0] = target_h
@@ -135,6 +134,24 @@ def colour_variants(
 def load_config(path: str):
     with open(path, "r") as fh:
         return yaml.safe_load(fh)
+
+
+### helpers for a safe hex value on every sprite
+
+
+def rgb_to_hex(rgb: tuple[float, float, float]) -> str:
+    r, g, b = (int(round(c * 255)) for c in rgb)
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+def average_visible_rgb(img: Image.Image) -> tuple[float, float, float]:
+    """Mean RGB (0-1) of all non-transparent pixels."""
+    arr = np.asarray(img.convert("RGBA"))
+    rgb = arr[..., :3].astype(np.float32) / 255.0
+    alpha = arr[..., 3] > 0
+    if not alpha.any():
+        return (1.0, 1.0, 1.0)  # solid fallback (pure white)
+    mean = rgb[alpha].mean(axis=0)
+    return tuple(mean)
 
 
 ### Sprite-sheet packing
@@ -189,7 +206,7 @@ def make_sheet(
         "meta": {
             "size": {"w": sheet_w, "h": sheet_h},
             "scale": "1",
-            "palette": list(palette.keys()),
+            "palette": palette,
             "total_sprites": len(records),
             "original_count": len(images),
         },
@@ -215,6 +232,10 @@ def make_sheet(
             "sourceSize": {"w": rec["img"].width, "h": rec["img"].height},
             "originalName": rec["base"],
             "color": rec["colour"],
+            "hex": (
+                palette.get(rec["colour"]) or  # named entry
+                rgb_to_hex(average_visible_rgb(rec["img"]))  # fallback
+            ),
             **{
                 k: rec["cfg"].get(k)
                 for k in (

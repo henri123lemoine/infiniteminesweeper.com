@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import meta from "./assets/spritesheet.json";
 import sheetUrl from "./assets/spritesheet.png?url";
 
-let sheetImg; // cache across renders
+let sheetImg;
 const frames = meta.frames;
 
 export default function FlagSelector({ value, onChange }) {

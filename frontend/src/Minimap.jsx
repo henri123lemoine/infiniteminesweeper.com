@@ -1,4 +1,8 @@
+
+import meta from "./assets/spritesheet.json";
 import React, { useRef, useState, useEffect, useCallback } from "react";
+
+const FRAME_KEYS = Object.keys(meta.frames);
 
 export default function Minimap({
   CHUNK,
@@ -62,9 +66,11 @@ export default function Minimap({
         const seed = seedCache.current.get(`${chunkX},${chunkY}`);
 
         let color = "#909090";
-        const flag = flaggedCellsRef.current.get(flagKey);
-        if (flag) {
-          color = flag.color || "#ff0000";
+        const flagID = flaggedCellsRef.current.get(flagKey);
+        if (flagID !== undefined) {
+          const idx = flagID % FRAME_KEYS.length;
+          const spriteKey = FRAME_KEYS[idx];
+          color = meta.frames[spriteKey].hex;
         } else if (revealedCellsRef.current.has(cellKey)) {
           const cell = revealedCellsRef.current.get(cellKey);
           if (cell.isMine) color = "#333333";

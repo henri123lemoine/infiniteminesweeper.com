@@ -137,6 +137,7 @@ function App() {
   const toggleLeaderboard = useCallback(() => {
     setLeaderboardVisible((v) => !v);
   }, []);
+
   const formatScore = useCallback((score) => {
     // Format scores into human‑friendly strings, e.g. 1.2k or 1.5M
     if (score >= 1000000) {
@@ -737,33 +738,43 @@ function App() {
         {leaderboardVisible && (
           <>
             {topPlayers.length > 0 ? (
-              <ol>
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
                 {topPlayers.map((p) => (
-                  <li key={p.playerId}>
-                    <canvas
-                      width="12"
-                      height="12"
-                      ref={(c) => {
-                        if (!c) return;
-                        const ctx = c.getContext("2d");
-                        rendererRef.current
-                          .drawSprite(
-                            ctx,
-                            playerFlagsRef.current.get(p.playerId) ?? 0,
-                            0,
-                            0,
-                            12,
-                            12,
-                          )
-                          .catch(console.error);
-                      }}
-                      style={{ marginRight: 4, verticalAlign: "middle" }}
-                    />
-                    {p.name ? p.name : `Player ${p.playerId}`}:{" "}
-                    {formatScore(p.score)}
+                  <li
+                    key={p.playerId}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: 2,
+                    }}
+                  >
+                    <span style={{ display: "flex", alignItems: "center" }}>
+                      <canvas
+                        width="15"
+                        height="15"
+                        ref={(c) => {
+                          if (!c) return;
+                          const ctx = c.getContext("2d");
+                          rendererRef.current
+                            .drawSprite(
+                              ctx,
+                              playerFlagsRef.current.get(p.playerId) ?? 0,
+                              0,
+                              0,
+                              15,
+                              15,
+                            )
+                            .catch(console.error);
+                        }}
+                        style={{ marginRight: 6, verticalAlign: "middle" }}
+                      />
+                      {p.name ? p.name : `Player ${p.playerId}`}
+                    </span>
+                    <span style={{ fontWeight: "bold" }}>{formatScore(p.score)}</span>
                   </li>
                 ))}
-              </ol>
+              </ul>
             ) : (
               <p>No players yet</p>
             )}
