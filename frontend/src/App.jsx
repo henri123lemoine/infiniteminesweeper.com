@@ -71,18 +71,22 @@ function App() {
     },
     [commitViewRef],
   );
+  const MIN_ZOOM = 0.5;
+  const MAX_ZOOM = 3;
   const [zoom, setZoom] = useState(1);
   const handleZoom = useCallback(
-    (delta) => {
+    (delta, origin) => {
       setZoom((z) => {
-        const newZoom = Math.min(Math.max(z + delta, 0.5), 3);
+        const newZoom = Math.min(Math.max(z + delta, MIN_ZOOM), MAX_ZOOM);
         const container = containerRef.current;
         if (container) {
-          const centerX = (viewRef.current.x + container.clientWidth / 2) / z;
-          const centerY = (viewRef.current.y + container.clientHeight / 2) / z;
+          const ox = origin ? origin.x : container.clientWidth / 2;
+          const oy = origin ? origin.y : container.clientHeight / 2;
+          const worldX = (viewRef.current.x + ox) / z;
+          const worldY = (viewRef.current.y + oy) / z;
           scheduleViewUpdate(
-            newZoom * centerX - container.clientWidth / 2,
-            newZoom * centerY - container.clientHeight / 2,
+            newZoom * worldX - ox,
+            newZoom * worldY - oy,
           );
         }
         return newZoom;
@@ -360,6 +364,19 @@ function App() {
     [isDragging, dragStart, zoom, scheduleViewUpdate],
   );
 
+  const handleWheel = useCallback(
+    (e) => {
+      e.preventDefault();
+      const rect = containerRef.current?.getBoundingClientRect();
+      const origin = rect
+        ? { x: e.clientX - rect.left, y: e.clientY - rect.top }
+        : null;
+      const delta = e.deltaY < 0 ? 0.25 : -0.25;
+      handleZoom(delta, origin);
+    },
+    [handleZoom],
+  );
+
   const handleMouseUp = useCallback(
     (e) => {
       if (dragTimeoutRef.current) {
@@ -403,9 +420,24 @@ function App() {
   }, []);
 
   // Touch event handlers for mobile
+  const pinchRef = useRef(null);
   const handleTouchStart = useCallback(
     (e) => {
-      if (e.touches.length === 1) {
+      if (e.touches.length === 2) {
+        const [t1, t2] = e.touches;
+        const dx = t1.clientX - t2.clientX;
+        const dy = t1.clientY - t2.clientY;
+        pinchRef.current = {
+          distance: Math.hypot(dx, dy),
+          zoom,
+          centerX: (t1.clientX + t2.clientX) / 2,
+          centerY: (t1.clientY + t2.clientY) / 2,
+        };
+        if (dragTimeoutRef.current) {
+          clearTimeout(dragTimeoutRef.current);
+          dragTimeoutRef.current = null;
+        }
+      } else if (e.touches.length === 1) {
         const touch = e.touches[0];
         e.preventDefault(); // Prevent text selection
         setDragStart({
@@ -417,30 +449,46 @@ function App() {
 
         // Start long press timer for flagging
         dragTimeoutRef.current = setTimeout(() => {
-          // This is a long press - place a flag
           const { x: worldX, y: worldY } = screenToWorld(
             touch.clientX,
             touch.clientY,
           );
-          handleCellClick(worldX, worldY, true); // true = right click (flag)
-
-          // Clear drag start to prevent any further actions
+          handleCellClick(worldX, worldY, true);
           setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
-        }, 200); // long press duration
+        }, 200);
       }
     },
-    [screenToWorld, handleCellClick],
+    [screenToWorld, handleCellClick, zoom],
   );
 
   const handleTouchMove = useCallback(
     (e) => {
       e.preventDefault(); // Prevent scrolling
-      if (e.touches.length === 1 && dragStart.x) {
+      if (e.touches.length === 2 && pinchRef.current) {
+        const [t1, t2] = e.touches;
+        const dx = t1.clientX - t2.clientX;
+        const dy = t1.clientY - t2.clientY;
+        const distance = Math.hypot(dx, dy);
+        const scale = distance / pinchRef.current.distance;
+        const newZoom = Math.min(
+          Math.max(pinchRef.current.zoom * scale, MIN_ZOOM),
+          MAX_ZOOM,
+        );
+        const rect = containerRef.current?.getBoundingClientRect();
+        const origin = rect
+          ? {
+              x: pinchRef.current.centerX - rect.left,
+              y: pinchRef.current.centerY - rect.top,
+            }
+          : null;
+        handleZoom(newZoom - zoom, origin);
+        pinchRef.current.distance = distance;
+        pinchRef.current.zoom = newZoom;
+      } else if (e.touches.length === 1 && dragStart.x) {
         const touch = e.touches[0];
         const dx = Math.abs(touch.clientX - dragStart.x);
         const dy = Math.abs(touch.clientY - dragStart.y);
 
-        // If touch moved significantly, cancel long press and enable dragging
         if (dx > 10 || dy > 10) {
           if (dragTimeoutRef.current) {
             clearTimeout(dragTimeoutRef.current);
@@ -460,7 +508,7 @@ function App() {
         }
       }
     },
-    [isDragging, dragStart, zoom, scheduleViewUpdate],
+    [isDragging, dragStart, zoom, scheduleViewUpdate, handleZoom],
   );
 
   const handleTouchEnd = useCallback(
@@ -470,6 +518,8 @@ function App() {
         clearTimeout(dragTimeoutRef.current);
         dragTimeoutRef.current = null;
       }
+
+      pinchRef.current = null;
 
       if (!isDragging && dragStart.x && e.changedTouches.length === 1) {
         // This was a short tap, not a drag or long press - reveal cell
@@ -667,6 +717,7 @@ function App() {
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
           onContextMenu={handleContextMenu}
+          onWheel={handleWheel}
           onTouchStart={handleTouchStart}
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
