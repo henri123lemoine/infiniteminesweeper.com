@@ -154,30 +154,6 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 
 # TODO List
 
-## Performance & Optimization
-
-- [ ] Add message compression with zstd
-- [ ] Flow reveals should be sent in batches, not one by one
-- [ ] If a chunk is fully revealed, send condensed message instead of full chunk data
-
-## Server Infrastructure & Security
-
-- [ ] Per-IP or per-/24 subnet connection caps
-- [ ] Add reveal rate limiting protection
-- [ ] Implement per-player token bucket for seed requests (200/min)
-- [ ] Create soft-ban mechanism for suspicious activity
-- [ ] Add rate limit violation logging
-- [ ] Expose `/admin/debug/pprof` behind basic-auth on Fly for free profiling
-- [ ] Stop people from joining with different ID but same username
-
-## Client Features & UX
-
-- [x] Show score gained for reveals/flags next to where it happened
-  - [ ] Done, but must make it more performant, somehow, flow reveals are quite slow atm. This may be as simple as implementing the batch reveals, and setting that as a single score delta message.
-- [x] Persist `viewX/viewY` in `sessionStorage` so refreshes don't reset camera
-- [x] Server stores last known player location and auto-subscribes to adjacent chunks on join
-- [x] Implement zoom controls
-  - [ ] Perhaps instead of + and - zooming, zooming should be done with mouse wheel or similar.
 - [ ] Add connection status and player count indicators
 
 ## Data Integrity & Validation
