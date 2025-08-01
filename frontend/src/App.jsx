@@ -593,7 +593,10 @@ function App() {
               padding: 20,
               borderRadius: 8,
               textAlign: "center",
-              maxWidth: 300,
+              maxWidth: 720,
+              width: "90vw",
+              height: "90vh",
+              overflow: "auto",
             }}
           >
             <h3>Enter username</h3>

@@ -1,4 +1,3 @@
-
 import meta from "./assets/spritesheet.json";
 import React, { useRef, useState, useEffect, useCallback } from "react";
 
@@ -22,8 +21,19 @@ export default function Minimap({
   const miniRef = useRef(null);
   const [minimapChunks, setMinimapChunks] = useState(3); // 1→3→5 cycle
 
+  const [updateCounter, setUpdateCounter] = useState(0);
+
   const toggleSize = useCallback(() => {
     setMinimapChunks((c) => (c === 1 ? 3 : c === 3 ? 5 : 1));
+  }, []);
+
+  // Force minimap updates on a timer as a fallback
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setUpdateCounter(c => c + 1);
+    }, 100);
+
+    return () => clearInterval(interval);
   }, []);
 
   /** full repaint */
@@ -116,6 +126,7 @@ export default function Minimap({
     viewX,
     viewY,
     tick,
+    updateCounter,
     minimapChunks,
     CHUNK,
     CELL_SIZE,
