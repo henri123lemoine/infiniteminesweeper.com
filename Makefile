@@ -19,6 +19,10 @@ help:
 	@echo "  deploy        - Run tests & fly deploy"
 	@echo "Use MODE=production for a prod bundle; default is development."
 
+# sprite generation
+spritesheet:
+	cd scripts/python && uv run sprite_sheet_gen.py ../../frontend/assets/flags/raw/ ../../frontend/assets/sprites.yaml ../../frontend/assets/spritesheet.png ../../frontend/assets/spritesheet.json
+
 # code generation & deps
 proto: backend/gen/proto/messages.pb.go frontend/src/gen/messages_pb.js
 
@@ -40,7 +44,7 @@ frontend-build: $(FRONTEND_SRCS) frontend/vite.config.mjs $(ENVFILE_PATH) | prot
 	cd frontend && $(NVM_ENV) && npm run build:$(MODE)
 
 # back-end binary
-go-build: frontend-build
+go-build: proto frontend-build spritesheet
 	@echo "Building backend…"
 	go build -o backend/dist/backend ./backend
 
@@ -48,8 +52,8 @@ go-run: go-build
 	@echo "Running backend (MODE=$(MODE))…"
 	MODE=$(MODE) backend/dist/backend
 
-# Docker image/run
-docker-build: frontend-build proto
+# docker image/run
+docker-build: proto frontend-build spritesheet
 	docker build --pull -t infiniteminesweeper .
 
 ENVFILE_MERGED := /tmp/.env.merged

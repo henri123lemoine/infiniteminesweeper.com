@@ -1,0 +1,158 @@
+default_settings:
+  generate_colors: true
+  cost: 5
+  description: null
+
+color_palette:
+  - 0      # Red
+  - 30     # Orange
+  - 60     # Yellow
+  - 120    # Green
+  - 180    # Cyan
+  - 210    # Light Blue
+  - 240    # Blue
+  - 270    # Purple
+  - 300    # Magenta
+  - 330    # Pink
+  - light_gray  # Special light gray (not pure white)
+
+sprites:
+  flag1:
+    name: 'Rectagular wavy flag'
+    type: 'flag'
+    pointing: 'side'
+    shape: 'rectangle'
+    wavy: true
+    broken: false
+    cost: 5
+
+  flag2:
+    name: 'Wavy Guidon flag'
+    type: 'flag'
+    pointing: 'side'
+    shape: 'guidon'
+    wavy: true
+    cost: 30
+
+  flag3:
+    name: 'Very Wavy Guidon Flag'
+    type: 'flag'
+    pointing: 'side'
+    shape: 'guidon'
+    wavy: true
+    cost: 30
+
+  flag4:
+    name: 'Very Wavy Triangle Flag'
+    type: 'flag'
+    pointing: 'side'
+    shape: 'triangle'
+    wavy: true
+    cost: 30
+
+  flag5:
+    name: 'Broken Rectangular Flag'
+    type: 'flag'
+    pointing: 'side'
+    shape: 'rectangle'
+    wavy: false
+    broken: true
+    cost: 10
+
+  flag6:
+    name: 'Wavy Triangle Flag'
+    type: 'flag'
+    pointing: 'side'
+    shape: 'triangle'
+    wavy: true
+    cost: 30
+
+  flag7:
+    name: 'Triangle Flag'
+    type: 'flag'
+    pointing: 'side'
+    shape: 'triangle'
+    wavy: false
+    broken: false
+    cost: 10
+
+  flag8:
+    name: 'Guidon Flag'
+    type: 'flag'
+    pointing: 'side'
+    shape: 'guidon'
+    wavy: false
+    broken: false
+    cost: 10
+
+  flag9:
+    name: 'Broken Guidon Flag'
+    type: 'flag'
+    pointing: 'side'
+    shape: 'guidon'
+    wavy: false
+    broken: true
+    cost: 100
+
+  flag10:
+    name: 'Down Triangle Flag'
+    type: 'flag'
+    pointing: 'down'
+    shape: 'triangle'
+    wavy: false
+    broken: false
+    cost: 20
+
+  flag11:
+    name: 'Down Rectangular Flag'
+    type: 'flag'
+    pointing: 'down'
+    shape: 'rectangle'
+    wavy: false
+    broken: false
+    cost: 20
+
+  flag12:
+    name: 'Down Guidon Flag'
+    type: 'flag'
+    pointing: 'down'
+    shape: 'guidon'
+    wavy: false
+    broken: false
+    cost: 30
+
+  flag13:
+    name: 'Down Triangle Flag'
+    type: 'flag'
+    pointing: 'down'
+    shape: 'triangle'
+    wavy: false
+    broken: false
+    cost: 30
+
+  flag14:
+    name: 'Dragon Eye Flag'
+    type: 'flag'
+    pointing: 'down'
+    shape: 'guidon'
+    wavy: false
+    broken: false
+    cost: 300
+
+  flag15:
+    name: 'Back of Dragon Eye Flag Flag'
+    type: 'flag'
+    pointing: 'down'
+    shape: 'guidon'
+    wavy: false
+    broken: false
+    cost: 100
+    generate_colors: false
+
+  flag16:
+    name: 'Fearsome Dragon Flag'
+    type: 'flag'
+    shape: 'rectangle'
+    wavy: false
+    broken: false
+    cost: 500
