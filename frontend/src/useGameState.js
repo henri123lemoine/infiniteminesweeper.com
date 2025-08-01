@@ -87,7 +87,7 @@ export const useGameState = () => {
   const subscribedChunks = useRef(new Set());
   const revealedCellsRef = useRef(new Map());
   const flaggedCellsRef = useRef(new Map());
-  const playerColorsRef = useRef(new Map());
+  const playerFlagsRef  = useRef(new Map());
 
   const countAdjacentMines = useCallback(async (cx, cy, x, y) => {
     let count = 0;
@@ -392,14 +392,14 @@ export const useGameState = () => {
   );
 
   const connectWs = useCallback(
-    (nameInput, playerColor) => {
+    (nameInput, flagID) => {
       const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
       const websocket = new WebSocket(wsUrl);
       websocket.binaryType = "arraybuffer";
 
       websocket.onopen = () => {
         const msg = PB.Msg.create({
-          hello: { playerId: playerId, name: nameInput, color: playerColor },
+          hello: { playerId, name: nameInput, flagID },
         });
         websocket.send(encodeMsg(msg));
         setConnected(true);
@@ -427,7 +427,7 @@ export const useGameState = () => {
             type: "welcome",
             playerId: m.welcome.playerId,
             name: m.welcome.name,
-            color: m.welcome.color,
+            flagID: m.welcome.flagID,
             viewX: m.welcome.viewX,
             viewY: m.welcome.viewY,
           };
@@ -467,6 +467,7 @@ export const useGameState = () => {
         if (data.type === "welcome") {
           setPlayerId(data.playerId);
           setUsername(data.name || "");
+          playerFlagsRef.current.set(data.playerId, data.flagID);
           localStorage.setItem("playerId", data.playerId);
           localStorage.setItem("username", data.name || "");
           return;
@@ -485,10 +486,8 @@ export const useGameState = () => {
               const flagWorldY = flag.chunkId.Y * CHUNK + flag.y;
               const flagKey = `${flagWorldX},${flagWorldY}`;
 
-              flaggedCellsRef.current.set(flagKey, {
-                color: flag.color,
-                playerId: flag.playerId,
-              });
+              flaggedCellsRef.current.set(flagKey, flag.flagID);
+              playerFlagsRef.current.set(flag.playerId, flag.flagID);
             }
             setTick((t) => t + 1);
           }
@@ -585,17 +584,14 @@ export const useGameState = () => {
           typeof data.x === "number" &&
           typeof data.y === "number"
         ) {
-          if (data.color) {
+          if (typeof data.flagID === "number") {
             // Flag broadcast
             const flagWorldX = data.chunkId.X * CHUNK + data.x;
             const flagWorldY = data.chunkId.Y * CHUNK + data.y;
             const flagKey = `${flagWorldX},${flagWorldY}`;
 
-            flaggedCellsRef.current.set(flagKey, {
-              color: data.color,
-              playerId: data.playerId,
-            });
-            playerColorsRef.current.set(data.playerId, data.color);
+            flaggedCellsRef.current.set(flagKey, data.flagID);
+            playerFlagsRef.current.set(data.playerId, data.flagID);
             setTick((t) => t + 1);
           } else {
             // Reveal broadcast
@@ -697,7 +693,7 @@ export const useGameState = () => {
     subscribedChunks,
     revealedCellsRef,
     flaggedCellsRef,
-    playerColorsRef,
+    playerFlagsRef,
 
     // Actions
     handleCellClick,

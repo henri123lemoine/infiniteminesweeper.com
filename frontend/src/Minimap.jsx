@@ -1,4 +1,7 @@
+import meta from "./assets/spritesheet.json";
 import React, { useRef, useState, useEffect, useCallback } from "react";
+
+const FRAME_KEYS = Object.keys(meta.frames);
 
 export default function Minimap({
   CHUNK,
@@ -18,8 +21,19 @@ export default function Minimap({
   const miniRef = useRef(null);
   const [minimapChunks, setMinimapChunks] = useState(3); // 1→3→5 cycle
 
+  const [updateCounter, setUpdateCounter] = useState(0);
+
   const toggleSize = useCallback(() => {
     setMinimapChunks((c) => (c === 1 ? 3 : c === 3 ? 5 : 1));
+  }, []);
+
+  // Force minimap updates on a timer as a fallback
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setUpdateCounter(c => c + 1);
+    }, 100);
+
+    return () => clearInterval(interval);
   }, []);
 
   /** full repaint */
@@ -62,9 +76,11 @@ export default function Minimap({
         const seed = seedCache.current.get(`${chunkX},${chunkY}`);
 
         let color = "#909090";
-        const flag = flaggedCellsRef.current.get(flagKey);
-        if (flag) {
-          color = flag.color || "#ff0000";
+        const flagID = flaggedCellsRef.current.get(flagKey);
+        if (flagID !== undefined) {
+          const idx = flagID % FRAME_KEYS.length;
+          const spriteKey = FRAME_KEYS[idx];
+          color = meta.frames[spriteKey].hex;
         } else if (revealedCellsRef.current.has(cellKey)) {
           const cell = revealedCellsRef.current.get(cellKey);
           if (cell.isMine) color = "#333333";
@@ -110,6 +126,7 @@ export default function Minimap({
     viewX,
     viewY,
     tick,
+    updateCounter,
     minimapChunks,
     CHUNK,
     CELL_SIZE,

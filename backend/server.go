@@ -22,16 +22,16 @@ type Server struct {
 	// World state - just what cells are revealed and by whom
 	chunks     map[ChunkID]*ChunkBits         // Which cells are revealed (bitset)
 	cellOwners map[ChunkID]map[int]int32      // bitIndex -> playerID
-	flags      map[ChunkID]map[int]Flag       // bitIndex -> Flag (with color)
+	flags      map[ChunkID]map[int]Flag       // bitIndex -> Flag (with id)
 	scores     map[int32]int32                // playerID -> score
 	subs       map[ChunkID]map[int32]struct{} // who wants reveals for each chunk
 
 	// leaderboard cache
-	lbVersion    uint64
-	lbProto      []byte
-	lbDirty      bool
-	playerColors map[int32]string               // playerID -> color
-	playerViews  map[int32]struct{ X, Y int32 } // last known view position
+	lbVersion   uint64
+	lbProto     []byte
+	lbDirty     bool
+	playerFlags map[int32]uint32               // playerID -> flagID
+	playerViews map[int32]struct{ X, Y int32 } // last known view position
 
 	// Players
 	playersMu    sync.RWMutex
@@ -67,7 +67,7 @@ func NewServer() *Server {
 		subs:         make(map[ChunkID]map[int32]struct{}),
 		players:      make(map[int32]map[*Player]struct{}),
 		playerNames:  make(map[int32]string),
-		playerColors: make(map[int32]string),
+		playerFlags:  make(map[int32]uint32),
 		playerViews:  make(map[int32]struct{ X, Y int32 }),
 		seedCache:    make(map[ChunkID]uint64),
 		nextPlayerID: 1,

@@ -112,7 +112,7 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 	// Get player info (atomically under the same read‑lock)
 	s.playersMu.RLock()
 	var player *Player
-	playerColor := s.playerColors[playerID]
+	playerFlagID := s.playerFlags[playerID]
 	if conns, ok := s.players[playerID]; ok {
 		for p := range conns {
 			player = p
@@ -148,7 +148,7 @@ func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
 				X:        x,
 				Y:        y,
 				PlayerID: playerID,
-				Color:    playerColor,
+				FlagID:   playerFlagID,
 			}
 			s.flags[chunkID][bitIndex] = flag
 
@@ -451,7 +451,7 @@ func (s *Server) broadcastFlagTo3x3(flag Flag) {
 	pbFlag := &pb.Msg{Payload: &pb.Msg_Flag{Flag: &pb.Flag{
 		ChunkId: &pb.ChunkID{X: flag.ChunkID.X, Y: flag.ChunkID.Y},
 		X:       int32(flag.X), Y: int32(flag.Y),
-		PlayerId: flag.PlayerID, Color: flag.Color,
+		PlayerId: flag.PlayerID, FlagID: flag.FlagID,
 	}}}
 	payload := mustProto(pbFlag)
 	sent := make(map[int32]struct{})

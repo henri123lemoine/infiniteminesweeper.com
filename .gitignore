@@ -1,10 +1,17 @@
-data/
-experiments/
-.llm_info
-heavy.out
-server.test
+# Env
 .env*
 !.env.example
+
+# Data
+data/
+
+# Node
 node_modules/
 **/dist/
-.bin/
+
+# Sprites
+frontend/src/assets/spritesheet*.png
+frontend/src/assets/spritesheet*.json
+
+# Misc
+.llm_info

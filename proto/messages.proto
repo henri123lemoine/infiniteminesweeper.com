@@ -20,19 +20,19 @@ message Flag {
   int32 x = 2;
   int32 y = 3;
   int32 playerId = 4;
-  string color = 5;
+  uint32 flagID = 5;
 }
 
 message Hello {
   int32 playerId = 1;
   string name = 2;
-  string color = 3;
+  uint32 flagID = 3;
 }
 
 message Welcome {
   int32 playerId = 1;
   string name = 2;
-  string color = 3;
+  uint32 flagID = 3;
   int32 viewX = 4;
   int32 viewY = 5;
 }

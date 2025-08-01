@@ -19,6 +19,20 @@ help:
 	@echo "  deploy        - Run tests & fly deploy"
 	@echo "Use MODE=production for a prod bundle; default is development."
 
+# sprite generation ── output into src/assets so Vite bundles the files
+SPRITE_OUT_DIR = frontend/src/assets
+
+spritesheet: $(SPRITE_OUT_DIR)/spritesheet.png $(SPRITE_OUT_DIR)/spritesheet.json
+
+$(SPRITE_OUT_DIR)/spritesheet.png $(SPRITE_OUT_DIR)/spritesheet.json: \
+		frontend/assets/raw/* frontend/assets/sprites.yaml scripts/python/sprite_sheet_gen.py
+	@mkdir -p $(SPRITE_OUT_DIR)
+	cd scripts/python && \
+		uv run sprite_sheet_gen.py ../../frontend/assets/raw/ \
+			../../frontend/assets/sprites.yaml \
+			../../$(SPRITE_OUT_DIR)/spritesheet.png \
+			../../$(SPRITE_OUT_DIR)/spritesheet.json
+
 # code generation & deps
 proto: backend/gen/proto/messages.pb.go frontend/src/gen/messages_pb.js
 
@@ -35,12 +49,12 @@ deps:
 	go mod tidy
 
 # front-end bundle
-frontend-build: $(FRONTEND_SRCS) frontend/vite.config.mjs $(ENVFILE_PATH) | proto deps
+frontend-build: spritesheet $(FRONTEND_SRCS) frontend/vite.config.mjs $(ENVFILE_PATH) | proto deps
 	@echo "Building front-end (Vite) for $(MODE)…"
 	cd frontend && $(NVM_ENV) && npm run build:$(MODE)
 
 # back-end binary
-go-build: frontend-build
+go-build: proto frontend-build
 	@echo "Building backend…"
 	go build -o backend/dist/backend ./backend
 
@@ -48,8 +62,8 @@ go-run: go-build
 	@echo "Running backend (MODE=$(MODE))…"
 	MODE=$(MODE) backend/dist/backend
 
-# Docker image/run
-docker-build: frontend-build proto
+# docker image/run
+docker-build: proto frontend-build spritesheet
 	docker build --pull -t infiniteminesweeper .
 
 ENVFILE_MERGED := /tmp/.env.merged

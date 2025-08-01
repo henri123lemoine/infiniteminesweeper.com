@@ -155,7 +155,7 @@ type Flag struct {
 	X             int32                  `protobuf:"varint,2,opt,name=x,proto3" json:"x,omitempty"`
 	Y             int32                  `protobuf:"varint,3,opt,name=y,proto3" json:"y,omitempty"`
 	PlayerId      int32                  `protobuf:"varint,4,opt,name=playerId,proto3" json:"playerId,omitempty"`
-	Color         string                 `protobuf:"bytes,5,opt,name=color,proto3" json:"color,omitempty"`
+	FlagID        uint32                 `protobuf:"varint,5,opt,name=flagID,proto3" json:"flagID,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -218,18 +218,18 @@ func (x *Flag) GetPlayerId() int32 {
 	return 0
 }
 
-func (x *Flag) GetColor() string {
+func (x *Flag) GetFlagID() uint32 {
 	if x != nil {
-		return x.Color
+		return x.FlagID
 	}
-	return ""
+	return 0
 }
 
 type Hello struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PlayerId      int32                  `protobuf:"varint,1,opt,name=playerId,proto3" json:"playerId,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Color         string                 `protobuf:"bytes,3,opt,name=color,proto3" json:"color,omitempty"`
+	FlagID        uint32                 `protobuf:"varint,3,opt,name=flagID,proto3" json:"flagID,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -278,18 +278,18 @@ func (x *Hello) GetName() string {
 	return ""
 }
 
-func (x *Hello) GetColor() string {
+func (x *Hello) GetFlagID() uint32 {
 	if x != nil {
-		return x.Color
+		return x.FlagID
 	}
-	return ""
+	return 0
 }
 
 type Welcome struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PlayerId      int32                  `protobuf:"varint,1,opt,name=playerId,proto3" json:"playerId,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Color         string                 `protobuf:"bytes,3,opt,name=color,proto3" json:"color,omitempty"`
+	FlagID        uint32                 `protobuf:"varint,3,opt,name=flagID,proto3" json:"flagID,omitempty"`
 	ViewX         int32                  `protobuf:"varint,4,opt,name=viewX,proto3" json:"viewX,omitempty"`
 	ViewY         int32                  `protobuf:"varint,5,opt,name=viewY,proto3" json:"viewY,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -340,11 +340,11 @@ func (x *Welcome) GetName() string {
 	return ""
 }
 
-func (x *Welcome) GetColor() string {
+func (x *Welcome) GetFlagID() uint32 {
 	if x != nil {
-		return x.Color
+		return x.FlagID
 	}
-	return ""
+	return 0
 }
 
 func (x *Welcome) GetViewX() int32 {
@@ -1108,21 +1108,21 @@ const file_proto_messages_proto_rawDesc = "" +
 	"\x01x\x18\x02 \x01(\x05R\x01x\x12\f\n" +
 	"\x01y\x18\x03 \x01(\x05R\x01y\x12\x1a\n" +
 	"\bplayerId\x18\x04 \x01(\x05R\bplayerId\x12\x12\n" +
-	"\x04flow\x18\x05 \x01(\bR\x04flow\"{\n" +
+	"\x04flow\x18\x05 \x01(\bR\x04flow\"}\n" +
 	"\x04Flag\x12%\n" +
 	"\achunkId\x18\x01 \x01(\v2\v.ms.ChunkIDR\achunkId\x12\f\n" +
 	"\x01x\x18\x02 \x01(\x05R\x01x\x12\f\n" +
 	"\x01y\x18\x03 \x01(\x05R\x01y\x12\x1a\n" +
-	"\bplayerId\x18\x04 \x01(\x05R\bplayerId\x12\x14\n" +
-	"\x05color\x18\x05 \x01(\tR\x05color\"M\n" +
+	"\bplayerId\x18\x04 \x01(\x05R\bplayerId\x12\x16\n" +
+	"\x06flagID\x18\x05 \x01(\rR\x06flagID\"O\n" +
 	"\x05Hello\x12\x1a\n" +
 	"\bplayerId\x18\x01 \x01(\x05R\bplayerId\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
-	"\x05color\x18\x03 \x01(\tR\x05color\"{\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
+	"\x06flagID\x18\x03 \x01(\rR\x06flagID\"}\n" +
 	"\aWelcome\x12\x1a\n" +
 	"\bplayerId\x18\x01 \x01(\x05R\bplayerId\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
-	"\x05color\x18\x03 \x01(\tR\x05color\x12\x14\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
+	"\x06flagID\x18\x03 \x01(\rR\x06flagID\x12\x14\n" +
 	"\x05viewX\x18\x04 \x01(\x05R\x05viewX\x12\x14\n" +
 	"\x05viewY\x18\x05 \x01(\x05R\x05viewY\";\n" +
 	"\tSubscribe\x12\x16\n" +
