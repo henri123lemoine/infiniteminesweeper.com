@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -14,6 +15,35 @@ import (
 
 	pb "infinite-minesweeper/backend/gen/proto"
 )
+
+func debugLogMessage(msg *pb.Msg, playerID int32) {
+	if os.Getenv("MODE") != "development" {
+		return
+	}
+
+	switch payload := msg.Payload.(type) {
+	case *pb.Msg_Hello:
+		log.Printf("[DEBUG] Player %d -> Hello: Name=%s, PlayerId=%d",
+			playerID, payload.Hello.Name, payload.Hello.PlayerId)
+	case *pb.Msg_Reveal:
+		log.Printf("[DEBUG] Player %d -> Reveal: ChunkId=(%d,%d), X=%d, Y=%d",
+			playerID, payload.Reveal.ChunkId.X, payload.Reveal.ChunkId.Y, payload.Reveal.X, payload.Reveal.Y)
+	case *pb.Msg_Flag:
+		log.Printf("[DEBUG] Player %d -> Flag: ChunkId=(%d,%d), X=%d, Y=%d",
+			playerID, payload.Flag.ChunkId.X, payload.Flag.ChunkId.Y, payload.Flag.X, payload.Flag.Y)
+	case *pb.Msg_Subscribe:
+		log.Printf("[DEBUG] Player %d -> Subscribe: ChunkX=%d, ChunkY=%d",
+			playerID, payload.Subscribe.ChunkX, payload.Subscribe.ChunkY)
+	case *pb.Msg_Unsubscribe:
+		log.Printf("[DEBUG] Player %d -> Unsubscribe: ChunkX=%d, ChunkY=%d",
+			playerID, payload.Unsubscribe.ChunkX, payload.Unsubscribe.ChunkY)
+	case *pb.Msg_ViewUpdate:
+		log.Printf("[DEBUG] Player %d -> ViewUpdate: ViewX=%d, ViewY=%d",
+			playerID, payload.ViewUpdate.ViewX, payload.ViewUpdate.ViewY)
+	default:
+		log.Printf("[DEBUG] Player %d -> Unknown message type: %T", playerID, payload)
+	}
+}
 
 // mustProto marshals a protobuf message and gzips it only if the
 // serialized size exceeds CompressThreshold.
@@ -107,6 +137,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
+	debugLogMessage(&msg, 0)
+
 	hello := msg.GetHello()
 	if hello == nil || !isValidUsername(hello.Name) {
 		conn.Close()
@@ -221,6 +253,8 @@ func (s *Server) readPump(player *Player) {
 		if err := proto.Unmarshal(pbData, &msg); err != nil {
 			continue
 		}
+
+		debugLogMessage(&msg, player.ID)
 
 		switch t := msg.Payload.(type) {
 		case *pb.Msg_Reveal:
