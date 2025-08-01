@@ -19,9 +19,19 @@ help:
 	@echo "  deploy        - Run tests & fly deploy"
 	@echo "Use MODE=production for a prod bundle; default is development."
 
-# sprite generation
-spritesheet:
-	cd scripts/python && uv run sprite_sheet_gen.py ../../frontend/assets/raw/ ../../frontend/assets/sprites.yaml ../../frontend/assets/spritesheet.png ../../frontend/assets/spritesheet.json
+# sprite generation ── output into src/assets so Vite bundles the files
+SPRITE_OUT_DIR = frontend/src/assets
+
+spritesheet: $(SPRITE_OUT_DIR)/spritesheet.png $(SPRITE_OUT_DIR)/spritesheet.json
+
+$(SPRITE_OUT_DIR)/spritesheet.png $(SPRITE_OUT_DIR)/spritesheet.json: \
+		frontend/assets/raw/* frontend/assets/sprites.yaml scripts/python/sprite_sheet_gen.py
+	@mkdir -p $(SPRITE_OUT_DIR)
+	cd scripts/python && \
+		uv run sprite_sheet_gen.py ../../frontend/assets/raw/ \
+			../../frontend/assets/sprites.yaml \
+			../../$(SPRITE_OUT_DIR)/spritesheet.png \
+			../../$(SPRITE_OUT_DIR)/spritesheet.json
 
 # code generation & deps
 proto: backend/gen/proto/messages.pb.go frontend/src/gen/messages_pb.js
@@ -39,12 +49,12 @@ deps:
 	go mod tidy
 
 # front-end bundle
-frontend-build: $(FRONTEND_SRCS) frontend/vite.config.mjs $(ENVFILE_PATH) | proto deps
+frontend-build: spritesheet $(FRONTEND_SRCS) frontend/vite.config.mjs $(ENVFILE_PATH) | proto deps
 	@echo "Building front-end (Vite) for $(MODE)…"
 	cd frontend && $(NVM_ENV) && npm run build:$(MODE)
 
 # back-end binary
-go-build: proto frontend-build spritesheet
+go-build: proto frontend-build
 	@echo "Building backend…"
 	go build -o backend/dist/backend ./backend
 

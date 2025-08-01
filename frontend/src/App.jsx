@@ -8,6 +8,7 @@ import React, {
 import Minimap from "./Minimap.jsx";
 import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
+import FlagSelector from "./FlagSelector.jsx";
 
 if (__DEV__) console.log("dev mode!");
 else console.log("production mode!");
@@ -30,7 +31,7 @@ function App() {
     subscribedChunks,
     revealedCellsRef,
     flaggedCellsRef,
-    playerColorsRef,
+    playerFlagsRef,
     handleCellClick,
     ensureChunkSubscription,
     ensureChunkUnsubscription,
@@ -105,9 +106,9 @@ function App() {
   // Leaderboard visibility and number formatting
   const [leaderboardVisible, setLeaderboardVisible] = useState(true);
 
-  // Player color state
-  const [playerColor, setPlayerColor] = useState(
-    localStorage.getItem("playerColor") || "#FF0000",
+  // Player flag state
+  const [flagID, setFlagID] = useState(
+    Number(localStorage.getItem("flagID") ?? 0),
   );
 
   // Score popup color function
@@ -147,143 +148,6 @@ function App() {
       return `${val}k`;
     }
     return String(score);
-  }, []);
-
-  // Color wheel component
-  const ColorWheel = useCallback(({ value, onChange }) => {
-    const [isDragging, setIsDragging] = useState(false);
-    const wheelRef = useRef(null);
-
-    const hexToHsv = (hex) => {
-      const r = parseInt(hex.slice(1, 3), 16) / 255;
-      const g = parseInt(hex.slice(3, 5), 16) / 255;
-      const b = parseInt(hex.slice(5, 7), 16) / 255;
-
-      const max = Math.max(r, g, b);
-      const min = Math.min(r, g, b);
-      const diff = max - min;
-
-      let h = 0;
-      if (diff !== 0) {
-        if (max === r) h = (60 * ((g - b) / diff) + 360) % 360;
-        else if (max === g) h = (60 * ((b - r) / diff) + 120) % 360;
-        else h = (60 * ((r - g) / diff) + 240) % 360;
-      }
-
-      const s = max === 0 ? 0 : diff / max;
-      const v = max;
-
-      return [h, s, v];
-    };
-
-    const hsvToHex = (h, s, v) => {
-      const c = v * s;
-      const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-      const m = v - c;
-
-      let r, g, b;
-      if (h < 60) [r, g, b] = [c, x, 0];
-      else if (h < 120) [r, g, b] = [x, c, 0];
-      else if (h < 180) [r, g, b] = [0, c, x];
-      else if (h < 240) [r, g, b] = [0, x, c];
-      else if (h < 300) [r, g, b] = [x, 0, c];
-      else [r, g, b] = [c, 0, x];
-
-      r = Math.round((r + m) * 255);
-      g = Math.round((g + m) * 255);
-      b = Math.round((b + m) * 255);
-
-      return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
-    };
-
-    const [h, s, v] = hexToHsv(value);
-
-    const handleMouseDown = (e) => {
-      setIsDragging(true);
-      handleMouseMove(e);
-    };
-
-    const handleMouseMove = (e) => {
-      if (!isDragging && e.type === "mousemove") return;
-
-      const rect = wheelRef.current?.getBoundingClientRect();
-      if (!rect) return;
-
-      const centerX = rect.width / 2;
-      const centerY = rect.height / 2;
-      const x = e.clientX - rect.left - centerX;
-      const y = e.clientY - rect.top - centerY;
-
-      const angle = ((Math.atan2(y, x) * 180) / Math.PI + 90 + 360) % 360;
-      const distance = Math.min(Math.sqrt(x * x + y * y), centerX - 10);
-      const saturation = distance / (centerX - 10);
-
-      const newColor = hsvToHex(angle, saturation, 0.9);
-      onChange(newColor);
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
-
-    useEffect(() => {
-      if (isDragging) {
-        document.addEventListener("mousemove", handleMouseMove);
-        document.addEventListener("mouseup", handleMouseUp);
-        return () => {
-          document.removeEventListener("mousemove", handleMouseMove);
-          document.removeEventListener("mouseup", handleMouseUp);
-        };
-      }
-    }, [isDragging]);
-
-    const wheelStyle = {
-      width: 150,
-      height: 150,
-      borderRadius: "50%",
-      background: `conic-gradient(
-        hsl(0, 100%, 50%), hsl(60, 100%, 50%), hsl(120, 100%, 50%),
-        hsl(180, 100%, 50%), hsl(240, 100%, 50%), hsl(300, 100%, 50%), hsl(0, 100%, 50%)
-      ), radial-gradient(circle, transparent 0%, white 100%)`,
-      position: "relative",
-      cursor: "crosshair",
-      margin: "10px auto",
-    };
-
-    const knobX = Math.cos(((h - 90) * Math.PI) / 180) * s * 65 + 75;
-    const knobY = Math.sin(((h - 90) * Math.PI) / 180) * s * 65 + 75;
-
-    return (
-      <div style={{ textAlign: "center" }}>
-        <div ref={wheelRef} style={wheelStyle} onMouseDown={handleMouseDown}>
-          <div
-            style={{
-              position: "absolute",
-              left: knobX - 8,
-              top: knobY - 8,
-              width: 16,
-              height: 16,
-              borderRadius: "50%",
-              backgroundColor: value,
-              border: "2px solid white",
-              boxShadow: "0 0 3px rgba(0,0,0,0.5)",
-              pointerEvents: "none",
-            }}
-          />
-        </div>
-        <div
-          style={{
-            width: 30,
-            height: 30,
-            backgroundColor: value,
-            border: "2px solid #ccc",
-            borderRadius: 4,
-            margin: "10px auto",
-            boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-          }}
-        />
-      </div>
-    );
   }, []);
 
   // Constants
@@ -390,9 +254,9 @@ function App() {
       flaggedCellsRef,
       worldToChunk,
       getNumberColor,
-      playerColor,
+      flagID,
     });
-  }, [tick, zoom, getNumberColor, worldToChunk, playerColor]);
+  }, [tick, zoom, getNumberColor, worldToChunk, flagID]);
 
   // Subscribe to visible chunks
   const subscribeToVisibleChunks = useCallback(() => {
@@ -642,10 +506,9 @@ function App() {
 
   useEffect(() => {
     if (!username) return;
-    // Hook returns a cleanup fn
-    const cleanup = connectWs(username, playerColor);
+    const cleanup = connectWs(username, flagID);
     return cleanup;
-  }, [username, playerColor]);
+  }, [username, flagID]);
 
   // Subscribe to visible chunks when view changes
   useEffect(() => {
@@ -747,21 +610,19 @@ function App() {
             />
             <div style={{ margin: "15px 0" }}>
               <div style={{ marginBottom: "10px", fontWeight: "bold" }}>
-                Choose your color:
+                Choose your flag:
               </div>
-              <ColorWheel
-                value={playerColor}
-                onChange={(color) => {
-                  setPlayerColor(color);
-                  localStorage.setItem("playerColor", color);
+              <FlagSelector
+                value={flagID}
+                onChange={(id) => {
+                  setFlagID(id);
+                  localStorage.setItem("flagID", id);
                 }}
               />
             </div>
             <button
               onClick={() => {
-                if (nameInput.trim()) {
-                  setUsername(nameInput.trim());
-                }
+                if (nameInput.trim()) setUsername(nameInput.trim());
               }}
               style={{
                 padding: "10px 20px",
@@ -879,12 +740,24 @@ function App() {
               <ol>
                 {topPlayers.map((p) => (
                   <li key={p.playerId}>
-                    <span
-                      className="lb-flag"
-                      style={{
-                        backgroundColor:
-                          playerColorsRef.current.get(p.playerId) || "#ccc",
+                    <canvas
+                      width="12"
+                      height="12"
+                      ref={(c) => {
+                        if (!c) return;
+                        const ctx = c.getContext("2d");
+                        rendererRef.current
+                          .drawSprite(
+                            ctx,
+                            playerFlagsRef.current.get(p.playerId) ?? 0,
+                            0,
+                            0,
+                            12,
+                            12,
+                          )
+                          .catch(console.error);
                       }}
+                      style={{ marginRight: 4, verticalAlign: "middle" }}
                     />
                     {p.name ? p.name : `Player ${p.playerId}`}:{" "}
                     {formatScore(p.score)}

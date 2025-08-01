@@ -24,7 +24,7 @@ type Flag struct {
 	X        int     `json:"x"`
 	Y        int     `json:"y"`
 	PlayerID int32   `json:"playerId"`
-	Color    string  `json:"color"`
+	FlagID   uint32  `json:"flagId"`
 }
 
 type Player struct {
@@ -36,7 +36,7 @@ type Player struct {
 	Name        string
 
 	// Rate limiting
-	Color             string
+	FlagID            uint32
 	RevealWindowStart time.Time
 	RevealCount       int
 

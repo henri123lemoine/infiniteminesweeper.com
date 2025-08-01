@@ -1,3 +1,6 @@
+import meta from "./assets/spritesheet.json";
+import sheetUrl from "./assets/spritesheet.png?url";
+
 export class CanvasRenderer {
   constructor() {
     this.canvasSizeRef = { w: 0, h: 0, dpr: 1 };
@@ -165,33 +168,35 @@ export class CanvasRenderer {
     ctx.shadowColor = "transparent";
   }
 
-  drawFlag(ctx, x, y, size, flagColor) {
-    const poleX = x + size * 0.175;
-    const poleTop = y + size * 0.15;
-    const poleHeight = size * 0.75;
-    const poleWidth = size * 0.08;
-    const flagWidth = size * 0.6;
-    const flagHeight = size * 0.4;
-    const poleOutline = Math.max(1, size * 0.04);
-    const flagOutline = Math.max(1, size * 0.04);
+  // Helper to draw a specific sprite from the sheet
+  static #sheetImg;
+  static #frames   = meta.frames;
+  static #frameKeys = Object.keys(meta.frames);
+  static #ready;
 
-    // Draw pole with black outline
-    ctx.fillStyle = "#333";
-    ctx.fillRect(poleX, poleTop, poleWidth, poleHeight);
-    ctx.save();
-    ctx.strokeStyle = "#000";
-    ctx.lineWidth = poleOutline;
-    ctx.strokeRect(poleX, poleTop, poleWidth, poleHeight);
-    ctx.restore();
+  static async initSprites() {
+    if (CanvasRenderer.#ready) return CanvasRenderer.#ready;
+    CanvasRenderer.#ready = new Promise((resolve, reject) => {
+      CanvasRenderer.#sheetImg = new Image();
+      CanvasRenderer.#sheetImg.onload = resolve;
+      CanvasRenderer.#sheetImg.onerror = reject;
+      CanvasRenderer.#sheetImg.src = sheetUrl;
+    });
+    return CanvasRenderer.#ready;
+  }
 
-    // Draw flag with player color and black outline
-    ctx.fillStyle = flagColor;
-    ctx.fillRect(poleX + poleWidth, poleTop, flagWidth, flagHeight);
-    ctx.save();
-    ctx.strokeStyle = "#000";
-    ctx.lineWidth = flagOutline;
-    ctx.strokeRect(poleX + poleWidth, poleTop, flagWidth, flagHeight);
-    ctx.restore();
+  /**
+   * @param {CanvasRenderingContext2D} ctx
+   * @param {number|string} flagID   uint32 from server OR direct key string
+   */
+  async drawSprite(ctx, flagID, dx, dy, dw, dh) {
+    await CanvasRenderer.initSprites();
+    const key =
+      typeof flagID === "string"
+        ? flagID
+        : CanvasRenderer.#frameKeys[flagID % CanvasRenderer.#frameKeys.length];
+    const { x, y, w, h } = CanvasRenderer.#frames[key].frame;
+    ctx.drawImage(CanvasRenderer.#sheetImg, x, y, w, h, dx, dy, dw, dh);
   }
 
   // Cell Rendering Logic
@@ -236,7 +241,7 @@ export class CanvasRenderer {
     flaggedCellsRef,
     worldToChunk,
     getNumberColor,
-    playerColor,
+    flagID,
   }) {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -305,7 +310,7 @@ export class CanvasRenderer {
     }
 
     // Render flags on top of unrevealed cells
-    flaggedCellsRef.current.forEach((flagData, flagKey) => {
+    flaggedCellsRef.current.forEach((flagID, flagKey) => {
       const [worldX, worldY] = flagKey.split(",").map(Number);
       const screenX = worldX * CELL_SIZE - viewRef.current.x;
       const screenY = worldY * CELL_SIZE - viewRef.current.y;
@@ -324,8 +329,7 @@ export class CanvasRenderer {
       const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
       if (revealedCellsRef.current.has(cellKey)) return;
 
-      const flagColor = flagData?.color || playerColor;
-      this.drawFlag(ctx, screenX, screenY, CELL_SIZE, flagColor);
+      this.drawSprite(ctx, flagID, screenX, screenY, CELL_SIZE, CELL_SIZE);
     });
   }
 }

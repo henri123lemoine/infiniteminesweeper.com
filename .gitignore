@@ -10,8 +10,8 @@ node_modules/
 **/dist/
 
 # Sprites
-frontend/assets/spritesheet*.png
-frontend/assets/spritesheet*.json
+frontend/src/assets/spritesheet*.png
+frontend/src/assets/spritesheet*.json
 
 # Misc
 .llm_info

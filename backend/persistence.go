@@ -53,7 +53,7 @@ type snapshotData struct {
 	Flags        map[ChunkID]map[int]Flag
 	Scores       map[int32]int32
 	PlayerNames  map[int32]string
-	PlayerColors map[int32]string
+	PlayerFlags  map[int32]uint32
 	NextPlayerID int32
 }
 
@@ -376,7 +376,7 @@ func (s *Server) saveSnapshotToS3() error {
 		Flags:        s.flags,
 		Scores:       s.scores,
 		PlayerNames:  s.playerNames,
-		PlayerColors: s.playerColors,
+		PlayerFlags:  s.playerFlags,
 		NextPlayerID: s.nextPlayerID,
 	}
 	s.stateMu.RUnlock()
@@ -423,7 +423,7 @@ func (s *Server) saveSnapshotToDisk() error {
 		Flags:        s.flags,
 		Scores:       s.scores,
 		PlayerNames:  s.playerNames,
-		PlayerColors: s.playerColors,
+		PlayerFlags:  s.playerFlags,
 		NextPlayerID: s.nextPlayerID,
 	}
 	s.stateMu.RUnlock()
@@ -493,10 +493,10 @@ func (s *Server) loadSnapshotFromS3() error {
 	} else {
 		s.playerNames = make(map[int32]string)
 	}
-	if data.PlayerColors != nil {
-		s.playerColors = data.PlayerColors
+	if data.PlayerFlags != nil {
+		s.playerFlags = data.PlayerFlags
 	} else {
-		s.playerColors = make(map[int32]string)
+		s.playerFlags = make(map[int32]uint32)
 	}
 	if data.NextPlayerID != 0 {
 		s.nextPlayerID = data.NextPlayerID
@@ -540,10 +540,10 @@ func (s *Server) loadSnapshotFromDisk() error {
 	} else {
 		s.playerNames = make(map[int32]string)
 	}
-	if data.PlayerColors != nil {
-		s.playerColors = data.PlayerColors
+	if data.PlayerFlags != nil {
+		s.playerFlags = data.PlayerFlags
 	} else {
-		s.playerColors = make(map[int32]string)
+		s.playerFlags = make(map[int32]uint32)
 	}
 	if data.NextPlayerID != 0 {
 		s.nextPlayerID = data.NextPlayerID

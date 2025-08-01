@@ -123,7 +123,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Grab any previously‑saved score before we touch the player map
 	initScore := s.scores[playerID]
 	s.playerNames[playerID] = hello.Name
-	s.playerColors[playerID] = hello.Color
+	s.playerFlags[playerID] = hello.FlagID
 	s.lbDirty = true
 	s.stateMu.Unlock()
 
@@ -141,7 +141,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		RevealWindowStart: time.Now(),
 		RevealCount:       0,
 		Name:              hello.Name,
-		Color:             hello.Color,
+		FlagID:            hello.FlagID,
 		Score:             initScore, // preserve previous score
 		done:              make(chan struct{}),
 	}
@@ -169,7 +169,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	go s.writePump(player)
 	go s.readPump(player)
 
-	welcomeMsg := &pb.Msg{Payload: &pb.Msg_Welcome{Welcome: &pb.Welcome{PlayerId: playerID, Name: hello.Name, Color: hello.Color, ViewX: view.X, ViewY: view.Y}}}
+	welcomeMsg := &pb.Msg{Payload: &pb.Msg_Welcome{Welcome: &pb.Welcome{PlayerId: playerID, Name: hello.Name, FlagID: hello.FlagID, ViewX: view.X, ViewY: view.Y}}}
 	s.sendToPlayer(playerID, mustProto(welcomeMsg))
 
 	// auto-subscribe to surrounding chunks
@@ -358,7 +358,7 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	for _, fl := range flags {
 		cs.GetChunkSync().Flags = append(cs.GetChunkSync().Flags, &pb.Flag{
 			ChunkId: &pb.ChunkID{X: fl.ChunkID.X, Y: fl.ChunkID.Y},
-			X:       int32(fl.X), Y: int32(fl.Y), PlayerId: fl.PlayerID, Color: fl.Color,
+			X:       int32(fl.X), Y: int32(fl.Y), PlayerId: fl.PlayerID, FlagID: fl.FlagID,
 		})
 	}
 	s.sendToPlayer(playerID, mustProto(cs))
