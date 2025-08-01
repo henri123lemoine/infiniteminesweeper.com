@@ -39,12 +39,8 @@ export default function Minimap({
     // centre on viewX / viewY
     const width = container.clientWidth || 0;
     const height = container.clientHeight || 0;
-    const centerWorldX = Math.floor(
-      (viewX + width / 2 / zoom) / CELL_SIZE,
-    );
-    const centerWorldY = Math.floor(
-      (viewY + height / 2 / zoom) / CELL_SIZE,
-    );
+    const centerWorldX = Math.floor((viewX + width / 2 / zoom) / CELL_SIZE);
+    const centerWorldY = Math.floor((viewY + height / 2 / zoom) / CELL_SIZE);
 
     const minimapCenterX = cellsPerSide / 2;
     const minimapCenterY = cellsPerSide / 2;
@@ -75,14 +71,21 @@ export default function Minimap({
           else {
             const n = cell.adjacentMines;
             color =
-              n === 0 ? "#e0e0e0"
-              : n === 1 ? "#d0d0ff"
-              : n === 2 ? "#d0ffd0"
-              : n === 3 ? "#ffd0d0"
-              : n === 4 ? "#d0d0d0"
-              : n === 5 ? "#f0d0d0"
-              : n === 6 ? "#d0f0f0"
-              : "#c0c0c0";
+              n === 0
+                ? "#e0e0e0"
+                : n === 1
+                  ? "#d0d0ff"
+                  : n === 2
+                    ? "#d0ffd0"
+                    : n === 3
+                      ? "#ffd0d0"
+                      : n === 4
+                        ? "#d0d0d0"
+                        : n === 5
+                          ? "#f0d0d0"
+                          : n === 6
+                            ? "#d0f0f0"
+                            : "#c0c0c0";
           }
         } else if (seed && isMine(seed, localX, localY)) {
           color = "#909090";
@@ -122,7 +125,10 @@ export default function Minimap({
 
   // repaint on window resize
   useEffect(() => {
-    const fn = () => miniRef.current && miniRef.current.getContext && window.requestAnimationFrame(() => {});
+    const fn = () =>
+      miniRef.current &&
+      miniRef.current.getContext &&
+      window.requestAnimationFrame(() => {});
     window.addEventListener("resize", fn);
     return () => window.removeEventListener("resize", fn);
   }, []);

@@ -22,16 +22,19 @@ help:
 	@echo "  make run       # Full production-like build and run"
 	@echo "  make deploy    # Deploy to production"
 
-update: proto/messages.pb.go frontend/src/generated/messages_pb.js
+update: dist/index.html proto/messages.pb.go frontend/src/generated/messages_pb.js
 	@echo "Updating frontend..."
 	cd frontend && $(NVM_ENV) && npm ci
 	@echo "Formatting front-end..."
-	cd frontend && $(NVM_ENV) && npx prettier src/App.jsx --write
-	@echo "Building front-end (Vite)..."
-	cd frontend && $(NVM_ENV) && npm run build
+	cd frontend && $(NVM_ENV) && npx prettier "src/**/*.{js,jsx,ts,tsx,css}" --write
 	@echo "Tidying Go modules..."
 	go mod tidy
 	@echo "Update complete!"
+
+FRONTEND_SRCS := $(shell find frontend/src -type f)
+dist/index.html: $(FRONTEND_SRCS) frontend/vite.config.mjs
+	@echo "Building front-end (Vite)…"
+	cd frontend && $(NVM_ENV) && npm run build
 
 proto/messages.pb.go: proto/messages.proto
 	@echo "Generating Go protobuf stubs..."
@@ -55,6 +58,7 @@ run: build
 	docker run --env-file .env -v $(PWD)/data:/data -p 8080:8080 infiniteminesweeper
 
 deploy:
+	go test ./...
 	@echo "Deploying to Fly.io..."
 	fly deploy
 
