@@ -553,6 +553,50 @@ function App() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (!containerRef.current) return;
+      // Don't hijack input elements
+      if (e.target instanceof HTMLElement) {
+        const tag = e.target.tagName.toLowerCase();
+        if (tag === "input" || tag === "textarea") return;
+      }
+
+      const stepX = (containerRef.current.clientWidth / zoom) * 0.1;
+      const stepY = (containerRef.current.clientHeight / zoom) * 0.1;
+      let newX = viewRef.current.x;
+      let newY = viewRef.current.y;
+      switch (e.key) {
+        case "ArrowLeft":
+          e.preventDefault();
+          newX -= stepX;
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          newX += stepX;
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          newY -= stepY;
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          newY += stepY;
+          break;
+        default:
+          return;
+      }
+      scheduleViewUpdate(newX, newY);
+      if (connected) sendViewUpdate(newX, newY);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [zoom, scheduleViewUpdate, connected, sendViewUpdate]);
+
   const topPlayers = useMemo(() => {
     return leaderboard.slice(0, 10);
   }, [leaderboard]);
