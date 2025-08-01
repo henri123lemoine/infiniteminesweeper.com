@@ -21,7 +21,7 @@ help:
 
 # sprite generation
 spritesheet:
-	cd scripts/python && uv run sprite_sheet_gen.py ../../frontend/assets/flags/raw/ ../../frontend/assets/sprites.yaml ../../frontend/assets/spritesheet.png ../../frontend/assets/spritesheet.json
+	cd scripts/python && uv run sprite_sheet_gen.py ../../frontend/assets/raw/ ../../frontend/assets/sprites.yaml ../../frontend/assets/spritesheet.png ../../frontend/assets/spritesheet.json
 
 # code generation & deps
 proto: backend/gen/proto/messages.pb.go frontend/src/gen/messages_pb.js

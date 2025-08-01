@@ -1,20 +1,7 @@
 default_settings:
   generate_colors: true
-  cost: 5
-  description: null
-
-color_palette:
-  - 0      # Red
-  - 30     # Orange
-  - 60     # Yellow
-  - 120    # Green
-  - 180    # Cyan
-  - 210    # Light Blue
-  - 240    # Blue
-  - 270    # Purple
-  - 300    # Magenta
-  - 330    # Pink
-  - light_gray  # Special light gray (not pure white)
+  unlocked: true
+  # TODO: Obviously un-unlocked later
 
 sprites:
   flag1:
@@ -74,7 +61,7 @@ sprites:
     shape: 'triangle'
     wavy: false
     broken: false
-    cost: 10
+    cost: 1
 
   flag8:
     name: 'Guidon Flag'
@@ -83,7 +70,7 @@ sprites:
     shape: 'guidon'
     wavy: false
     broken: false
-    cost: 10
+    cost: 1
 
   flag9:
     name: 'Broken Guidon Flag'
