@@ -15,9 +15,10 @@ import (
 	"testing"
 	"time"
 
+	pb "infinite-minesweeper/backend/gen/proto"
+
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
-	pb "infinite-minesweeper/proto"
 )
 
 func encodeMsg(m *pb.Msg) []byte {

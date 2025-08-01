@@ -549,7 +549,10 @@ func (s *Server) loadSnapshotFromDisk() error {
 		s.nextPlayerID = data.NextPlayerID
 	}
 	s.lbDirty = true
+	numChunks := len(s.chunks)
 	s.stateMu.Unlock()
+
+	log.Printf("[snapshot] loaded from disk: %d chunks", numChunks)
 	return nil
 }
 

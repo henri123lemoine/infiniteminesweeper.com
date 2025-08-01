@@ -1,5 +1,13 @@
 # flyctl launch added from .gitignore
+fly.toml
+
 **/data
 **/experiments
 **/.llm_info
-fly.toml
+**/node_modules/
+**/dist/
+
+.gitignore
+.git/
+.gitignore
+.gitignore
