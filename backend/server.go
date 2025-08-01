@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"net/http"
@@ -34,10 +35,9 @@ type Server struct {
 	playerViews map[int32]struct{ X, Y int32 } // last known view position
 
 	// Players
-	playersMu    sync.RWMutex
-	players      map[int32]map[*Player]struct{}
-	playerNames  map[int32]string
-	nextPlayerID int32
+	playersMu   sync.RWMutex
+	players     map[int32]map[*Player]struct{}
+	playerNames map[int32]string
 
 	// Seed cache for performance
 	seedCache   map[ChunkID]uint64
@@ -59,19 +59,18 @@ type Server struct {
 
 func NewServer() *Server {
 	return &Server{
-		secret:       []byte("minesweeper-secret-key"),
-		chunks:       make(map[ChunkID]*ChunkBits),
-		cellOwners:   make(map[ChunkID]map[int]int32),
-		flags:        make(map[ChunkID]map[int]Flag),
-		scores:       make(map[int32]int32),
-		subs:         make(map[ChunkID]map[int32]struct{}),
-		players:      make(map[int32]map[*Player]struct{}),
-		playerNames:  make(map[int32]string),
-		playerFlags:  make(map[int32]uint32),
-		playerViews:  make(map[int32]struct{ X, Y int32 }),
-		seedCache:    make(map[ChunkID]uint64),
-		nextPlayerID: 1,
-		dataDir:      "data",
+		secret:      []byte("minesweeper-secret-key"),
+		chunks:      make(map[ChunkID]*ChunkBits),
+		cellOwners:  make(map[ChunkID]map[int]int32),
+		flags:       make(map[ChunkID]map[int]Flag),
+		scores:      make(map[int32]int32),
+		subs:        make(map[ChunkID]map[int32]struct{}),
+		players:     make(map[int32]map[*Player]struct{}),
+		playerNames: make(map[int32]string),
+		playerFlags: make(map[int32]uint32),
+		playerViews: make(map[int32]struct{ X, Y int32 }),
+		seedCache:   make(map[ChunkID]uint64),
+		dataDir:     "data",
 		upgrader: websocket.Upgrader{
 			// Reject cross-site WebSocket requests (prevents CSRF via <iframe>).
 			CheckOrigin: func(r *http.Request) bool {
@@ -114,4 +113,26 @@ func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
 	s.seedCacheMu.Unlock()
 
 	return seed
+}
+
+func (s *Server) generatePlayerID() int32 {
+	for {
+		var b [4]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			panic("rand failure: " + err.Error())
+		}
+		id := int32(binary.LittleEndian.Uint32(b[:]) & 0x7fffffff)
+		if id == 0 {
+			continue
+		}
+		s.stateMu.RLock()
+		_, existsName := s.playerNames[id]
+		s.stateMu.RUnlock()
+		s.playersMu.RLock()
+		_, existsPlayer := s.players[id]
+		s.playersMu.RUnlock()
+		if !existsName && !existsPlayer {
+			return id
+		}
+	}
 }

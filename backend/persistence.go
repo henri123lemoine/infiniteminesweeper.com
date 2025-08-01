@@ -48,13 +48,12 @@ type WALEntry struct {
 // snapshotData is what actually gets serialized. Gob can handle maps with
 // struct keys, so we keep the exact types.
 type snapshotData struct {
-	Chunks       map[ChunkID]*ChunkBits
-	CellOwners   map[ChunkID]map[int]int32
-	Flags        map[ChunkID]map[int]Flag
-	Scores       map[int32]int32
-	PlayerNames  map[int32]string
-	PlayerFlags  map[int32]uint32
-	NextPlayerID int32
+	Chunks      map[ChunkID]*ChunkBits
+	CellOwners  map[ChunkID]map[int]int32
+	Flags       map[ChunkID]map[int]Flag
+	Scores      map[int32]int32
+	PlayerNames map[int32]string
+	PlayerFlags map[int32]uint32
 }
 
 func (s *Server) initAWS() error {
@@ -371,13 +370,12 @@ func (s *Server) initPersistence() {
 func (s *Server) saveSnapshotToS3() error {
 	s.stateMu.RLock()
 	data := snapshotData{
-		Chunks:       s.chunks,
-		CellOwners:   s.cellOwners,
-		Flags:        s.flags,
-		Scores:       s.scores,
-		PlayerNames:  s.playerNames,
-		PlayerFlags:  s.playerFlags,
-		NextPlayerID: s.nextPlayerID,
+		Chunks:      s.chunks,
+		CellOwners:  s.cellOwners,
+		Flags:       s.flags,
+		Scores:      s.scores,
+		PlayerNames: s.playerNames,
+		PlayerFlags: s.playerFlags,
 	}
 	s.stateMu.RUnlock()
 
@@ -418,13 +416,12 @@ func (s *Server) saveSnapshotToDisk() error {
 
 	s.stateMu.RLock()
 	data := snapshotData{
-		Chunks:       s.chunks,
-		CellOwners:   s.cellOwners,
-		Flags:        s.flags,
-		Scores:       s.scores,
-		PlayerNames:  s.playerNames,
-		PlayerFlags:  s.playerFlags,
-		NextPlayerID: s.nextPlayerID,
+		Chunks:      s.chunks,
+		CellOwners:  s.cellOwners,
+		Flags:       s.flags,
+		Scores:      s.scores,
+		PlayerNames: s.playerNames,
+		PlayerFlags: s.playerFlags,
 	}
 	s.stateMu.RUnlock()
 
@@ -498,9 +495,6 @@ func (s *Server) loadSnapshotFromS3() error {
 	} else {
 		s.playerFlags = make(map[int32]uint32)
 	}
-	if data.NextPlayerID != 0 {
-		s.nextPlayerID = data.NextPlayerID
-	}
 	s.lbDirty = true // force rebuild of leaderboard on first tick
 	s.stateMu.Unlock()
 	return nil
@@ -544,9 +538,6 @@ func (s *Server) loadSnapshotFromDisk() error {
 		s.playerFlags = data.PlayerFlags
 	} else {
 		s.playerFlags = make(map[int32]uint32)
-	}
-	if data.NextPlayerID != 0 {
-		s.nextPlayerID = data.NextPlayerID
 	}
 	s.lbDirty = true
 	numChunks := len(s.chunks)

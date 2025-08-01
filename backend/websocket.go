@@ -148,11 +148,16 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	playerID := hello.PlayerId
 	s.stateMu.Lock()
-	if playerID <= 0 || playerID >= s.nextPlayerID {
-		playerID = s.nextPlayerID
-		s.nextPlayerID++
+	if playerID <= 0 {
+		playerID = s.generatePlayerID()
+	} else {
+		if _, ok := s.playerNames[playerID]; !ok {
+			if _, ok2 := s.scores[playerID]; !ok2 {
+				playerID = s.generatePlayerID()
+			}
+		}
 	}
-	// Grab any previously‑saved score before we touch the player map
+	// Grab any previously-saved score before we touch the player map
 	initScore := s.scores[playerID]
 	s.playerNames[playerID] = hello.Name
 	s.playerFlags[playerID] = hello.FlagID
