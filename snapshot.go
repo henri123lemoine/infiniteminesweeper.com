@@ -309,7 +309,7 @@ func (s *Server) replayReveal(reveal Reveal) {
 	}
 
 	// Set the bit (mark as revealed)
-	bitIndex := reveal.Y*ChunkSize + reveal.X
+	bitIndex := int(reveal.Cell)
 	wordIndex := bitIndex / 64
 	bitOffset := bitIndex % 64
 	chunk[wordIndex] |= 1 << bitOffset
@@ -325,7 +325,7 @@ func (s *Server) replayFlag(flag Flag) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
-	bitIndex := flag.Y*ChunkSize + flag.X
+	bitIndex := int(flag.Cell)
 	if s.flags[flag.ChunkID] == nil {
 		s.flags[flag.ChunkID] = make(map[int]Flag)
 	}

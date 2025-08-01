@@ -486,10 +486,9 @@ function App() {
 
       // Create optimistic reveals and send to server
       for (const cell of toReveal) {
+        const cellIndex = cell.localY * CHUNK + cell.localX;
         const optimisticReveal = {
-          chunkId: { X: cell.chunkX, Y: cell.chunkY },
-          x: cell.localX,
-          y: cell.localY,
+          coord: { chunkX: cell.chunkX, chunkY: cell.chunkY, cell: cellIndex },
           playerId: -1,
           isMine: false,
           adjacentMines: cell.adjacentMines,
@@ -502,9 +501,7 @@ function App() {
           encodeMsg(
             PB.Msg.create({
               reveal: {
-                chunkId: { X: cell.chunkX, Y: cell.chunkY },
-                x: cell.localX,
-                y: cell.localY,
+                coord: { chunkX: cell.chunkX, chunkY: cell.chunkY, cell: cellIndex },
               },
             }),
           ),
@@ -547,7 +544,9 @@ function App() {
         ws.send(
           encodeMsg(
             PB.Msg.create({
-              flag: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY },
+              flag: {
+                coord: { chunkX, chunkY, cell: localY * CHUNK + localX },
+              },
             }),
           ),
         );
@@ -629,9 +628,7 @@ function App() {
       // If it's a mine, just reveal the single cell
       if (isMine(seed, localX, localY)) {
         const optimisticReveal = {
-          chunkId: { X: chunkX, Y: chunkY },
-          x: localX,
-          y: localY,
+          coord: { chunkX, chunkY, cell: localY * CHUNK + localX },
           playerId: -1,
           isMine: true,
           adjacentMines: 0,
@@ -644,9 +641,7 @@ function App() {
           encodeMsg(
             PB.Msg.create({
               reveal: {
-                chunkId: { X: chunkX, Y: chunkY },
-                x: localX,
-                y: localY,
+                coord: { chunkX, chunkY, cell: localY * CHUNK + localX },
               },
             }),
           ),
@@ -663,9 +658,7 @@ function App() {
         log(`Flood fill revealed ${revealedCount} cells`);
       } else {
         const optimisticReveal = {
-          chunkId: { X: chunkX, Y: chunkY },
-          x: localX,
-          y: localY,
+          coord: { chunkX, chunkY, cell: localY * CHUNK + localX },
           playerId: -1,
           isMine: false,
           adjacentMines: adjacent,
@@ -678,9 +671,7 @@ function App() {
           encodeMsg(
             PB.Msg.create({
               reveal: {
-                chunkId: { X: chunkX, Y: chunkY },
-                x: localX,
-                y: localY,
+                coord: { chunkX, chunkY, cell: localY * CHUNK + localX },
               },
             }),
           ),
@@ -1343,7 +1334,12 @@ function App() {
 
     websocket.onopen = () => {
       const msg = PB.Msg.create({
-        hello: { playerId: playerId, name: nameInput, color: playerColor },
+        hello: {
+          playerId: playerId,
+          name: nameInput,
+          color: playerColor,
+          protocol: 2,
+        },
       });
       websocket.send(encodeMsg(msg));
       setConnected(true);
@@ -1403,9 +1399,9 @@ function App() {
           worldY: m.scoreUpdate.worldY,
         };
       } else if (m.flag) {
-        data = { ...m.flag, chunkId: m.flag.chunkId };
+        data = { ...m.flag, coord: m.flag.coord };
       } else if (m.reveal) {
-        data = { ...m.reveal, chunkId: m.reveal.chunkId };
+        data = { ...m.reveal, coord: m.reveal.coord };
       }
 
       if (data.type === "welcome") {
@@ -1431,8 +1427,10 @@ function App() {
         // Handle flags from server
         if (Array.isArray(data.flags)) {
           for (const flag of data.flags) {
-            const flagWorldX = flag.chunkId.X * CHUNK + flag.x;
-            const flagWorldY = flag.chunkId.Y * CHUNK + flag.y;
+            const fx = flag.coord.cell % CHUNK;
+            const fy = Math.floor(flag.coord.cell / CHUNK);
+            const flagWorldX = flag.coord.chunkX * CHUNK + fx;
+            const flagWorldY = flag.coord.chunkY * CHUNK + fy;
             const flagKey = `${flagWorldX},${flagWorldY}`;
 
             flaggedCellsRef.current.set(flagKey, {
@@ -1445,8 +1443,10 @@ function App() {
 
         if (Array.isArray(data.reveals)) {
           for (const cell of data.reveals) {
+            const lx = cell.coord.cell % CHUNK;
+            const ly = Math.floor(cell.coord.cell / CHUNK);
             const seed = bytesToBig(data.seed);
-            const cellIsMine = isMine(seed, cell.x, cell.y);
+            const cellIsMine = isMine(seed, lx, ly);
             let adjacentMines = 0;
 
             if (!cellIsMine) {
@@ -1454,10 +1454,10 @@ function App() {
               for (let dy = -1; dy <= 1; dy++) {
                 for (let dx = -1; dx <= 1; dx++) {
                   if (dx === 0 && dy === 0) continue;
-                  let nx = cell.x + dx;
-                  let ny = cell.y + dy;
-                  let ncx = cell.chunkId.X;
-                  let ncy = cell.chunkId.Y;
+                  let nx = lx + dx;
+                  let ny = ly + dy;
+                  let ncx = cell.coord.chunkX;
+                  let ncy = cell.coord.chunkY;
                   if (nx < 0) {
                     ncx--;
                     nx += CHUNK;
@@ -1479,9 +1479,10 @@ function App() {
               }
             }
 
-            const cellKey = `${cell.chunkId.X},${cell.chunkId.Y},${cell.x},${cell.y}`;
+            const cellKey = `${cell.coord.chunkX},${cell.coord.chunkY},${lx},${ly}`;
             revealedCellsRef.current.set(cellKey, {
-              ...cell,
+              coord: cell.coord,
+              playerId: cell.playerId,
               isMine: cellIsMine,
               adjacentMines,
             });
@@ -1496,30 +1497,17 @@ function App() {
         }
       } else if (data.type === "revealAck") {
         if (!data.ok) {
-          // Optimistic reveal lost → resync this chunk
-          const key = `${data.chunkId.X},${data.chunkId.Y},${data.x},${data.y}`;
-          revealedCellsRef.current.delete(key);
-
-          // Force a re‑subscribe to get authoritative state
-          ws.send(
-            encodeMsg(
-              PB.Msg.create({
-                subscribe: { chunkX: data.chunkId.X, chunkY: data.chunkId.Y },
-              }),
-            ),
-          );
-
-          setTick((t) => t + 1);
+          console.log("Reveal failed");
         }
       } else if (
-        data.chunkId &&
-        typeof data.x === "number" &&
-        typeof data.y === "number" &&
-        data.color
+        data.coord &&
+        typeof data.color === "string"
       ) {
         // This is a flag broadcast from server
-        const flagWorldX = data.chunkId.X * CHUNK + data.x;
-        const flagWorldY = data.chunkId.Y * CHUNK + data.y;
+        const fx = data.coord.cell % CHUNK;
+        const fy = Math.floor(data.coord.cell / CHUNK);
+        const flagWorldX = data.coord.chunkX * CHUNK + fx;
+        const flagWorldY = data.coord.chunkY * CHUNK + fy;
         const flagKey = `${flagWorldX},${flagWorldY}`;
 
         flaggedCellsRef.current.set(flagKey, {
@@ -1530,23 +1518,21 @@ function App() {
 
         setTick((t) => t + 1);
       } else if (
-        data.chunkId &&
-        typeof data.x === "number" &&
-        typeof data.y === "number" &&
+        data.coord &&
         typeof data.playerId === "number" &&
         !data.color
       ) {
         // This is a reveal broadcast from server (e.g., from wrong flag)
-        const { chunkX, chunkY, localX, localY } = worldToChunk(
-          data.chunkId.X * CHUNK + data.x,
-          data.chunkId.Y * CHUNK + data.y,
-        );
-        const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+        const lx = data.coord.cell % CHUNK;
+        const ly = Math.floor(data.coord.cell / CHUNK);
+        const chunkX = data.coord.chunkX;
+        const chunkY = data.coord.chunkY;
+        const cellKey = `${chunkX},${chunkY},${lx},${ly}`;
 
         // Get the seed for this chunk to determine if it's a mine
         const seed = seedCache.current.get(`${chunkX},${chunkY}`);
         if (seed) {
-          const cellIsMine = isMine(seed, localX, localY);
+          const cellIsMine = isMine(seed, lx, ly);
           let adjacentMines = 0;
 
           if (!cellIsMine) {
@@ -1554,8 +1540,8 @@ function App() {
             for (let dy = -1; dy <= 1; dy++) {
               for (let dx = -1; dx <= 1; dx++) {
                 if (dx === 0 && dy === 0) continue;
-                let nx = localX + dx;
-                let ny = localY + dy;
+                let nx = lx + dx;
+                let ny = ly + dy;
                 let ncx = chunkX;
                 let ncy = chunkY;
                 if (nx < 0) {
@@ -1580,9 +1566,7 @@ function App() {
           }
 
           revealedCellsRef.current.set(cellKey, {
-            chunkId: data.chunkId,
-            x: localX,
-            y: localY,
+            coord: data.coord,
             playerId: data.playerId,
             isMine: cellIsMine,
             adjacentMines,

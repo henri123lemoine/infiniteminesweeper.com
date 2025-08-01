@@ -23,8 +23,8 @@
              * Properties of a ChunkID.
              * @memberof ms
              * @interface IChunkID
-             * @property {number|null} [X] ChunkID X
-             * @property {number|null} [Y] ChunkID Y
+             * @property {number|Long|null} [X] ChunkID X
+             * @property {number|Long|null} [Y] ChunkID Y
              */
     
             /**
@@ -44,19 +44,19 @@
     
             /**
              * ChunkID X.
-             * @member {number} X
+             * @member {number|Long} X
              * @memberof ms.ChunkID
              * @instance
              */
-            ChunkID.prototype.X = 0;
+            ChunkID.prototype.X = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
     
             /**
              * ChunkID Y.
-             * @member {number} Y
+             * @member {number|Long} Y
              * @memberof ms.ChunkID
              * @instance
              */
-            ChunkID.prototype.Y = 0;
+            ChunkID.prototype.Y = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
     
             /**
              * Creates a new ChunkID instance using the specified properties.
@@ -83,9 +83,9 @@
                 if (!writer)
                     writer = $Writer.create();
                 if (message.X != null && Object.hasOwnProperty.call(message, "X"))
-                    writer.uint32(/* id 1, wireType 0 =*/8).int32(message.X);
+                    writer.uint32(/* id 1, wireType 0 =*/8).sint64(message.X);
                 if (message.Y != null && Object.hasOwnProperty.call(message, "Y"))
-                    writer.uint32(/* id 2, wireType 0 =*/16).int32(message.Y);
+                    writer.uint32(/* id 2, wireType 0 =*/16).sint64(message.Y);
                 return writer;
             };
     
@@ -123,11 +123,11 @@
                         break;
                     switch (tag >>> 3) {
                     case 1: {
-                            message.X = reader.int32();
+                            message.X = reader.sint64();
                             break;
                         }
                     case 2: {
-                            message.Y = reader.int32();
+                            message.Y = reader.sint64();
                             break;
                         }
                     default:
@@ -166,11 +166,11 @@
                 if (typeof message !== "object" || message === null)
                     return "object expected";
                 if (message.X != null && message.hasOwnProperty("X"))
-                    if (!$util.isInteger(message.X))
-                        return "X: integer expected";
+                    if (!$util.isInteger(message.X) && !(message.X && $util.isInteger(message.X.low) && $util.isInteger(message.X.high)))
+                        return "X: integer|Long expected";
                 if (message.Y != null && message.hasOwnProperty("Y"))
-                    if (!$util.isInteger(message.Y))
-                        return "Y: integer expected";
+                    if (!$util.isInteger(message.Y) && !(message.Y && $util.isInteger(message.Y.low) && $util.isInteger(message.Y.high)))
+                        return "Y: integer|Long expected";
                 return null;
             };
     
@@ -187,9 +187,23 @@
                     return object;
                 var message = new $root.ms.ChunkID();
                 if (object.X != null)
-                    message.X = object.X | 0;
+                    if ($util.Long)
+                        (message.X = $util.Long.fromValue(object.X)).unsigned = false;
+                    else if (typeof object.X === "string")
+                        message.X = parseInt(object.X, 10);
+                    else if (typeof object.X === "number")
+                        message.X = object.X;
+                    else if (typeof object.X === "object")
+                        message.X = new $util.LongBits(object.X.low >>> 0, object.X.high >>> 0).toNumber();
                 if (object.Y != null)
-                    message.Y = object.Y | 0;
+                    if ($util.Long)
+                        (message.Y = $util.Long.fromValue(object.Y)).unsigned = false;
+                    else if (typeof object.Y === "string")
+                        message.Y = parseInt(object.Y, 10);
+                    else if (typeof object.Y === "number")
+                        message.Y = object.Y;
+                    else if (typeof object.Y === "object")
+                        message.Y = new $util.LongBits(object.Y.low >>> 0, object.Y.high >>> 0).toNumber();
                 return message;
             };
     
@@ -207,13 +221,27 @@
                     options = {};
                 var object = {};
                 if (options.defaults) {
-                    object.X = 0;
-                    object.Y = 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.X = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.X = options.longs === String ? "0" : 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.Y = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.Y = options.longs === String ? "0" : 0;
                 }
                 if (message.X != null && message.hasOwnProperty("X"))
-                    object.X = message.X;
+                    if (typeof message.X === "number")
+                        object.X = options.longs === String ? String(message.X) : message.X;
+                    else
+                        object.X = options.longs === String ? $util.Long.prototype.toString.call(message.X) : options.longs === Number ? new $util.LongBits(message.X.low >>> 0, message.X.high >>> 0).toNumber() : message.X;
                 if (message.Y != null && message.hasOwnProperty("Y"))
-                    object.Y = message.Y;
+                    if (typeof message.Y === "number")
+                        object.Y = options.longs === String ? String(message.Y) : message.Y;
+                    else
+                        object.Y = options.longs === String ? $util.Long.prototype.toString.call(message.Y) : options.longs === Number ? new $util.LongBits(message.Y.low >>> 0, message.Y.high >>> 0).toNumber() : message.Y;
                 return object;
             };
     
@@ -246,15 +274,293 @@
             return ChunkID;
         })();
     
+        ms.CellCoord = (function() {
+    
+            /**
+             * Properties of a CellCoord.
+             * @memberof ms
+             * @interface ICellCoord
+             * @property {number|Long|null} [chunkX] CellCoord chunkX
+             * @property {number|Long|null} [chunkY] CellCoord chunkY
+             * @property {number|null} [cell] CellCoord cell
+             */
+    
+            /**
+             * Constructs a new CellCoord.
+             * @memberof ms
+             * @classdesc Represents a CellCoord.
+             * @implements ICellCoord
+             * @constructor
+             * @param {ms.ICellCoord=} [properties] Properties to set
+             */
+            function CellCoord(properties) {
+                if (properties)
+                    for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                        if (properties[keys[i]] != null)
+                            this[keys[i]] = properties[keys[i]];
+            }
+    
+            /**
+             * CellCoord chunkX.
+             * @member {number|Long} chunkX
+             * @memberof ms.CellCoord
+             * @instance
+             */
+            CellCoord.prototype.chunkX = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
+    
+            /**
+             * CellCoord chunkY.
+             * @member {number|Long} chunkY
+             * @memberof ms.CellCoord
+             * @instance
+             */
+            CellCoord.prototype.chunkY = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
+    
+            /**
+             * CellCoord cell.
+             * @member {number} cell
+             * @memberof ms.CellCoord
+             * @instance
+             */
+            CellCoord.prototype.cell = 0;
+    
+            /**
+             * Creates a new CellCoord instance using the specified properties.
+             * @function create
+             * @memberof ms.CellCoord
+             * @static
+             * @param {ms.ICellCoord=} [properties] Properties to set
+             * @returns {ms.CellCoord} CellCoord instance
+             */
+            CellCoord.create = function create(properties) {
+                return new CellCoord(properties);
+            };
+    
+            /**
+             * Encodes the specified CellCoord message. Does not implicitly {@link ms.CellCoord.verify|verify} messages.
+             * @function encode
+             * @memberof ms.CellCoord
+             * @static
+             * @param {ms.ICellCoord} message CellCoord message or plain object to encode
+             * @param {$protobuf.Writer} [writer] Writer to encode to
+             * @returns {$protobuf.Writer} Writer
+             */
+            CellCoord.encode = function encode(message, writer) {
+                if (!writer)
+                    writer = $Writer.create();
+                if (message.chunkX != null && Object.hasOwnProperty.call(message, "chunkX"))
+                    writer.uint32(/* id 1, wireType 0 =*/8).sint64(message.chunkX);
+                if (message.chunkY != null && Object.hasOwnProperty.call(message, "chunkY"))
+                    writer.uint32(/* id 2, wireType 0 =*/16).sint64(message.chunkY);
+                if (message.cell != null && Object.hasOwnProperty.call(message, "cell"))
+                    writer.uint32(/* id 3, wireType 0 =*/24).uint32(message.cell);
+                return writer;
+            };
+    
+            /**
+             * Encodes the specified CellCoord message, length delimited. Does not implicitly {@link ms.CellCoord.verify|verify} messages.
+             * @function encodeDelimited
+             * @memberof ms.CellCoord
+             * @static
+             * @param {ms.ICellCoord} message CellCoord message or plain object to encode
+             * @param {$protobuf.Writer} [writer] Writer to encode to
+             * @returns {$protobuf.Writer} Writer
+             */
+            CellCoord.encodeDelimited = function encodeDelimited(message, writer) {
+                return this.encode(message, writer).ldelim();
+            };
+    
+            /**
+             * Decodes a CellCoord message from the specified reader or buffer.
+             * @function decode
+             * @memberof ms.CellCoord
+             * @static
+             * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+             * @param {number} [length] Message length if known beforehand
+             * @returns {ms.CellCoord} CellCoord
+             * @throws {Error} If the payload is not a reader or valid buffer
+             * @throws {$protobuf.util.ProtocolError} If required fields are missing
+             */
+            CellCoord.decode = function decode(reader, length, error) {
+                if (!(reader instanceof $Reader))
+                    reader = $Reader.create(reader);
+                var end = length === undefined ? reader.len : reader.pos + length, message = new $root.ms.CellCoord();
+                while (reader.pos < end) {
+                    var tag = reader.uint32();
+                    if (tag === error)
+                        break;
+                    switch (tag >>> 3) {
+                    case 1: {
+                            message.chunkX = reader.sint64();
+                            break;
+                        }
+                    case 2: {
+                            message.chunkY = reader.sint64();
+                            break;
+                        }
+                    case 3: {
+                            message.cell = reader.uint32();
+                            break;
+                        }
+                    default:
+                        reader.skipType(tag & 7);
+                        break;
+                    }
+                }
+                return message;
+            };
+    
+            /**
+             * Decodes a CellCoord message from the specified reader or buffer, length delimited.
+             * @function decodeDelimited
+             * @memberof ms.CellCoord
+             * @static
+             * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+             * @returns {ms.CellCoord} CellCoord
+             * @throws {Error} If the payload is not a reader or valid buffer
+             * @throws {$protobuf.util.ProtocolError} If required fields are missing
+             */
+            CellCoord.decodeDelimited = function decodeDelimited(reader) {
+                if (!(reader instanceof $Reader))
+                    reader = new $Reader(reader);
+                return this.decode(reader, reader.uint32());
+            };
+    
+            /**
+             * Verifies a CellCoord message.
+             * @function verify
+             * @memberof ms.CellCoord
+             * @static
+             * @param {Object.<string,*>} message Plain object to verify
+             * @returns {string|null} `null` if valid, otherwise the reason why it is not
+             */
+            CellCoord.verify = function verify(message) {
+                if (typeof message !== "object" || message === null)
+                    return "object expected";
+                if (message.chunkX != null && message.hasOwnProperty("chunkX"))
+                    if (!$util.isInteger(message.chunkX) && !(message.chunkX && $util.isInteger(message.chunkX.low) && $util.isInteger(message.chunkX.high)))
+                        return "chunkX: integer|Long expected";
+                if (message.chunkY != null && message.hasOwnProperty("chunkY"))
+                    if (!$util.isInteger(message.chunkY) && !(message.chunkY && $util.isInteger(message.chunkY.low) && $util.isInteger(message.chunkY.high)))
+                        return "chunkY: integer|Long expected";
+                if (message.cell != null && message.hasOwnProperty("cell"))
+                    if (!$util.isInteger(message.cell))
+                        return "cell: integer expected";
+                return null;
+            };
+    
+            /**
+             * Creates a CellCoord message from a plain object. Also converts values to their respective internal types.
+             * @function fromObject
+             * @memberof ms.CellCoord
+             * @static
+             * @param {Object.<string,*>} object Plain object
+             * @returns {ms.CellCoord} CellCoord
+             */
+            CellCoord.fromObject = function fromObject(object) {
+                if (object instanceof $root.ms.CellCoord)
+                    return object;
+                var message = new $root.ms.CellCoord();
+                if (object.chunkX != null)
+                    if ($util.Long)
+                        (message.chunkX = $util.Long.fromValue(object.chunkX)).unsigned = false;
+                    else if (typeof object.chunkX === "string")
+                        message.chunkX = parseInt(object.chunkX, 10);
+                    else if (typeof object.chunkX === "number")
+                        message.chunkX = object.chunkX;
+                    else if (typeof object.chunkX === "object")
+                        message.chunkX = new $util.LongBits(object.chunkX.low >>> 0, object.chunkX.high >>> 0).toNumber();
+                if (object.chunkY != null)
+                    if ($util.Long)
+                        (message.chunkY = $util.Long.fromValue(object.chunkY)).unsigned = false;
+                    else if (typeof object.chunkY === "string")
+                        message.chunkY = parseInt(object.chunkY, 10);
+                    else if (typeof object.chunkY === "number")
+                        message.chunkY = object.chunkY;
+                    else if (typeof object.chunkY === "object")
+                        message.chunkY = new $util.LongBits(object.chunkY.low >>> 0, object.chunkY.high >>> 0).toNumber();
+                if (object.cell != null)
+                    message.cell = object.cell >>> 0;
+                return message;
+            };
+    
+            /**
+             * Creates a plain object from a CellCoord message. Also converts values to other types if specified.
+             * @function toObject
+             * @memberof ms.CellCoord
+             * @static
+             * @param {ms.CellCoord} message CellCoord
+             * @param {$protobuf.IConversionOptions} [options] Conversion options
+             * @returns {Object.<string,*>} Plain object
+             */
+            CellCoord.toObject = function toObject(message, options) {
+                if (!options)
+                    options = {};
+                var object = {};
+                if (options.defaults) {
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.chunkX = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.chunkX = options.longs === String ? "0" : 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.chunkY = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.chunkY = options.longs === String ? "0" : 0;
+                    object.cell = 0;
+                }
+                if (message.chunkX != null && message.hasOwnProperty("chunkX"))
+                    if (typeof message.chunkX === "number")
+                        object.chunkX = options.longs === String ? String(message.chunkX) : message.chunkX;
+                    else
+                        object.chunkX = options.longs === String ? $util.Long.prototype.toString.call(message.chunkX) : options.longs === Number ? new $util.LongBits(message.chunkX.low >>> 0, message.chunkX.high >>> 0).toNumber() : message.chunkX;
+                if (message.chunkY != null && message.hasOwnProperty("chunkY"))
+                    if (typeof message.chunkY === "number")
+                        object.chunkY = options.longs === String ? String(message.chunkY) : message.chunkY;
+                    else
+                        object.chunkY = options.longs === String ? $util.Long.prototype.toString.call(message.chunkY) : options.longs === Number ? new $util.LongBits(message.chunkY.low >>> 0, message.chunkY.high >>> 0).toNumber() : message.chunkY;
+                if (message.cell != null && message.hasOwnProperty("cell"))
+                    object.cell = message.cell;
+                return object;
+            };
+    
+            /**
+             * Converts this CellCoord to JSON.
+             * @function toJSON
+             * @memberof ms.CellCoord
+             * @instance
+             * @returns {Object.<string,*>} JSON object
+             */
+            CellCoord.prototype.toJSON = function toJSON() {
+                return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+            };
+    
+            /**
+             * Gets the default type url for CellCoord
+             * @function getTypeUrl
+             * @memberof ms.CellCoord
+             * @static
+             * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+             * @returns {string} The default type url
+             */
+            CellCoord.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+                if (typeUrlPrefix === undefined) {
+                    typeUrlPrefix = "type.googleapis.com";
+                }
+                return typeUrlPrefix + "/ms.CellCoord";
+            };
+    
+            return CellCoord;
+        })();
+    
         ms.Reveal = (function() {
     
             /**
              * Properties of a Reveal.
              * @memberof ms
              * @interface IReveal
-             * @property {ms.IChunkID|null} [chunkId] Reveal chunkId
-             * @property {number|null} [x] Reveal x
-             * @property {number|null} [y] Reveal y
+             * @property {ms.ICellCoord|null} [coord] Reveal coord
              * @property {number|null} [playerId] Reveal playerId
              */
     
@@ -274,28 +580,12 @@
             }
     
             /**
-             * Reveal chunkId.
-             * @member {ms.IChunkID|null|undefined} chunkId
+             * Reveal coord.
+             * @member {ms.ICellCoord|null|undefined} coord
              * @memberof ms.Reveal
              * @instance
              */
-            Reveal.prototype.chunkId = null;
-    
-            /**
-             * Reveal x.
-             * @member {number} x
-             * @memberof ms.Reveal
-             * @instance
-             */
-            Reveal.prototype.x = 0;
-    
-            /**
-             * Reveal y.
-             * @member {number} y
-             * @memberof ms.Reveal
-             * @instance
-             */
-            Reveal.prototype.y = 0;
+            Reveal.prototype.coord = null;
     
             /**
              * Reveal playerId.
@@ -329,14 +619,10 @@
             Reveal.encode = function encode(message, writer) {
                 if (!writer)
                     writer = $Writer.create();
-                if (message.chunkId != null && Object.hasOwnProperty.call(message, "chunkId"))
-                    $root.ms.ChunkID.encode(message.chunkId, writer.uint32(/* id 1, wireType 2 =*/10).fork()).ldelim();
-                if (message.x != null && Object.hasOwnProperty.call(message, "x"))
-                    writer.uint32(/* id 2, wireType 0 =*/16).int32(message.x);
-                if (message.y != null && Object.hasOwnProperty.call(message, "y"))
-                    writer.uint32(/* id 3, wireType 0 =*/24).int32(message.y);
+                if (message.coord != null && Object.hasOwnProperty.call(message, "coord"))
+                    $root.ms.CellCoord.encode(message.coord, writer.uint32(/* id 1, wireType 2 =*/10).fork()).ldelim();
                 if (message.playerId != null && Object.hasOwnProperty.call(message, "playerId"))
-                    writer.uint32(/* id 4, wireType 0 =*/32).int32(message.playerId);
+                    writer.uint32(/* id 2, wireType 0 =*/16).int32(message.playerId);
                 return writer;
             };
     
@@ -374,18 +660,10 @@
                         break;
                     switch (tag >>> 3) {
                     case 1: {
-                            message.chunkId = $root.ms.ChunkID.decode(reader, reader.uint32());
+                            message.coord = $root.ms.CellCoord.decode(reader, reader.uint32());
                             break;
                         }
                     case 2: {
-                            message.x = reader.int32();
-                            break;
-                        }
-                    case 3: {
-                            message.y = reader.int32();
-                            break;
-                        }
-                    case 4: {
                             message.playerId = reader.int32();
                             break;
                         }
@@ -424,17 +702,11 @@
             Reveal.verify = function verify(message) {
                 if (typeof message !== "object" || message === null)
                     return "object expected";
-                if (message.chunkId != null && message.hasOwnProperty("chunkId")) {
-                    var error = $root.ms.ChunkID.verify(message.chunkId);
+                if (message.coord != null && message.hasOwnProperty("coord")) {
+                    var error = $root.ms.CellCoord.verify(message.coord);
                     if (error)
-                        return "chunkId." + error;
+                        return "coord." + error;
                 }
-                if (message.x != null && message.hasOwnProperty("x"))
-                    if (!$util.isInteger(message.x))
-                        return "x: integer expected";
-                if (message.y != null && message.hasOwnProperty("y"))
-                    if (!$util.isInteger(message.y))
-                        return "y: integer expected";
                 if (message.playerId != null && message.hasOwnProperty("playerId"))
                     if (!$util.isInteger(message.playerId))
                         return "playerId: integer expected";
@@ -453,15 +725,11 @@
                 if (object instanceof $root.ms.Reveal)
                     return object;
                 var message = new $root.ms.Reveal();
-                if (object.chunkId != null) {
-                    if (typeof object.chunkId !== "object")
-                        throw TypeError(".ms.Reveal.chunkId: object expected");
-                    message.chunkId = $root.ms.ChunkID.fromObject(object.chunkId);
+                if (object.coord != null) {
+                    if (typeof object.coord !== "object")
+                        throw TypeError(".ms.Reveal.coord: object expected");
+                    message.coord = $root.ms.CellCoord.fromObject(object.coord);
                 }
-                if (object.x != null)
-                    message.x = object.x | 0;
-                if (object.y != null)
-                    message.y = object.y | 0;
                 if (object.playerId != null)
                     message.playerId = object.playerId | 0;
                 return message;
@@ -481,17 +749,11 @@
                     options = {};
                 var object = {};
                 if (options.defaults) {
-                    object.chunkId = null;
-                    object.x = 0;
-                    object.y = 0;
+                    object.coord = null;
                     object.playerId = 0;
                 }
-                if (message.chunkId != null && message.hasOwnProperty("chunkId"))
-                    object.chunkId = $root.ms.ChunkID.toObject(message.chunkId, options);
-                if (message.x != null && message.hasOwnProperty("x"))
-                    object.x = message.x;
-                if (message.y != null && message.hasOwnProperty("y"))
-                    object.y = message.y;
+                if (message.coord != null && message.hasOwnProperty("coord"))
+                    object.coord = $root.ms.CellCoord.toObject(message.coord, options);
                 if (message.playerId != null && message.hasOwnProperty("playerId"))
                     object.playerId = message.playerId;
                 return object;
@@ -532,9 +794,7 @@
              * Properties of a Flag.
              * @memberof ms
              * @interface IFlag
-             * @property {ms.IChunkID|null} [chunkId] Flag chunkId
-             * @property {number|null} [x] Flag x
-             * @property {number|null} [y] Flag y
+             * @property {ms.ICellCoord|null} [coord] Flag coord
              * @property {number|null} [playerId] Flag playerId
              * @property {string|null} [color] Flag color
              */
@@ -555,28 +815,12 @@
             }
     
             /**
-             * Flag chunkId.
-             * @member {ms.IChunkID|null|undefined} chunkId
+             * Flag coord.
+             * @member {ms.ICellCoord|null|undefined} coord
              * @memberof ms.Flag
              * @instance
              */
-            Flag.prototype.chunkId = null;
-    
-            /**
-             * Flag x.
-             * @member {number} x
-             * @memberof ms.Flag
-             * @instance
-             */
-            Flag.prototype.x = 0;
-    
-            /**
-             * Flag y.
-             * @member {number} y
-             * @memberof ms.Flag
-             * @instance
-             */
-            Flag.prototype.y = 0;
+            Flag.prototype.coord = null;
     
             /**
              * Flag playerId.
@@ -618,16 +862,12 @@
             Flag.encode = function encode(message, writer) {
                 if (!writer)
                     writer = $Writer.create();
-                if (message.chunkId != null && Object.hasOwnProperty.call(message, "chunkId"))
-                    $root.ms.ChunkID.encode(message.chunkId, writer.uint32(/* id 1, wireType 2 =*/10).fork()).ldelim();
-                if (message.x != null && Object.hasOwnProperty.call(message, "x"))
-                    writer.uint32(/* id 2, wireType 0 =*/16).int32(message.x);
-                if (message.y != null && Object.hasOwnProperty.call(message, "y"))
-                    writer.uint32(/* id 3, wireType 0 =*/24).int32(message.y);
+                if (message.coord != null && Object.hasOwnProperty.call(message, "coord"))
+                    $root.ms.CellCoord.encode(message.coord, writer.uint32(/* id 1, wireType 2 =*/10).fork()).ldelim();
                 if (message.playerId != null && Object.hasOwnProperty.call(message, "playerId"))
-                    writer.uint32(/* id 4, wireType 0 =*/32).int32(message.playerId);
+                    writer.uint32(/* id 2, wireType 0 =*/16).int32(message.playerId);
                 if (message.color != null && Object.hasOwnProperty.call(message, "color"))
-                    writer.uint32(/* id 5, wireType 2 =*/42).string(message.color);
+                    writer.uint32(/* id 3, wireType 2 =*/26).string(message.color);
                 return writer;
             };
     
@@ -665,22 +905,14 @@
                         break;
                     switch (tag >>> 3) {
                     case 1: {
-                            message.chunkId = $root.ms.ChunkID.decode(reader, reader.uint32());
+                            message.coord = $root.ms.CellCoord.decode(reader, reader.uint32());
                             break;
                         }
                     case 2: {
-                            message.x = reader.int32();
-                            break;
-                        }
-                    case 3: {
-                            message.y = reader.int32();
-                            break;
-                        }
-                    case 4: {
                             message.playerId = reader.int32();
                             break;
                         }
-                    case 5: {
+                    case 3: {
                             message.color = reader.string();
                             break;
                         }
@@ -719,17 +951,11 @@
             Flag.verify = function verify(message) {
                 if (typeof message !== "object" || message === null)
                     return "object expected";
-                if (message.chunkId != null && message.hasOwnProperty("chunkId")) {
-                    var error = $root.ms.ChunkID.verify(message.chunkId);
+                if (message.coord != null && message.hasOwnProperty("coord")) {
+                    var error = $root.ms.CellCoord.verify(message.coord);
                     if (error)
-                        return "chunkId." + error;
+                        return "coord." + error;
                 }
-                if (message.x != null && message.hasOwnProperty("x"))
-                    if (!$util.isInteger(message.x))
-                        return "x: integer expected";
-                if (message.y != null && message.hasOwnProperty("y"))
-                    if (!$util.isInteger(message.y))
-                        return "y: integer expected";
                 if (message.playerId != null && message.hasOwnProperty("playerId"))
                     if (!$util.isInteger(message.playerId))
                         return "playerId: integer expected";
@@ -751,15 +977,11 @@
                 if (object instanceof $root.ms.Flag)
                     return object;
                 var message = new $root.ms.Flag();
-                if (object.chunkId != null) {
-                    if (typeof object.chunkId !== "object")
-                        throw TypeError(".ms.Flag.chunkId: object expected");
-                    message.chunkId = $root.ms.ChunkID.fromObject(object.chunkId);
+                if (object.coord != null) {
+                    if (typeof object.coord !== "object")
+                        throw TypeError(".ms.Flag.coord: object expected");
+                    message.coord = $root.ms.CellCoord.fromObject(object.coord);
                 }
-                if (object.x != null)
-                    message.x = object.x | 0;
-                if (object.y != null)
-                    message.y = object.y | 0;
                 if (object.playerId != null)
                     message.playerId = object.playerId | 0;
                 if (object.color != null)
@@ -781,18 +1003,12 @@
                     options = {};
                 var object = {};
                 if (options.defaults) {
-                    object.chunkId = null;
-                    object.x = 0;
-                    object.y = 0;
+                    object.coord = null;
                     object.playerId = 0;
                     object.color = "";
                 }
-                if (message.chunkId != null && message.hasOwnProperty("chunkId"))
-                    object.chunkId = $root.ms.ChunkID.toObject(message.chunkId, options);
-                if (message.x != null && message.hasOwnProperty("x"))
-                    object.x = message.x;
-                if (message.y != null && message.hasOwnProperty("y"))
-                    object.y = message.y;
+                if (message.coord != null && message.hasOwnProperty("coord"))
+                    object.coord = $root.ms.CellCoord.toObject(message.coord, options);
                 if (message.playerId != null && message.hasOwnProperty("playerId"))
                     object.playerId = message.playerId;
                 if (message.color != null && message.hasOwnProperty("color"))
@@ -838,6 +1054,7 @@
              * @property {number|null} [playerId] Hello playerId
              * @property {string|null} [name] Hello name
              * @property {string|null} [color] Hello color
+             * @property {number|null} [protocol] Hello protocol
              */
     
             /**
@@ -880,6 +1097,14 @@
             Hello.prototype.color = "";
     
             /**
+             * Hello protocol.
+             * @member {number} protocol
+             * @memberof ms.Hello
+             * @instance
+             */
+            Hello.prototype.protocol = 0;
+    
+            /**
              * Creates a new Hello instance using the specified properties.
              * @function create
              * @memberof ms.Hello
@@ -909,6 +1134,8 @@
                     writer.uint32(/* id 2, wireType 2 =*/18).string(message.name);
                 if (message.color != null && Object.hasOwnProperty.call(message, "color"))
                     writer.uint32(/* id 3, wireType 2 =*/26).string(message.color);
+                if (message.protocol != null && Object.hasOwnProperty.call(message, "protocol"))
+                    writer.uint32(/* id 4, wireType 0 =*/32).uint32(message.protocol);
                 return writer;
             };
     
@@ -957,6 +1184,10 @@
                             message.color = reader.string();
                             break;
                         }
+                    case 4: {
+                            message.protocol = reader.uint32();
+                            break;
+                        }
                     default:
                         reader.skipType(tag & 7);
                         break;
@@ -1001,6 +1232,9 @@
                 if (message.color != null && message.hasOwnProperty("color"))
                     if (!$util.isString(message.color))
                         return "color: string expected";
+                if (message.protocol != null && message.hasOwnProperty("protocol"))
+                    if (!$util.isInteger(message.protocol))
+                        return "protocol: integer expected";
                 return null;
             };
     
@@ -1022,6 +1256,8 @@
                     message.name = String(object.name);
                 if (object.color != null)
                     message.color = String(object.color);
+                if (object.protocol != null)
+                    message.protocol = object.protocol >>> 0;
                 return message;
             };
     
@@ -1042,6 +1278,7 @@
                     object.playerId = 0;
                     object.name = "";
                     object.color = "";
+                    object.protocol = 0;
                 }
                 if (message.playerId != null && message.hasOwnProperty("playerId"))
                     object.playerId = message.playerId;
@@ -1049,6 +1286,8 @@
                     object.name = message.name;
                 if (message.color != null && message.hasOwnProperty("color"))
                     object.color = message.color;
+                if (message.protocol != null && message.hasOwnProperty("protocol"))
+                    object.protocol = message.protocol;
                 return object;
             };
     
@@ -1090,8 +1329,8 @@
              * @property {number|null} [playerId] Welcome playerId
              * @property {string|null} [name] Welcome name
              * @property {string|null} [color] Welcome color
-             * @property {number|null} [viewX] Welcome viewX
-             * @property {number|null} [viewY] Welcome viewY
+             * @property {number|Long|null} [viewX] Welcome viewX
+             * @property {number|Long|null} [viewY] Welcome viewY
              */
     
             /**
@@ -1135,19 +1374,19 @@
     
             /**
              * Welcome viewX.
-             * @member {number} viewX
+             * @member {number|Long} viewX
              * @memberof ms.Welcome
              * @instance
              */
-            Welcome.prototype.viewX = 0;
+            Welcome.prototype.viewX = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
     
             /**
              * Welcome viewY.
-             * @member {number} viewY
+             * @member {number|Long} viewY
              * @memberof ms.Welcome
              * @instance
              */
-            Welcome.prototype.viewY = 0;
+            Welcome.prototype.viewY = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
     
             /**
              * Creates a new Welcome instance using the specified properties.
@@ -1180,9 +1419,9 @@
                 if (message.color != null && Object.hasOwnProperty.call(message, "color"))
                     writer.uint32(/* id 3, wireType 2 =*/26).string(message.color);
                 if (message.viewX != null && Object.hasOwnProperty.call(message, "viewX"))
-                    writer.uint32(/* id 4, wireType 0 =*/32).int32(message.viewX);
+                    writer.uint32(/* id 4, wireType 0 =*/32).sint64(message.viewX);
                 if (message.viewY != null && Object.hasOwnProperty.call(message, "viewY"))
-                    writer.uint32(/* id 5, wireType 0 =*/40).int32(message.viewY);
+                    writer.uint32(/* id 5, wireType 0 =*/40).sint64(message.viewY);
                 return writer;
             };
     
@@ -1232,11 +1471,11 @@
                             break;
                         }
                     case 4: {
-                            message.viewX = reader.int32();
+                            message.viewX = reader.sint64();
                             break;
                         }
                     case 5: {
-                            message.viewY = reader.int32();
+                            message.viewY = reader.sint64();
                             break;
                         }
                     default:
@@ -1284,11 +1523,11 @@
                     if (!$util.isString(message.color))
                         return "color: string expected";
                 if (message.viewX != null && message.hasOwnProperty("viewX"))
-                    if (!$util.isInteger(message.viewX))
-                        return "viewX: integer expected";
+                    if (!$util.isInteger(message.viewX) && !(message.viewX && $util.isInteger(message.viewX.low) && $util.isInteger(message.viewX.high)))
+                        return "viewX: integer|Long expected";
                 if (message.viewY != null && message.hasOwnProperty("viewY"))
-                    if (!$util.isInteger(message.viewY))
-                        return "viewY: integer expected";
+                    if (!$util.isInteger(message.viewY) && !(message.viewY && $util.isInteger(message.viewY.low) && $util.isInteger(message.viewY.high)))
+                        return "viewY: integer|Long expected";
                 return null;
             };
     
@@ -1311,9 +1550,23 @@
                 if (object.color != null)
                     message.color = String(object.color);
                 if (object.viewX != null)
-                    message.viewX = object.viewX | 0;
+                    if ($util.Long)
+                        (message.viewX = $util.Long.fromValue(object.viewX)).unsigned = false;
+                    else if (typeof object.viewX === "string")
+                        message.viewX = parseInt(object.viewX, 10);
+                    else if (typeof object.viewX === "number")
+                        message.viewX = object.viewX;
+                    else if (typeof object.viewX === "object")
+                        message.viewX = new $util.LongBits(object.viewX.low >>> 0, object.viewX.high >>> 0).toNumber();
                 if (object.viewY != null)
-                    message.viewY = object.viewY | 0;
+                    if ($util.Long)
+                        (message.viewY = $util.Long.fromValue(object.viewY)).unsigned = false;
+                    else if (typeof object.viewY === "string")
+                        message.viewY = parseInt(object.viewY, 10);
+                    else if (typeof object.viewY === "number")
+                        message.viewY = object.viewY;
+                    else if (typeof object.viewY === "object")
+                        message.viewY = new $util.LongBits(object.viewY.low >>> 0, object.viewY.high >>> 0).toNumber();
                 return message;
             };
     
@@ -1334,8 +1587,16 @@
                     object.playerId = 0;
                     object.name = "";
                     object.color = "";
-                    object.viewX = 0;
-                    object.viewY = 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.viewX = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.viewX = options.longs === String ? "0" : 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.viewY = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.viewY = options.longs === String ? "0" : 0;
                 }
                 if (message.playerId != null && message.hasOwnProperty("playerId"))
                     object.playerId = message.playerId;
@@ -1344,9 +1605,15 @@
                 if (message.color != null && message.hasOwnProperty("color"))
                     object.color = message.color;
                 if (message.viewX != null && message.hasOwnProperty("viewX"))
-                    object.viewX = message.viewX;
+                    if (typeof message.viewX === "number")
+                        object.viewX = options.longs === String ? String(message.viewX) : message.viewX;
+                    else
+                        object.viewX = options.longs === String ? $util.Long.prototype.toString.call(message.viewX) : options.longs === Number ? new $util.LongBits(message.viewX.low >>> 0, message.viewX.high >>> 0).toNumber() : message.viewX;
                 if (message.viewY != null && message.hasOwnProperty("viewY"))
-                    object.viewY = message.viewY;
+                    if (typeof message.viewY === "number")
+                        object.viewY = options.longs === String ? String(message.viewY) : message.viewY;
+                    else
+                        object.viewY = options.longs === String ? $util.Long.prototype.toString.call(message.viewY) : options.longs === Number ? new $util.LongBits(message.viewY.low >>> 0, message.viewY.high >>> 0).toNumber() : message.viewY;
                 return object;
             };
     
@@ -1385,8 +1652,8 @@
              * Properties of a Subscribe.
              * @memberof ms
              * @interface ISubscribe
-             * @property {number|null} [chunkX] Subscribe chunkX
-             * @property {number|null} [chunkY] Subscribe chunkY
+             * @property {number|Long|null} [chunkX] Subscribe chunkX
+             * @property {number|Long|null} [chunkY] Subscribe chunkY
              */
     
             /**
@@ -1406,19 +1673,19 @@
     
             /**
              * Subscribe chunkX.
-             * @member {number} chunkX
+             * @member {number|Long} chunkX
              * @memberof ms.Subscribe
              * @instance
              */
-            Subscribe.prototype.chunkX = 0;
+            Subscribe.prototype.chunkX = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
     
             /**
              * Subscribe chunkY.
-             * @member {number} chunkY
+             * @member {number|Long} chunkY
              * @memberof ms.Subscribe
              * @instance
              */
-            Subscribe.prototype.chunkY = 0;
+            Subscribe.prototype.chunkY = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
     
             /**
              * Creates a new Subscribe instance using the specified properties.
@@ -1445,9 +1712,9 @@
                 if (!writer)
                     writer = $Writer.create();
                 if (message.chunkX != null && Object.hasOwnProperty.call(message, "chunkX"))
-                    writer.uint32(/* id 1, wireType 0 =*/8).int32(message.chunkX);
+                    writer.uint32(/* id 1, wireType 0 =*/8).sint64(message.chunkX);
                 if (message.chunkY != null && Object.hasOwnProperty.call(message, "chunkY"))
-                    writer.uint32(/* id 2, wireType 0 =*/16).int32(message.chunkY);
+                    writer.uint32(/* id 2, wireType 0 =*/16).sint64(message.chunkY);
                 return writer;
             };
     
@@ -1485,11 +1752,11 @@
                         break;
                     switch (tag >>> 3) {
                     case 1: {
-                            message.chunkX = reader.int32();
+                            message.chunkX = reader.sint64();
                             break;
                         }
                     case 2: {
-                            message.chunkY = reader.int32();
+                            message.chunkY = reader.sint64();
                             break;
                         }
                     default:
@@ -1528,11 +1795,11 @@
                 if (typeof message !== "object" || message === null)
                     return "object expected";
                 if (message.chunkX != null && message.hasOwnProperty("chunkX"))
-                    if (!$util.isInteger(message.chunkX))
-                        return "chunkX: integer expected";
+                    if (!$util.isInteger(message.chunkX) && !(message.chunkX && $util.isInteger(message.chunkX.low) && $util.isInteger(message.chunkX.high)))
+                        return "chunkX: integer|Long expected";
                 if (message.chunkY != null && message.hasOwnProperty("chunkY"))
-                    if (!$util.isInteger(message.chunkY))
-                        return "chunkY: integer expected";
+                    if (!$util.isInteger(message.chunkY) && !(message.chunkY && $util.isInteger(message.chunkY.low) && $util.isInteger(message.chunkY.high)))
+                        return "chunkY: integer|Long expected";
                 return null;
             };
     
@@ -1549,9 +1816,23 @@
                     return object;
                 var message = new $root.ms.Subscribe();
                 if (object.chunkX != null)
-                    message.chunkX = object.chunkX | 0;
+                    if ($util.Long)
+                        (message.chunkX = $util.Long.fromValue(object.chunkX)).unsigned = false;
+                    else if (typeof object.chunkX === "string")
+                        message.chunkX = parseInt(object.chunkX, 10);
+                    else if (typeof object.chunkX === "number")
+                        message.chunkX = object.chunkX;
+                    else if (typeof object.chunkX === "object")
+                        message.chunkX = new $util.LongBits(object.chunkX.low >>> 0, object.chunkX.high >>> 0).toNumber();
                 if (object.chunkY != null)
-                    message.chunkY = object.chunkY | 0;
+                    if ($util.Long)
+                        (message.chunkY = $util.Long.fromValue(object.chunkY)).unsigned = false;
+                    else if (typeof object.chunkY === "string")
+                        message.chunkY = parseInt(object.chunkY, 10);
+                    else if (typeof object.chunkY === "number")
+                        message.chunkY = object.chunkY;
+                    else if (typeof object.chunkY === "object")
+                        message.chunkY = new $util.LongBits(object.chunkY.low >>> 0, object.chunkY.high >>> 0).toNumber();
                 return message;
             };
     
@@ -1569,13 +1850,27 @@
                     options = {};
                 var object = {};
                 if (options.defaults) {
-                    object.chunkX = 0;
-                    object.chunkY = 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.chunkX = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.chunkX = options.longs === String ? "0" : 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.chunkY = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.chunkY = options.longs === String ? "0" : 0;
                 }
                 if (message.chunkX != null && message.hasOwnProperty("chunkX"))
-                    object.chunkX = message.chunkX;
+                    if (typeof message.chunkX === "number")
+                        object.chunkX = options.longs === String ? String(message.chunkX) : message.chunkX;
+                    else
+                        object.chunkX = options.longs === String ? $util.Long.prototype.toString.call(message.chunkX) : options.longs === Number ? new $util.LongBits(message.chunkX.low >>> 0, message.chunkX.high >>> 0).toNumber() : message.chunkX;
                 if (message.chunkY != null && message.hasOwnProperty("chunkY"))
-                    object.chunkY = message.chunkY;
+                    if (typeof message.chunkY === "number")
+                        object.chunkY = options.longs === String ? String(message.chunkY) : message.chunkY;
+                    else
+                        object.chunkY = options.longs === String ? $util.Long.prototype.toString.call(message.chunkY) : options.longs === Number ? new $util.LongBits(message.chunkY.low >>> 0, message.chunkY.high >>> 0).toNumber() : message.chunkY;
                 return object;
             };
     
@@ -1614,8 +1909,8 @@
              * Properties of an Unsubscribe.
              * @memberof ms
              * @interface IUnsubscribe
-             * @property {number|null} [chunkX] Unsubscribe chunkX
-             * @property {number|null} [chunkY] Unsubscribe chunkY
+             * @property {number|Long|null} [chunkX] Unsubscribe chunkX
+             * @property {number|Long|null} [chunkY] Unsubscribe chunkY
              */
     
             /**
@@ -1635,19 +1930,19 @@
     
             /**
              * Unsubscribe chunkX.
-             * @member {number} chunkX
+             * @member {number|Long} chunkX
              * @memberof ms.Unsubscribe
              * @instance
              */
-            Unsubscribe.prototype.chunkX = 0;
+            Unsubscribe.prototype.chunkX = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
     
             /**
              * Unsubscribe chunkY.
-             * @member {number} chunkY
+             * @member {number|Long} chunkY
              * @memberof ms.Unsubscribe
              * @instance
              */
-            Unsubscribe.prototype.chunkY = 0;
+            Unsubscribe.prototype.chunkY = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
     
             /**
              * Creates a new Unsubscribe instance using the specified properties.
@@ -1674,9 +1969,9 @@
                 if (!writer)
                     writer = $Writer.create();
                 if (message.chunkX != null && Object.hasOwnProperty.call(message, "chunkX"))
-                    writer.uint32(/* id 1, wireType 0 =*/8).int32(message.chunkX);
+                    writer.uint32(/* id 1, wireType 0 =*/8).sint64(message.chunkX);
                 if (message.chunkY != null && Object.hasOwnProperty.call(message, "chunkY"))
-                    writer.uint32(/* id 2, wireType 0 =*/16).int32(message.chunkY);
+                    writer.uint32(/* id 2, wireType 0 =*/16).sint64(message.chunkY);
                 return writer;
             };
     
@@ -1714,11 +2009,11 @@
                         break;
                     switch (tag >>> 3) {
                     case 1: {
-                            message.chunkX = reader.int32();
+                            message.chunkX = reader.sint64();
                             break;
                         }
                     case 2: {
-                            message.chunkY = reader.int32();
+                            message.chunkY = reader.sint64();
                             break;
                         }
                     default:
@@ -1757,11 +2052,11 @@
                 if (typeof message !== "object" || message === null)
                     return "object expected";
                 if (message.chunkX != null && message.hasOwnProperty("chunkX"))
-                    if (!$util.isInteger(message.chunkX))
-                        return "chunkX: integer expected";
+                    if (!$util.isInteger(message.chunkX) && !(message.chunkX && $util.isInteger(message.chunkX.low) && $util.isInteger(message.chunkX.high)))
+                        return "chunkX: integer|Long expected";
                 if (message.chunkY != null && message.hasOwnProperty("chunkY"))
-                    if (!$util.isInteger(message.chunkY))
-                        return "chunkY: integer expected";
+                    if (!$util.isInteger(message.chunkY) && !(message.chunkY && $util.isInteger(message.chunkY.low) && $util.isInteger(message.chunkY.high)))
+                        return "chunkY: integer|Long expected";
                 return null;
             };
     
@@ -1778,9 +2073,23 @@
                     return object;
                 var message = new $root.ms.Unsubscribe();
                 if (object.chunkX != null)
-                    message.chunkX = object.chunkX | 0;
+                    if ($util.Long)
+                        (message.chunkX = $util.Long.fromValue(object.chunkX)).unsigned = false;
+                    else if (typeof object.chunkX === "string")
+                        message.chunkX = parseInt(object.chunkX, 10);
+                    else if (typeof object.chunkX === "number")
+                        message.chunkX = object.chunkX;
+                    else if (typeof object.chunkX === "object")
+                        message.chunkX = new $util.LongBits(object.chunkX.low >>> 0, object.chunkX.high >>> 0).toNumber();
                 if (object.chunkY != null)
-                    message.chunkY = object.chunkY | 0;
+                    if ($util.Long)
+                        (message.chunkY = $util.Long.fromValue(object.chunkY)).unsigned = false;
+                    else if (typeof object.chunkY === "string")
+                        message.chunkY = parseInt(object.chunkY, 10);
+                    else if (typeof object.chunkY === "number")
+                        message.chunkY = object.chunkY;
+                    else if (typeof object.chunkY === "object")
+                        message.chunkY = new $util.LongBits(object.chunkY.low >>> 0, object.chunkY.high >>> 0).toNumber();
                 return message;
             };
     
@@ -1798,13 +2107,27 @@
                     options = {};
                 var object = {};
                 if (options.defaults) {
-                    object.chunkX = 0;
-                    object.chunkY = 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.chunkX = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.chunkX = options.longs === String ? "0" : 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.chunkY = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.chunkY = options.longs === String ? "0" : 0;
                 }
                 if (message.chunkX != null && message.hasOwnProperty("chunkX"))
-                    object.chunkX = message.chunkX;
+                    if (typeof message.chunkX === "number")
+                        object.chunkX = options.longs === String ? String(message.chunkX) : message.chunkX;
+                    else
+                        object.chunkX = options.longs === String ? $util.Long.prototype.toString.call(message.chunkX) : options.longs === Number ? new $util.LongBits(message.chunkX.low >>> 0, message.chunkX.high >>> 0).toNumber() : message.chunkX;
                 if (message.chunkY != null && message.hasOwnProperty("chunkY"))
-                    object.chunkY = message.chunkY;
+                    if (typeof message.chunkY === "number")
+                        object.chunkY = options.longs === String ? String(message.chunkY) : message.chunkY;
+                    else
+                        object.chunkY = options.longs === String ? $util.Long.prototype.toString.call(message.chunkY) : options.longs === Number ? new $util.LongBits(message.chunkY.low >>> 0, message.chunkY.high >>> 0).toNumber() : message.chunkY;
                 return object;
             };
     
@@ -3103,8 +3426,8 @@
              * @memberof ms
              * @interface IScoreUpdate
              * @property {number|null} [score] ScoreUpdate score
-             * @property {number|null} [worldX] ScoreUpdate worldX
-             * @property {number|null} [worldY] ScoreUpdate worldY
+             * @property {number|Long|null} [worldX] ScoreUpdate worldX
+             * @property {number|Long|null} [worldY] ScoreUpdate worldY
              * @property {number|null} [delta] ScoreUpdate delta
              */
     
@@ -3133,19 +3456,19 @@
     
             /**
              * ScoreUpdate worldX.
-             * @member {number} worldX
+             * @member {number|Long} worldX
              * @memberof ms.ScoreUpdate
              * @instance
              */
-            ScoreUpdate.prototype.worldX = 0;
+            ScoreUpdate.prototype.worldX = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
     
             /**
              * ScoreUpdate worldY.
-             * @member {number} worldY
+             * @member {number|Long} worldY
              * @memberof ms.ScoreUpdate
              * @instance
              */
-            ScoreUpdate.prototype.worldY = 0;
+            ScoreUpdate.prototype.worldY = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
     
             /**
              * ScoreUpdate delta.
@@ -3182,9 +3505,9 @@
                 if (message.score != null && Object.hasOwnProperty.call(message, "score"))
                     writer.uint32(/* id 1, wireType 0 =*/8).int32(message.score);
                 if (message.worldX != null && Object.hasOwnProperty.call(message, "worldX"))
-                    writer.uint32(/* id 2, wireType 0 =*/16).int32(message.worldX);
+                    writer.uint32(/* id 2, wireType 0 =*/16).sint64(message.worldX);
                 if (message.worldY != null && Object.hasOwnProperty.call(message, "worldY"))
-                    writer.uint32(/* id 3, wireType 0 =*/24).int32(message.worldY);
+                    writer.uint32(/* id 3, wireType 0 =*/24).sint64(message.worldY);
                 if (message.delta != null && Object.hasOwnProperty.call(message, "delta"))
                     writer.uint32(/* id 4, wireType 0 =*/32).int32(message.delta);
                 return writer;
@@ -3228,11 +3551,11 @@
                             break;
                         }
                     case 2: {
-                            message.worldX = reader.int32();
+                            message.worldX = reader.sint64();
                             break;
                         }
                     case 3: {
-                            message.worldY = reader.int32();
+                            message.worldY = reader.sint64();
                             break;
                         }
                     case 4: {
@@ -3278,11 +3601,11 @@
                     if (!$util.isInteger(message.score))
                         return "score: integer expected";
                 if (message.worldX != null && message.hasOwnProperty("worldX"))
-                    if (!$util.isInteger(message.worldX))
-                        return "worldX: integer expected";
+                    if (!$util.isInteger(message.worldX) && !(message.worldX && $util.isInteger(message.worldX.low) && $util.isInteger(message.worldX.high)))
+                        return "worldX: integer|Long expected";
                 if (message.worldY != null && message.hasOwnProperty("worldY"))
-                    if (!$util.isInteger(message.worldY))
-                        return "worldY: integer expected";
+                    if (!$util.isInteger(message.worldY) && !(message.worldY && $util.isInteger(message.worldY.low) && $util.isInteger(message.worldY.high)))
+                        return "worldY: integer|Long expected";
                 if (message.delta != null && message.hasOwnProperty("delta"))
                     if (!$util.isInteger(message.delta))
                         return "delta: integer expected";
@@ -3304,9 +3627,23 @@
                 if (object.score != null)
                     message.score = object.score | 0;
                 if (object.worldX != null)
-                    message.worldX = object.worldX | 0;
+                    if ($util.Long)
+                        (message.worldX = $util.Long.fromValue(object.worldX)).unsigned = false;
+                    else if (typeof object.worldX === "string")
+                        message.worldX = parseInt(object.worldX, 10);
+                    else if (typeof object.worldX === "number")
+                        message.worldX = object.worldX;
+                    else if (typeof object.worldX === "object")
+                        message.worldX = new $util.LongBits(object.worldX.low >>> 0, object.worldX.high >>> 0).toNumber();
                 if (object.worldY != null)
-                    message.worldY = object.worldY | 0;
+                    if ($util.Long)
+                        (message.worldY = $util.Long.fromValue(object.worldY)).unsigned = false;
+                    else if (typeof object.worldY === "string")
+                        message.worldY = parseInt(object.worldY, 10);
+                    else if (typeof object.worldY === "number")
+                        message.worldY = object.worldY;
+                    else if (typeof object.worldY === "object")
+                        message.worldY = new $util.LongBits(object.worldY.low >>> 0, object.worldY.high >>> 0).toNumber();
                 if (object.delta != null)
                     message.delta = object.delta | 0;
                 return message;
@@ -3327,16 +3664,30 @@
                 var object = {};
                 if (options.defaults) {
                     object.score = 0;
-                    object.worldX = 0;
-                    object.worldY = 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.worldX = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.worldX = options.longs === String ? "0" : 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.worldY = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.worldY = options.longs === String ? "0" : 0;
                     object.delta = 0;
                 }
                 if (message.score != null && message.hasOwnProperty("score"))
                     object.score = message.score;
                 if (message.worldX != null && message.hasOwnProperty("worldX"))
-                    object.worldX = message.worldX;
+                    if (typeof message.worldX === "number")
+                        object.worldX = options.longs === String ? String(message.worldX) : message.worldX;
+                    else
+                        object.worldX = options.longs === String ? $util.Long.prototype.toString.call(message.worldX) : options.longs === Number ? new $util.LongBits(message.worldX.low >>> 0, message.worldX.high >>> 0).toNumber() : message.worldX;
                 if (message.worldY != null && message.hasOwnProperty("worldY"))
-                    object.worldY = message.worldY;
+                    if (typeof message.worldY === "number")
+                        object.worldY = options.longs === String ? String(message.worldY) : message.worldY;
+                    else
+                        object.worldY = options.longs === String ? $util.Long.prototype.toString.call(message.worldY) : options.longs === Number ? new $util.LongBits(message.worldY.low >>> 0, message.worldY.high >>> 0).toNumber() : message.worldY;
                 if (message.delta != null && message.hasOwnProperty("delta"))
                     object.delta = message.delta;
                 return object;
@@ -3377,8 +3728,8 @@
              * Properties of a ViewUpdate.
              * @memberof ms
              * @interface IViewUpdate
-             * @property {number|null} [viewX] ViewUpdate viewX
-             * @property {number|null} [viewY] ViewUpdate viewY
+             * @property {number|Long|null} [viewX] ViewUpdate viewX
+             * @property {number|Long|null} [viewY] ViewUpdate viewY
              */
     
             /**
@@ -3398,19 +3749,19 @@
     
             /**
              * ViewUpdate viewX.
-             * @member {number} viewX
+             * @member {number|Long} viewX
              * @memberof ms.ViewUpdate
              * @instance
              */
-            ViewUpdate.prototype.viewX = 0;
+            ViewUpdate.prototype.viewX = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
     
             /**
              * ViewUpdate viewY.
-             * @member {number} viewY
+             * @member {number|Long} viewY
              * @memberof ms.ViewUpdate
              * @instance
              */
-            ViewUpdate.prototype.viewY = 0;
+            ViewUpdate.prototype.viewY = $util.Long ? $util.Long.fromBits(0,0,false) : 0;
     
             /**
              * Creates a new ViewUpdate instance using the specified properties.
@@ -3437,9 +3788,9 @@
                 if (!writer)
                     writer = $Writer.create();
                 if (message.viewX != null && Object.hasOwnProperty.call(message, "viewX"))
-                    writer.uint32(/* id 1, wireType 0 =*/8).int32(message.viewX);
+                    writer.uint32(/* id 1, wireType 0 =*/8).sint64(message.viewX);
                 if (message.viewY != null && Object.hasOwnProperty.call(message, "viewY"))
-                    writer.uint32(/* id 2, wireType 0 =*/16).int32(message.viewY);
+                    writer.uint32(/* id 2, wireType 0 =*/16).sint64(message.viewY);
                 return writer;
             };
     
@@ -3477,11 +3828,11 @@
                         break;
                     switch (tag >>> 3) {
                     case 1: {
-                            message.viewX = reader.int32();
+                            message.viewX = reader.sint64();
                             break;
                         }
                     case 2: {
-                            message.viewY = reader.int32();
+                            message.viewY = reader.sint64();
                             break;
                         }
                     default:
@@ -3520,11 +3871,11 @@
                 if (typeof message !== "object" || message === null)
                     return "object expected";
                 if (message.viewX != null && message.hasOwnProperty("viewX"))
-                    if (!$util.isInteger(message.viewX))
-                        return "viewX: integer expected";
+                    if (!$util.isInteger(message.viewX) && !(message.viewX && $util.isInteger(message.viewX.low) && $util.isInteger(message.viewX.high)))
+                        return "viewX: integer|Long expected";
                 if (message.viewY != null && message.hasOwnProperty("viewY"))
-                    if (!$util.isInteger(message.viewY))
-                        return "viewY: integer expected";
+                    if (!$util.isInteger(message.viewY) && !(message.viewY && $util.isInteger(message.viewY.low) && $util.isInteger(message.viewY.high)))
+                        return "viewY: integer|Long expected";
                 return null;
             };
     
@@ -3541,9 +3892,23 @@
                     return object;
                 var message = new $root.ms.ViewUpdate();
                 if (object.viewX != null)
-                    message.viewX = object.viewX | 0;
+                    if ($util.Long)
+                        (message.viewX = $util.Long.fromValue(object.viewX)).unsigned = false;
+                    else if (typeof object.viewX === "string")
+                        message.viewX = parseInt(object.viewX, 10);
+                    else if (typeof object.viewX === "number")
+                        message.viewX = object.viewX;
+                    else if (typeof object.viewX === "object")
+                        message.viewX = new $util.LongBits(object.viewX.low >>> 0, object.viewX.high >>> 0).toNumber();
                 if (object.viewY != null)
-                    message.viewY = object.viewY | 0;
+                    if ($util.Long)
+                        (message.viewY = $util.Long.fromValue(object.viewY)).unsigned = false;
+                    else if (typeof object.viewY === "string")
+                        message.viewY = parseInt(object.viewY, 10);
+                    else if (typeof object.viewY === "number")
+                        message.viewY = object.viewY;
+                    else if (typeof object.viewY === "object")
+                        message.viewY = new $util.LongBits(object.viewY.low >>> 0, object.viewY.high >>> 0).toNumber();
                 return message;
             };
     
@@ -3561,13 +3926,27 @@
                     options = {};
                 var object = {};
                 if (options.defaults) {
-                    object.viewX = 0;
-                    object.viewY = 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.viewX = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.viewX = options.longs === String ? "0" : 0;
+                    if ($util.Long) {
+                        var long = new $util.Long(0, 0, false);
+                        object.viewY = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                    } else
+                        object.viewY = options.longs === String ? "0" : 0;
                 }
                 if (message.viewX != null && message.hasOwnProperty("viewX"))
-                    object.viewX = message.viewX;
+                    if (typeof message.viewX === "number")
+                        object.viewX = options.longs === String ? String(message.viewX) : message.viewX;
+                    else
+                        object.viewX = options.longs === String ? $util.Long.prototype.toString.call(message.viewX) : options.longs === Number ? new $util.LongBits(message.viewX.low >>> 0, message.viewX.high >>> 0).toNumber() : message.viewX;
                 if (message.viewY != null && message.hasOwnProperty("viewY"))
-                    object.viewY = message.viewY;
+                    if (typeof message.viewY === "number")
+                        object.viewY = options.longs === String ? String(message.viewY) : message.viewY;
+                    else
+                        object.viewY = options.longs === String ? $util.Long.prototype.toString.call(message.viewY) : options.longs === Number ? new $util.LongBits(message.viewY.low >>> 0, message.viewY.high >>> 0).toNumber() : message.viewY;
                 return object;
             };
     

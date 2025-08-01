@@ -228,3 +228,8 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 - 8 bytes per line × 64 lines = 512 bytes per chunk
 - Possible to handle larger than 3×3 chunk grids per player (up to 7×7)
 - Minimap: 3×3 chunks = (3×64)² = 192×192 binary image with color coding for flags/bombs/numbers
+
+## Debugging nil CellCoord panic
+A panic occurred in `readPump` because the server expected every Reveal/Flag message to include the new `CellCoord` field. If an outdated client uses the previous protocol version, the field is absent and the server dereferences nil. This typically happened when running `go run` without rebuilding the frontend, so browsers kept using old cached JavaScript.
+
+To prevent mismatched clients from connecting, the handshake `Hello` message now carries a `protocol` version. The server rejects connections that do not match `ProtocolVersion`.

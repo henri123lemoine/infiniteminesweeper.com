@@ -310,7 +310,7 @@ func TestFullStackIntegration(t *testing.T) {
 		}
 		conns[i] = conn
 
-		hello := &pb.Msg{Payload: &pb.Msg_Hello{Hello: &pb.Hello{PlayerId: 0, Name: fmt.Sprintf("p%d", i)}}}
+		hello := &pb.Msg{Payload: &pb.Msg_Hello{Hello: &pb.Hello{PlayerId: 0, Name: fmt.Sprintf("p%d", i), Protocol: ProtocolVersion}}}
 		if err := conn.WriteMessage(websocket.BinaryMessage, encodeMsg(hello)); err != nil {
 			t.Fatalf("hello %d: %v", i, err)
 		}
@@ -343,7 +343,7 @@ func TestFullStackIntegration(t *testing.T) {
 		go func(i int, c *websocket.Conn) {
 			defer wg.Done()
 			<-start
-			reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{ChunkId: &pb.ChunkID{X: 0, Y: 0}, X: 1, Y: 1}}}
+			reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{Coord: &pb.CellCoord{ChunkX: 0, ChunkY: 0, Cell: 65}}}}
 			if err := c.WriteMessage(websocket.BinaryMessage, encodeMsg(reveal)); err != nil {
 				t.Errorf("write contention %d: %v", i, err)
 				return
@@ -374,7 +374,8 @@ func TestFullStackIntegration(t *testing.T) {
 	// Phase 2: each client reveals its own unique safe cell
 	successes := 0
 	for i, conn := range conns {
-		reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{ChunkId: &pb.ChunkID{X: 0, Y: 0}, X: int32(i), Y: int32(i + 2)}}}
+		cellIdx := uint32((i+2)*64 + i)
+		reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{Coord: &pb.CellCoord{ChunkX: 0, ChunkY: 0, Cell: cellIdx}}}}
 		if err := conn.WriteMessage(websocket.BinaryMessage, encodeMsg(reveal)); err != nil {
 			t.Fatalf("write unique %d: %v", i, err)
 		}
