@@ -437,7 +437,7 @@ export const useGameState = () => {
             chunkId: m.chunkSync.chunkId,
             seed: m.chunkSync.seed,
             reveals: m.chunkSync.reveals,
-            flags: m.chunkSync.flags,
+            flags: m.chunkSync.flagGroups,
           };
         } else if (m.revealAck) {
           data = { type: "revealAck", ok: m.revealAck.ok };
@@ -481,31 +481,50 @@ export const useGameState = () => {
           seedCache.current.set(key, bytesToBig(data.seed));
 
           if (Array.isArray(data.flags)) {
-            for (const flag of data.flags) {
-              const flagWorldX = flag.chunkId.X * CHUNK + flag.x;
-              const flagWorldY = flag.chunkId.Y * CHUNK + flag.y;
-              const flagKey = `${flagWorldX},${flagWorldY}`;
+            for (const group of data.flags) {
+              playerFlagsRef.current.set(group.playerId, group.flagID);
 
-              flaggedCellsRef.current.set(flagKey, flag.flagID);
-              playerFlagsRef.current.set(flag.playerId, flag.flagID);
+              for (const loc of group.locations) {
+                // Get the chunk coordinates from the parent message
+                const flagWorldX = data.chunkId.X * CHUNK + loc.x;
+                const flagWorldY = data.chunkId.Y * CHUNK + loc.y;
+                const flagKey = `${flagWorldX},${flagWorldY}`;
+
+                // Set the flag on the grid
+                flaggedCellsRef.current.set(flagKey, group.flagID);
+              }
             }
             setTick((t) => t + 1);
           }
 
-          if (Array.isArray(data.reveals)) {
-            for (const cell of data.reveals) {
+          if (data.reveals instanceof Uint8Array) {
+            const bits = [];
+            let bit = 0;
+            let idx = 0;
+            for (const count of data.reveals) {
+              for (let i = 0; i < count && idx < CHUNK * CHUNK; i++) {
+                bits[idx++] = bit;
+              }
+              if (count !== 255) {
+                bit ^= 1;
+              }
+            }
+            for (let i = 0; i < bits.length; i++) {
+              if (!bits[i]) continue;
+              const x = i % CHUNK;
+              const y = Math.floor(i / CHUNK);
               const seed = bytesToBig(data.seed);
-              const cellIsMine = isMine(seed, cell.x, cell.y);
+              const cellIsMine = isMine(seed, x, y);
               let adjacentMines = 0;
 
               if (!cellIsMine) {
                 for (let dy = -1; dy <= 1; dy++) {
                   for (let dx = -1; dx <= 1; dx++) {
                     if (dx === 0 && dy === 0) continue;
-                    let nx = cell.x + dx;
-                    let ny = cell.y + dy;
-                    let ncx = cell.chunkId.X;
-                    let ncy = cell.chunkId.Y;
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    let ncx = data.chunkId.X;
+                    let ncy = data.chunkId.Y;
                     if (nx < 0) {
                       ncx--;
                       nx += CHUNK;
@@ -527,9 +546,12 @@ export const useGameState = () => {
                 }
               }
 
-              const cellKey = `${cell.chunkId.X},${cell.chunkId.Y},${cell.x},${cell.y}`;
+              const cellKey = `${data.chunkId.X},${data.chunkId.Y},${x},${y}`;
               revealedCellsRef.current.set(cellKey, {
-                ...cell,
+                chunkId: data.chunkId,
+                x,
+                y,
+                playerId: -1,
                 isMine: cellIsMine,
                 adjacentMines,
               });

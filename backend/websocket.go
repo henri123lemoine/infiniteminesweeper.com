@@ -66,6 +66,38 @@ func mustProto(m *pb.Msg) []byte {
 	return buf.Bytes()
 }
 
+func encodeChunkRLE(bits *ChunkBits) []byte {
+	total := ChunkSize * ChunkSize
+	out := make([]byte, 0, 64)
+	run := 0
+	cur := uint64(0)
+
+	flush := func() {
+		for run >= 255 {
+			out = append(out, 255)
+			run -= 255
+		}
+		out = append(out, byte(run))
+	}
+
+	for i := 0; i < total; i++ {
+		bit := (bits[i/64] >> (i % 64)) & 1
+		if bit == cur {
+			run++
+			if run == 65535 {
+				flush()
+				run = 0
+			}
+		} else {
+			flush()
+			run = 1
+			cur = bit
+		}
+	}
+	flush()
+	return out
+}
+
 func (s *Server) sendToPlayer(playerID int32, data []byte) {
 	s.playersMu.RLock()
 	conns, exists := s.players[playerID]
@@ -337,64 +369,47 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 	}
 	s.subs[chunkID][playerID] = struct{}{}
 
-	// Prepare chunk sync - just revealed cells and their owners
 	chunk, chunkExists := s.chunks[chunkID]
-	owners := s.cellOwners[chunkID]
 	flagsMap := s.flags[chunkID]
 	seed64 := s.generateChunkSeed(chunkID)
 	var seedBytes [8]byte
 	binary.LittleEndian.PutUint64(seedBytes[:], seed64)
-	var reveals []Reveal
-	var flags []Flag
 
+	var bits ChunkBits
 	if chunkExists {
-		for y := 0; y < ChunkSize; y++ {
-			for x := 0; x < ChunkSize; x++ {
-				bitIndex := y*ChunkSize + x
-				wordIndex := bitIndex / 64
-				bitOffset := bitIndex % 64
-
-				if chunk[wordIndex]&(1<<bitOffset) != 0 {
-					var ownerID int32 = 0
-					if owners != nil {
-						if owner, exists := owners[bitIndex]; exists {
-							ownerID = owner
-						}
-					}
-
-					reveals = append(reveals, Reveal{
-						ChunkID:  chunkID,
-						X:        x,
-						Y:        y,
-						PlayerID: ownerID,
-					})
-				}
-			}
-		}
+		bits = *chunk
 	}
 
-	// Add flags for this chunk
-	for _, flag := range flagsMap {
-		flags = append(flags, flag)
+	// group flags by (player,color)
+	type fk struct {
+		id     int32
+		flagID uint32
+	}
+	groups := make(map[fk][]pb.FlagLocation)
+	for idx, fl := range flagsMap {
+		x := int32(idx % ChunkSize)
+		y := int32(idx / ChunkSize)
+		key := fk{fl.PlayerID, fl.FlagID}
+		groups[key] = append(groups[key], pb.FlagLocation{X: x, Y: y})
 	}
 	s.stateMu.Unlock()
 
 	cs := &pb.Msg{Payload: &pb.Msg_ChunkSync{ChunkSync: &pb.ChunkSync{
-		ChunkId: &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
-		Seed:    seedBytes[:],
+		ChunkId:    &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
+		Seed:       seedBytes[:],
+		Reveals:    encodeChunkRLE(&bits),
+		FlagGroups: make([]*pb.FlagGroup, 0, len(groups)),
 	}}}
-	for _, rv := range reveals {
-		cs.GetChunkSync().Reveals = append(cs.GetChunkSync().Reveals, &pb.Reveal{
-			ChunkId: &pb.ChunkID{X: rv.ChunkID.X, Y: rv.ChunkID.Y},
-			X:       int32(rv.X), Y: int32(rv.Y), PlayerId: rv.PlayerID,
-		})
+
+	for k, locs := range groups {
+		fg := &pb.FlagGroup{FlagID: k.flagID, Locations: make([]*pb.FlagLocation, 0, len(locs))}
+		for _, l := range locs {
+			lCopy := l
+			fg.Locations = append(fg.Locations, &pb.FlagLocation{X: lCopy.X, Y: lCopy.Y})
+		}
+		cs.GetChunkSync().FlagGroups = append(cs.GetChunkSync().FlagGroups, fg)
 	}
-	for _, fl := range flags {
-		cs.GetChunkSync().Flags = append(cs.GetChunkSync().Flags, &pb.Flag{
-			ChunkId: &pb.ChunkID{X: fl.ChunkID.X, Y: fl.ChunkID.Y},
-			X:       int32(fl.X), Y: int32(fl.Y), PlayerId: fl.PlayerID, FlagID: fl.FlagID,
-		})
-	}
+
 	s.sendToPlayer(playerID, mustProto(cs))
 }
 

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	pb "infinite-minesweeper/backend/gen/proto"
 	"regexp"
 	"time"
@@ -493,41 +492,52 @@ func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
 	}
 }
 
-func (s *Server) broadcastRevealBatch(reveals []Reveal) {
-	// Caller already holds stateMu
-	byChunk := make(map[ChunkID][]Reveal)
-	for _, r := range reveals {
-		byChunk[r.ChunkID] = append(byChunk[r.ChunkID], r)
+func (s *Server) broadcastRevealBatch(list []Reveal) {
+	if len(list) == 0 {
+		return
 	}
 
-	for chunkID, list := range byChunk {
-		seed := s.generateChunkSeed(chunkID)
-		var seedBytes [8]byte
-		binary.LittleEndian.PutUint64(seedBytes[:], seed)
-		msg := &pb.Msg{Payload: &pb.Msg_ChunkSync{ChunkSync: &pb.ChunkSync{
-			ChunkId: &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
-			Seed:    seedBytes[:],
-		}}}
-		for _, r := range list {
-			msg.GetChunkSync().Reveals = append(msg.GetChunkSync().Reveals, &pb.Reveal{
-				ChunkId:  &pb.ChunkID{X: r.ChunkID.X, Y: r.ChunkID.Y},
-				X:        int32(r.X),
-				Y:        int32(r.Y),
-				PlayerId: r.PlayerID,
-			})
+	// Group reveals by chunk for efficient broadcasting
+	chunkReveals := make(map[ChunkID][]Reveal)
+	for _, r := range list {
+		chunkReveals[r.ChunkID] = append(chunkReveals[r.ChunkID], r)
+	}
+
+	// For each chunk, broadcast to all subscribed players
+	for chunkID, reveals := range chunkReveals {
+		s.stateMu.RLock()
+		subscribers, exists := s.subs[chunkID]
+		if !exists || len(subscribers) == 0 {
+			s.stateMu.RUnlock()
+			continue
 		}
-		payload := mustProto(msg)
-		sent := make(map[int32]struct{})
-		for dy := int32(-1); dy <= 1; dy++ {
-			for dx := int32(-1); dx <= 1; dx++ {
-				chk := ChunkID{chunkID.X + dx, chunkID.Y + dy}
-				for pid := range s.subs[chk] {
-					if _, dup := sent[pid]; dup {
-						continue
-					}
-					s.sendToPlayer(pid, payload)
-					sent[pid] = struct{}{}
-				}
+
+		// Create a copy of subscriber list to avoid holding the lock during broadcast
+		subList := make([]int32, 0, len(subscribers))
+		for playerID := range subscribers {
+			subList = append(subList, playerID)
+		}
+		s.stateMu.RUnlock()
+
+		// Create individual reveal messages for each reveal in this chunk
+		for _, reveal := range reveals {
+			msg := &pb.Msg{
+				Payload: &pb.Msg_Reveal{
+					Reveal: &pb.Reveal{
+						ChunkId:  &pb.ChunkID{X: reveal.ChunkID.X, Y: reveal.ChunkID.Y},
+						X:        int32(reveal.X),
+						Y:        int32(reveal.Y),
+						PlayerId: reveal.PlayerID,
+						Flow:     false, // Individual reveals are not flow reveals
+					},
+				},
+			}
+
+			data := mustProto(msg)
+
+			// Send to all subscribers of this chunk
+			for _, playerID := range subList {
+				s.sendToPlayer(playerID, data)
 			}
 		}
 	}
