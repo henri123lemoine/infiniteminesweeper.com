@@ -5,55 +5,36 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import pako from "pako";
-import { ms as PB } from "./generated/messages_pb.js";
 import Minimap from "./Minimap.jsx";
-
-const log = DEV_MODE ? console.log.bind(console) : () => {};
-
-const COMPRESS_THRESHOLD = 100;
-function encodeMsg(msg) {
-  const buf = PB.Msg.encode(msg).finish();
-  if (DEV_MODE) {
-    console.log("OUTGOING:", {
-      raw: msg,
-      serialized_size: buf.length,
-      message_type: Object.keys(msg)[0],
-    });
-  }
-  if (buf.length < COMPRESS_THRESHOLD) {
-    return buf;
-  }
-  return pako.gzip(buf);
-}
-function decodeMsg(data) {
-  let bytes = new Uint8Array(data);
-  if (bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
-    bytes = pako.ungzip(bytes);
-  }
-  const decoded = PB.Msg.decode(bytes);
-  if (DEV_MODE) {
-    console.log("INCOMING:", {
-      raw: decoded,
-      compressed_size: data.byteLength,
-      decompressed_size: bytes.length,
-      message_type: Object.keys(decoded)[0],
-    });
-  }
-  return decoded;
-}
+import { useGameState, CHUNK } from "./useGameState.js";
 
 function App() {
-  const storedId = parseInt(localStorage.getItem("playerId") || "0", 10);
   const storedName = localStorage.getItem("username") || "";
-
-  const [ws, setWs] = useState(null);
-  const [connected, setConnected] = useState(false);
-  const [leaderboard, setLeaderboard] = useState([]);
-  const [playerId, setPlayerId] = useState(storedId);
-  const [playerScore, setPlayerScore] = useState(0);
-  const [username, setUsername] = useState(storedName);
   const [nameInput, setNameInput] = useState(storedName);
+
+  const {
+    connected,
+    playerId,
+    playerScore,
+    username,
+    setUsername,
+    leaderboard,
+    scorePopups,
+    tick,
+    seedCache,
+    subscribedChunks,
+    revealedCellsRef,
+    flaggedCellsRef,
+    playerColorsRef,
+    handleCellClick,
+    ensureChunkSubscription,
+    ensureChunkUnsubscription,
+    connectWs,
+    sendViewUpdate,
+    worldToChunk,
+    isMine,
+  } = useGameState();
+
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const canvasSizeRef = useRef({ w: 0, h: 0, dpr: 1 });
@@ -115,15 +96,6 @@ function App() {
   // Rendering optimization refs
   const lastRenderTime = useRef(0);
   const renderRequestId = useRef(null);
-
-  // Game state
-  const seedCache = useRef(new Map());
-  const subscribedChunks = useRef(new Set());
-  const revealedCellsRef = useRef(new Map());
-  const flaggedCellsRef = useRef(new Map()); // worldX,worldY -> {color: string, playerId: number}
-  const playerColorsRef = useRef(new Map());
-  const [scorePopups, setScorePopups] = useState([]);
-  const [tick, setTick] = useState(0);
 
   // Leaderboard visibility and number formatting
   const [leaderboardVisible, setLeaderboardVisible] = useState(true);
@@ -310,29 +282,9 @@ function App() {
   }, []);
 
   // Constants
-  const CHUNK = 64;
-  const MINE_COUNT = 20;
   const MINIMAP_SIZE = 200;
   const BASE_CELL_SIZE = 32;
   const CELL_SIZE = BASE_CELL_SIZE; // Remove zoom from CELL_SIZE calculation
-
-  // Deterministic helpers
-  const splitmix64 = useCallback((state) => {
-    state = (state + 0x9e3779b97f4a7c15n) & 0xffffffffffffffffn;
-    state =
-      ((state ^ (state >> 30n)) * 0xbf58476d1ce4e5b9n) & 0xffffffffffffffffn;
-    state =
-      ((state ^ (state >> 27n)) * 0x94d049bb133111ebn) & 0xffffffffffffffffn;
-    return state ^ (state >> 31n);
-  }, []);
-
-  const isMine = useCallback(
-    (seed, x, y) => {
-      const cellSeed = splitmix64(seed + BigInt(y * CHUNK + x));
-      return Number(cellSeed % 100n) < MINE_COUNT;
-    },
-    [splitmix64],
-  );
 
   // Convert screen coordinates to world coordinates
   const screenToWorld = useCallback(
@@ -352,22 +304,6 @@ function App() {
     },
     [zoom, CELL_SIZE],
   );
-
-  // Convert world coordinates to chunk and local coordinates
-  const worldToChunk = useCallback((worldX, worldY) => {
-    const chunkX = Math.floor(worldX / CHUNK);
-    const chunkY = Math.floor(worldY / CHUNK);
-
-    // Simpler local coordinate calculation
-    let localX = worldX - chunkX * CHUNK;
-    let localY = worldY - chunkY * CHUNK;
-
-    // Ensure positive local coordinates
-    if (localX < 0) localX += CHUNK;
-    if (localY < 0) localY += CHUNK;
-
-    return { chunkX, chunkY, localX, localY };
-  }, []);
 
   // Add getNumberColor for Minesweeper number coloring
   const getNumberColor = useCallback((num) => {
@@ -417,311 +353,6 @@ function App() {
       return count;
     },
     [isMine],
-  );
-
-  const ensureChunkSubscription = useCallback(
-    (chunkX, chunkY) => {
-      const key = `${chunkX},${chunkY}`;
-      if (!subscribedChunks.current.has(key) && ws && connected) {
-        subscribedChunks.current.add(key);
-        ws.send(encodeMsg(PB.Msg.create({ subscribe: { chunkX, chunkY } })));
-      }
-    },
-    [ws, connected],
-  );
-
-  const ensureChunkUnsubscription = useCallback(
-    (chunkX, chunkY) => {
-      const key = `${chunkX},${chunkY}`;
-      if (subscribedChunks.current.has(key) && ws && connected) {
-        subscribedChunks.current.delete(key);
-        ws.send(encodeMsg(PB.Msg.create({ unsubscribe: { chunkX, chunkY } })));
-      }
-    },
-    [ws, connected],
-  );
-
-  // Flood fill reveal for cells with 0 adjacent mines
-  const floodFillReveal = useCallback(
-    async (startWorldX, startWorldY) => {
-      const toReveal = new Set();
-      const visited = new Set();
-      const queue = [{ worldX: startWorldX, worldY: startWorldY }];
-
-      // BFS to find all connected 0-mine cells
-      while (queue.length > 0) {
-        const { worldX, worldY } = queue.shift();
-        const coordKey = `${worldX},${worldY}`;
-
-        if (visited.has(coordKey)) continue;
-        visited.add(coordKey);
-
-        const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
-        const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
-
-        // Skip if already revealed
-        if (revealedCellsRef.current.has(cellKey)) continue;
-
-        // Ensure we have the seed for this chunk
-        let seed = seedCache.current.get(`${chunkX},${chunkY}`);
-        if (!seed) {
-          // Skip chunks that don't have seeds yet
-          continue;
-        }
-
-        // Skip if it's a mine
-        if (isMine(seed, localX, localY)) continue;
-
-        // Count adjacent mines
-        const adjacentMines = await countAdjacentMines(
-          chunkX,
-          chunkY,
-          localX,
-          localY,
-        );
-
-        // Add to reveal list
-        toReveal.add({
-          worldX,
-          worldY,
-          chunkX,
-          chunkY,
-          localX,
-          localY,
-          adjacentMines,
-          cellKey,
-        });
-
-        // If this cell has 0 adjacent mines, add its neighbors to the queue
-        if (adjacentMines === 0) {
-          for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              if (dx === 0 && dy === 0) continue;
-              const neighborWorldX = worldX + dx;
-              const neighborWorldY = worldY + dy;
-              const neighborCoordKey = `${neighborWorldX},${neighborWorldY}`;
-
-              if (!visited.has(neighborCoordKey)) {
-                queue.push({ worldX: neighborWorldX, worldY: neighborWorldY });
-              }
-            }
-          }
-        }
-      }
-
-      // Apply optimistic reveals locally
-      for (const cell of toReveal) {
-        const optimisticReveal = {
-          chunkId: { X: cell.chunkX, Y: cell.chunkY },
-          x: cell.localX,
-          y: cell.localY,
-          playerId: -1,
-          isMine: false,
-          adjacentMines: cell.adjacentMines,
-        };
-
-        revealedCellsRef.current.set(cell.cellKey, optimisticReveal);
-        ensureChunkSubscription(cell.chunkX, cell.chunkY);
-      }
-
-      setTick((t) => t + 1);
-      return toReveal.size;
-    },
-    [worldToChunk, isMine, countAdjacentMines, ensureChunkSubscription],
-  );
-
-  // Handle cell click
-  const handleCellClick = useCallback(
-    async (worldX, worldY, isRightClick = false) => {
-      if (!ws || !connected) return;
-      if (DEV_MODE)
-        console.log("CELL CLICK:", { worldX, worldY, isRightClick });
-
-      const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
-      const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
-      const flagKey = `${worldX},${worldY}`;
-
-      // Handle right-click for flagging
-      if (isRightClick) {
-        if (DEV_MODE)
-          console.log("ATTEMPTING TO FLAG:", {
-            chunkX,
-            chunkY,
-            localX,
-            localY,
-          });
-        // Don't flag if already flagged
-        if (flaggedCellsRef.current.has(flagKey)) return;
-
-        // Don't flag revealed cells
-        if (revealedCellsRef.current.has(cellKey)) return;
-
-        // Send flag request to server
-        ws.send(
-          encodeMsg(
-            PB.Msg.create({
-              flag: { chunkId: { X: chunkX, Y: chunkY }, x: localX, y: localY },
-            }),
-          ),
-        );
-        setTick((t) => t + 1);
-        return;
-      }
-
-      // Handle left-click: check if it's chording or normal reveal
-      const revealedCell = revealedCellsRef.current.get(cellKey);
-
-      // If clicking on a revealed cell with a number, try chording
-      if (
-        revealedCell &&
-        !revealedCell.isMine &&
-        revealedCell.adjacentMines > 0
-      ) {
-        // Count flags and mines in 3x3 area
-        let flagCount = 0;
-        const cellsToReveal = [];
-
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dy === 0) continue;
-
-            const neighborWorldX = worldX + dx;
-            const neighborWorldY = worldY + dy;
-            const neighborFlagKey = `${neighborWorldX},${neighborWorldY}`;
-
-            const {
-              chunkX: nChunkX,
-              chunkY: nChunkY,
-              localX: nLocalX,
-              localY: nLocalY,
-            } = worldToChunk(neighborWorldX, neighborWorldY);
-            const neighborCellKey = `${nChunkX},${nChunkY},${nLocalX},${nLocalY}`;
-            const neighborRevealed =
-              revealedCellsRef.current.get(neighborCellKey);
-
-            // Count flags and revealed mines
-            if (
-              flaggedCellsRef.current.has(neighborFlagKey) ||
-              (neighborRevealed && neighborRevealed.isMine)
-            ) {
-              flagCount++;
-            } else if (!neighborRevealed) {
-              // This cell can be revealed
-              cellsToReveal.push({
-                worldX: neighborWorldX,
-                worldY: neighborWorldY,
-              });
-            }
-          }
-        }
-
-        // Only chord if flag count matches the number
-        if (flagCount === revealedCell.adjacentMines) {
-          // Reveal all unflagged, unrevealed neighbors
-          for (const cell of cellsToReveal) {
-            handleCellClick(cell.worldX, cell.worldY, false);
-          }
-        }
-        return;
-      }
-
-      ensureChunkSubscription(chunkX, chunkY);
-
-      const key = `${chunkX},${chunkY},${localX},${localY}`;
-      if (revealedCellsRef.current.has(key)) return;
-
-      // Don't reveal flagged cells
-      if (flaggedCellsRef.current.has(flagKey)) return;
-
-      let seed = seedCache.current.get(`${chunkX},${chunkY}`);
-      if (!seed) {
-        // Seed not available yet, user needs to wait for chunk sync
-        return;
-      }
-
-      // If it's a mine, just reveal the single cell
-      if (isMine(seed, localX, localY)) {
-        const optimisticReveal = {
-          chunkId: { X: chunkX, Y: chunkY },
-          x: localX,
-          y: localY,
-          playerId: -1,
-          isMine: true,
-          adjacentMines: 0,
-        };
-
-        revealedCellsRef.current.set(key, optimisticReveal);
-        setTick((t) => t + 1);
-
-        ws.send(
-          encodeMsg(
-            PB.Msg.create({
-              reveal: {
-                chunkId: { X: chunkX, Y: chunkY },
-                x: localX,
-                y: localY,
-              },
-            }),
-          ),
-        );
-        return;
-      }
-
-      // Check adjacent mines for this cell
-      const adjacent = await countAdjacentMines(chunkX, chunkY, localX, localY);
-
-      // If it has 0 adjacent mines, do flood fill
-      if (adjacent === 0) {
-        const revealedCount = await floodFillReveal(worldX, worldY);
-        log(`Flood fill revealed ${revealedCount} cells`);
-
-        ws.send(
-          encodeMsg(
-            PB.Msg.create({
-              reveal: {
-                chunkId: { X: chunkX, Y: chunkY },
-                x: localX,
-                y: localY,
-                flow: true,
-              },
-            }),
-          ),
-        );
-      } else {
-        const optimisticReveal = {
-          chunkId: { X: chunkX, Y: chunkY },
-          x: localX,
-          y: localY,
-          playerId: -1,
-          isMine: false,
-          adjacentMines: adjacent,
-        };
-
-        revealedCellsRef.current.set(key, optimisticReveal);
-        setTick((t) => t + 1);
-
-        ws.send(
-          encodeMsg(
-            PB.Msg.create({
-              reveal: {
-                chunkId: { X: chunkX, Y: chunkY },
-                x: localX,
-                y: localY,
-              },
-            }),
-          ),
-        );
-      }
-    },
-    [
-      ws,
-      connected,
-      worldToChunk,
-      ensureChunkSubscription,
-      isMine,
-      countAdjacentMines,
-      floodFillReveal,
-    ],
   );
 
   // 3D Cell Drawing Functions
@@ -1054,7 +685,7 @@ function App() {
 
   // Subscribe to visible chunks
   const subscribeToVisibleChunks = useCallback(() => {
-    if (!ws || !connected) return;
+    if (!connected) return;
 
     const container = containerRef.current;
     if (!container) return;
@@ -1091,7 +722,6 @@ function App() {
       }
     });
   }, [
-    ws,
     connected,
     zoom,
     ensureChunkSubscription,
@@ -1177,17 +807,8 @@ function App() {
         commitViewRef();
       }
 
-      if (ws && connected) {
-        ws.send(
-          encodeMsg(
-            PB.Msg.create({
-              viewUpdate: {
-                viewX: Math.floor(viewRef.current.x),
-                viewY: Math.floor(viewRef.current.y),
-              },
-            }),
-          ),
-        );
+      if (connected) {
+        sendViewUpdate(viewRef.current.x, viewRef.current.y);
       }
     },
     [
@@ -1196,7 +817,6 @@ function App() {
       screenToWorld,
       handleCellClick,
       commitViewRef,
-      ws,
       connected,
     ],
   );
@@ -1295,17 +915,8 @@ function App() {
         commitViewRef();
       }
 
-      if (ws && connected) {
-        ws.send(
-          encodeMsg(
-            PB.Msg.create({
-              viewUpdate: {
-                viewX: Math.floor(viewRef.current.x),
-                viewY: Math.floor(viewRef.current.y),
-              },
-            }),
-          ),
-        );
+      if (connected) {
+        sendViewUpdate(viewRef.current.x, viewRef.current.y);
       }
     },
     [
@@ -1314,329 +925,16 @@ function App() {
       screenToWorld,
       handleCellClick,
       commitViewRef,
-      ws,
       connected,
     ],
   );
 
-  // WebSocket setup
-  const connectWs = useCallback(() => {
-    const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
-    const websocket = new WebSocket(wsUrl);
-    websocket.binaryType = "arraybuffer";
-
-    websocket.onopen = () => {
-      const msg = PB.Msg.create({
-        hello: { playerId: playerId, name: nameInput, color: playerColor },
-      });
-      websocket.send(encodeMsg(msg));
-      setConnected(true);
-      setWs(websocket);
-    };
-
-    websocket.onclose = () => {
-      setConnected(false);
-      setWs(null);
-    };
-
-    websocket.onmessage = (event) => {
-      const m = decodeMsg(event.data);
-
-      // Additional debug logging for message processing
-      if (DEV_MODE) {
-        console.log("PROCESSING MESSAGE:", {
-          type: Object.keys(m)[0],
-          payload: m,
-        });
-      }
-
-      let data = {};
-      if (m.welcome) {
-        data = {
-          type: "welcome",
-          playerId: m.welcome.playerId,
-          name: m.welcome.name,
-          color: m.welcome.color,
-          viewX: m.welcome.viewX,
-          viewY: m.welcome.viewY,
-        };
-      } else if (m.chunkSync) {
-        data = {
-          type: "chunkSync",
-          chunkId: m.chunkSync.chunkId,
-          seed: m.chunkSync.seed,
-          reveals: m.chunkSync.reveals,
-          flags: m.chunkSync.flags,
-        };
-      } else if (m.revealAck) {
-        data = { type: "revealAck", ok: m.revealAck.ok };
-      } else if (m.flagAck) {
-        data = { type: "flagAck", ok: m.flagAck.ok };
-      } else if (m.leaderboard) {
-        data = {
-          type: "leaderboard",
-          version: m.leaderboard.version,
-          entries: m.leaderboard.entries,
-        };
-      } else if (m.scoreUpdate) {
-        data = {
-          type: "scoreUpdate",
-          score: m.scoreUpdate.score,
-          delta: m.scoreUpdate.delta,
-          worldX: m.scoreUpdate.worldX,
-          worldY: m.scoreUpdate.worldY,
-        };
-      } else if (m.flag) {
-        data = { ...m.flag, chunkId: m.flag.chunkId };
-      } else if (m.reveal) {
-        data = { ...m.reveal, chunkId: m.reveal.chunkId };
-      }
-
-      if (data.type === "welcome") {
-        setPlayerId(data.playerId);
-        setUsername(data.name || "");
-        localStorage.setItem("playerId", data.playerId);
-        localStorage.setItem("username", data.name || "");
-        scheduleViewUpdate(data.viewX || 0, data.viewY || 0);
-        sessionStorage.setItem("viewX", String(data.viewX || 0));
-        sessionStorage.setItem("viewY", String(data.viewY || 0));
-        return;
-      }
-
-      if (data.type === "chunkSync") {
-        // Helper to convert Uint8Array (protobuf bytes) to BigInt
-        const bytesToBig = (u8) =>
-          new DataView(u8.buffer, u8.byteOffset, 8).getBigUint64(0, true);
-
-        const key = `${data.chunkId.X},${data.chunkId.Y}`;
-        seedCache.current.set(key, bytesToBig(data.seed));
-
-        // Handle flags from server
-        if (Array.isArray(data.flags)) {
-          for (const flag of data.flags) {
-            const flagWorldX = flag.chunkId.X * CHUNK + flag.x;
-            const flagWorldY = flag.chunkId.Y * CHUNK + flag.y;
-            const flagKey = `${flagWorldX},${flagWorldY}`;
-
-            flaggedCellsRef.current.set(flagKey, {
-              color: flag.color,
-              playerId: flag.playerId,
-            });
-          }
-          setTick((t) => t + 1);
-        }
-
-        if (Array.isArray(data.reveals)) {
-          for (const cell of data.reveals) {
-            const seed = bytesToBig(data.seed);
-            const cellIsMine = isMine(seed, cell.x, cell.y);
-            let adjacentMines = 0;
-
-            if (!cellIsMine) {
-              // Calculate adjacent mines synchronously since we have the seed
-              for (let dy = -1; dy <= 1; dy++) {
-                for (let dx = -1; dx <= 1; dx++) {
-                  if (dx === 0 && dy === 0) continue;
-                  let nx = cell.x + dx;
-                  let ny = cell.y + dy;
-                  let ncx = cell.chunkId.X;
-                  let ncy = cell.chunkId.Y;
-                  if (nx < 0) {
-                    ncx--;
-                    nx += CHUNK;
-                  } else if (nx >= CHUNK) {
-                    ncx++;
-                    nx -= CHUNK;
-                  }
-                  if (ny < 0) {
-                    ncy--;
-                    ny += CHUNK;
-                  } else if (ny >= CHUNK) {
-                    ncy++;
-                    ny -= CHUNK;
-                  }
-
-                  const nSeed = seedCache.current.get(`${ncx},${ncy}`);
-                  if (nSeed && isMine(nSeed, nx, ny)) adjacentMines++;
-                }
-              }
-            }
-
-            const cellKey = `${cell.chunkId.X},${cell.chunkId.Y},${cell.x},${cell.y}`;
-            revealedCellsRef.current.set(cellKey, {
-              ...cell,
-              isMine: cellIsMine,
-              adjacentMines,
-            });
-          }
-          setTick((t) => t + 1);
-        }
-      } else if (data.type === "flagAck") {
-        // Simple acknowledgment - just indicates success or failure
-        if (!data.ok) {
-          // Flag failed - could show user feedback here if needed
-          console.log("Flag failed");
-        }
-      } else if (data.type === "revealAck") {
-        if (!data.ok) {
-          // Optimistic reveal lost → resync this chunk
-          const key = `${data.chunkId.X},${data.chunkId.Y},${data.x},${data.y}`;
-          revealedCellsRef.current.delete(key);
-
-          // Force a re‑subscribe to get authoritative state
-          ws.send(
-            encodeMsg(
-              PB.Msg.create({
-                subscribe: { chunkX: data.chunkId.X, chunkY: data.chunkId.Y },
-              }),
-            ),
-          );
-
-          setTick((t) => t + 1);
-        }
-      } else if (
-        data.chunkId &&
-        typeof data.x === "number" &&
-        typeof data.y === "number" &&
-        data.color
-      ) {
-        // This is a flag broadcast from server
-        const flagWorldX = data.chunkId.X * CHUNK + data.x;
-        const flagWorldY = data.chunkId.Y * CHUNK + data.y;
-        const flagKey = `${flagWorldX},${flagWorldY}`;
-
-        flaggedCellsRef.current.set(flagKey, {
-          color: data.color,
-          playerId: data.playerId,
-        });
-        playerColorsRef.current.set(data.playerId, data.color);
-
-        setTick((t) => t + 1);
-      } else if (
-        data.chunkId &&
-        typeof data.x === "number" &&
-        typeof data.y === "number" &&
-        typeof data.playerId === "number" &&
-        !data.color
-      ) {
-        // This is a reveal broadcast from server (e.g., from wrong flag)
-        const { chunkX, chunkY, localX, localY } = worldToChunk(
-          data.chunkId.X * CHUNK + data.x,
-          data.chunkId.Y * CHUNK + data.y,
-        );
-        const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
-
-        // Get the seed for this chunk to determine if it's a mine
-        const seed = seedCache.current.get(`${chunkX},${chunkY}`);
-        if (seed) {
-          const cellIsMine = isMine(seed, localX, localY);
-          let adjacentMines = 0;
-
-          if (!cellIsMine) {
-            // Calculate adjacent mines
-            for (let dy = -1; dy <= 1; dy++) {
-              for (let dx = -1; dx <= 1; dx++) {
-                if (dx === 0 && dy === 0) continue;
-                let nx = localX + dx;
-                let ny = localY + dy;
-                let ncx = chunkX;
-                let ncy = chunkY;
-                if (nx < 0) {
-                  ncx--;
-                  nx += CHUNK;
-                } else if (nx >= CHUNK) {
-                  ncx++;
-                  nx -= CHUNK;
-                }
-                if (ny < 0) {
-                  ncy--;
-                  ny += CHUNK;
-                } else if (ny >= CHUNK) {
-                  ncy++;
-                  ny -= CHUNK;
-                }
-
-                const nSeed = seedCache.current.get(`${ncx},${ncy}`);
-                if (nSeed && isMine(nSeed, nx, ny)) adjacentMines++;
-              }
-            }
-          }
-
-          revealedCellsRef.current.set(cellKey, {
-            chunkId: data.chunkId,
-            x: localX,
-            y: localY,
-            playerId: data.playerId,
-            isMine: cellIsMine,
-            adjacentMines,
-          });
-
-          setTick((t) => t + 1);
-        }
-      } else if (data.type === "leaderboard") {
-        if (data.entries) {
-          const list = data.entries
-            .map((e) => {
-              let num = e.score;
-              if (num.endsWith("k")) {
-                num = parseFloat(num.slice(0, -1)) * 1000;
-              } else if (num.endsWith("M")) {
-                num = parseFloat(num.slice(0, -1)) * 1000000;
-              } else {
-                num = parseInt(num) || 0;
-              }
-              return { playerId: e.playerId, name: e.name || "", score: num };
-            })
-            .sort((a, b) => b.score - a.score);
-          setLeaderboard(list);
-        }
-      } else if (data.type === "scoreUpdate") {
-        if (typeof data.score === "number") {
-          setPlayerScore(data.score);
-
-          // Only show popup if there's a delta and valid coordinates (not initial score)
-          if (
-            data.delta &&
-            data.delta !== 0 &&
-            (data.worldX !== 0 || data.worldY !== 0)
-          ) {
-            // Batch score popup updates to prevent blocking
-            requestAnimationFrame(() => {
-              const id = Math.random().toString(36).slice(2);
-              setScorePopups((p) => [
-                ...p,
-                {
-                  id,
-                  worldX: data.worldX,
-                  worldY: data.worldY,
-                  delta: data.delta,
-                },
-              ]);
-              setTimeout(() => {
-                setScorePopups((p) => p.filter((s) => s.id !== id));
-              }, 1000);
-            });
-          }
-        }
-      }
-    };
-
-    return () => {
-      websocket.close();
-    };
-  }, [playerId, nameInput, playerColor, isMine]);
-
   useEffect(() => {
     if (!username) return;
-
-    // Small delay to ensure state is stable
-    const timeoutId = setTimeout(() => {
-      const cleanup = connectWs();
-      return cleanup;
-    }, 100);
-
-    return () => clearTimeout(timeoutId);
-  }, [username]);
+    // Hook returns a cleanup fn
+    const cleanup = connectWs(username, playerColor);
+    return cleanup;
+  }, [username, playerColor]);
 
   // Subscribe to visible chunks when view changes
   useEffect(() => {
