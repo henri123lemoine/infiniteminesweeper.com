@@ -380,17 +380,12 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 		bits = *chunk
 	}
 
-	// group flags by (player,color)
-	type fk struct {
-		id     int32
-		flagID uint32
-	}
-	groups := make(map[fk][]pb.FlagLocation)
+	// Group flags by flagID (the flag's appearance)
+	groups := make(map[uint32][]*pb.FlagLocation)
 	for idx, fl := range flagsMap {
 		x := int32(idx % ChunkSize)
 		y := int32(idx / ChunkSize)
-		key := fk{fl.PlayerID, fl.FlagID}
-		groups[key] = append(groups[key], pb.FlagLocation{X: x, Y: y})
+		groups[fl.FlagID] = append(groups[fl.FlagID], &pb.FlagLocation{X: x, Y: y})
 	}
 	s.stateMu.Unlock()
 
@@ -401,13 +396,11 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 		FlagGroups: make([]*pb.FlagGroup, 0, len(groups)),
 	}}}
 
-	for k, locs := range groups {
-		fg := &pb.FlagGroup{FlagID: k.flagID, Locations: make([]*pb.FlagLocation, 0, len(locs))}
-		for _, l := range locs {
-			lCopy := l
-			fg.Locations = append(fg.Locations, &pb.FlagLocation{X: lCopy.X, Y: lCopy.Y})
-		}
-		cs.GetChunkSync().FlagGroups = append(cs.GetChunkSync().FlagGroups, fg)
+	for flagID, locs := range groups {
+		cs.GetChunkSync().FlagGroups = append(cs.GetChunkSync().FlagGroups, &pb.FlagGroup{
+			FlagID:    flagID,
+			Locations: locs,
+		})
 	}
 
 	s.sendToPlayer(playerID, mustProto(cs))

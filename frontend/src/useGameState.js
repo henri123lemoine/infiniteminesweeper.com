@@ -482,15 +482,13 @@ export const useGameState = () => {
 
           if (Array.isArray(data.flags)) {
             for (const group of data.flags) {
-              playerFlagsRef.current.set(group.playerId, group.flagID);
-
               for (const loc of group.locations) {
                 // Get the chunk coordinates from the parent message
                 const flagWorldX = data.chunkId.X * CHUNK + loc.x;
                 const flagWorldY = data.chunkId.Y * CHUNK + loc.y;
                 const flagKey = `${flagWorldX},${flagWorldY}`;
 
-                // Set the flag on the grid
+                // Set the flag on the grid using its flagID
                 flaggedCellsRef.current.set(flagKey, group.flagID);
               }
             }
