@@ -22,7 +22,7 @@ help:
 	@echo "  make run       # Full production-like build and run"
 	@echo "  make deploy    # Deploy to production"
 
-update: dist/index.html proto/messages.pb.go frontend/src/generated/messages_pb.js
+update: backend/dist/index.html backend/proto/messages.pb.go frontend/src/generated/messages_pb.js
 	@echo "Updating frontend..."
 	cd frontend && $(NVM_ENV) && npm ci
 	@echo "Formatting front-end..."
@@ -32,15 +32,15 @@ update: dist/index.html proto/messages.pb.go frontend/src/generated/messages_pb.
 	@echo "Update complete!"
 
 FRONTEND_SRCS := $(shell find frontend/src -type f)
-dist/index.html: $(FRONTEND_SRCS) frontend/vite.config.mjs
+backend/dist/index.html: $(FRONTEND_SRCS) frontend/vite.config.mjs
 	@echo "Building front-end (Vite)…"
 	cd frontend && $(NVM_ENV) && npm run build
 
-proto/messages.pb.go: proto/messages.proto
+backend/proto/messages.pb.go: backend/proto/messages.proto
 	@echo "Generating Go protobuf stubs..."
 	protoc --go_out=. --go_opt=paths=source_relative $<
 
-frontend/src/generated/messages_pb.js: proto/messages.proto
+frontend/src/generated/messages_pb.js: backend/proto/messages.proto
 	@echo "Generating JS protobuf stubs..."
 	npx pbjs -t static-module -w es6 -o $@ $<
 
@@ -51,7 +51,7 @@ build: update
 
 run-fast: update
 	@echo "Running with Go (fast mode)..."
-	go run .
+	go run ./backend
 
 run: build
 	@echo "Running with Docker..."

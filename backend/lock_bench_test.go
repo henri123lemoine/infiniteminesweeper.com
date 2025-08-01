@@ -36,7 +36,7 @@ func BenchmarkLockHoldTimes(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			start := time.Now()
 			mu.RLock()
-			mu.RUnlock()
+			mu.RUnlock() //lint:ignore SA2001 benchmark
 			lats[i] = time.Since(start)
 		}
 
@@ -58,7 +58,7 @@ func BenchmarkLockHoldTimes(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			start := time.Now()
 			mu.Lock()
-			mu.Unlock()
+			mu.Unlock() //lint:ignore SA2001 benchmark
 			lats[i] = time.Since(start)
 		}
 
