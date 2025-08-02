@@ -1,4 +1,4 @@
-module infinite-minesweeper
+module infiniteminesweeper
 
 go 1.23.0
 

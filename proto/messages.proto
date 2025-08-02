@@ -1,6 +1,6 @@
 syntax = "proto3";
 package ms;
-option go_package = "infinite-minesweeper/proto";
+option go_package = "infiniteminesweeper/proto";
 
 message ChunkID {
   int32 X = 1;

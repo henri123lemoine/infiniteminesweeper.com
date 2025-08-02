@@ -1,7 +1,7 @@
 package main
 
 import (
-	pb "infinite-minesweeper/backend/gen/proto"
+	pb "infiniteminesweeper/backend/gen/proto"
 	"regexp"
 	"time"
 )
