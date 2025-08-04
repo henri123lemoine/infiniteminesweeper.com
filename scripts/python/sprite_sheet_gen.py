@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-from PIL import Image
+from PIL import Image, ImageDraw
 
 ### Palette - name -> hex.  Add / remove colours freely.
 palette: dict[str, str] = {
@@ -60,6 +60,36 @@ def hex_to_hsv(hex_colour: str) -> tuple[float, float, float]:
 def slug(name: str) -> str:
     """File-system-friendly id (lower-snake-case)."""
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def draw_3d_cell(width: int, height: int) -> Image.Image:
+    """Draws a 3D-style unrevealed cell background, similar to CanvasRenderer.js."""
+    img = Image.new("RGB", (width, height))
+    draw = ImageDraw.Draw(img)
+    size = min(width, height)
+    borderWidth = max(1, round(size * 0.08))
+
+    # Mimic the JS version for an "unrevealed" cell's 3D appearance
+    # Top and left highlights
+    draw.rectangle((0, 0, width, borderWidth), fill="#d4d4d4")
+    draw.rectangle((0, 0, borderWidth, height), fill="#d4d4d4")
+
+    # Bottom and right shadows
+    draw.rectangle((borderWidth, height - borderWidth, width, height), fill="#808080")
+    draw.rectangle((width - borderWidth, borderWidth, width, height), fill="#808080")
+
+    # Inner area
+    draw.rectangle(
+        (borderWidth, borderWidth, width - borderWidth, height - borderWidth),
+        fill="#c0c0c0",
+    )
+
+    # Dark corner for depth
+    draw.rectangle(
+        (width - borderWidth, height - borderWidth, width, height), fill="#606060"
+    )
+
+    return img
 
 
 ### Pre-compute palette hues
@@ -199,6 +229,7 @@ def make_sheet(
     grid = math.ceil(math.sqrt(len(records)))
     sheet_w, sheet_h = grid * w_max, grid * h_max
     sheet = Image.new("RGBA", (sheet_w, sheet_h), (0, 0, 0, 0))
+    grey_sheet = Image.new("RGBA", (sheet_w, sheet_h))
 
     meta = {
         "texture": out_png,
@@ -218,6 +249,11 @@ def make_sheet(
         ox = x + (w_max - rec["img"].width) // 2
         oy = y + (h_max - rec["img"].height) // 2
         sheet.paste(rec["img"], (ox, oy), rec["img"])
+
+        # Create grey background version
+        cell_bg = draw_3d_cell(w_max, h_max)
+        grey_sheet.paste(cell_bg, (x, y))
+        grey_sheet.paste(rec["img"], (ox, oy), rec["img"])
 
         meta["frames"][rec["id"]] = {
             "frame": {"x": ox, "y": oy, "w": rec["img"].width, "h": rec["img"].height},
@@ -254,7 +290,12 @@ def make_sheet(
     with open(out_json, "w") as fh:
         json.dump(meta, fh, indent=2)
 
+    out_path = Path(out_png)
+    grey_out_path = out_path.parent / f"grey-{out_path.name}"
+    grey_sheet.save(grey_out_path)
+
     print(f"✅ {len(records)} sprites ➜ {out_png} ({sheet_w}×{sheet_h}) + {out_json}")
+    print(f"✅ {len(records)} sprites on grey background ➜ {grey_out_path} ({sheet_w}×{sheet_h})")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ node_modules/
 
 # Sprites
 frontend/src/assets/spritesheet*.png
+frontend/src/assets/grey-spritesheet*.png
 frontend/src/assets/spritesheet*.json
 scripts/python/**/*.png
 
