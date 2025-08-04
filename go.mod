@@ -9,4 +9,7 @@ require (
 	google.golang.org/protobuf v1.36.6
 )
 
-require github.com/jmespath/go-jmespath v0.4.0 // indirect
+require (
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.22 // indirect
+)
