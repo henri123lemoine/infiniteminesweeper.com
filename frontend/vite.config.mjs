@@ -7,6 +7,8 @@ export default defineConfig(({ mode }) => ({
     outDir: '../backend/dist',
     emptyOutDir: true,
     manifest: false,
+    minify: mode === 'production',
+    sourcemap: mode === 'development',
   },
   server: {
     proxy: {
@@ -16,4 +18,8 @@ export default defineConfig(({ mode }) => ({
   define: {
     __DEV__: mode === 'development',
   },
+  esbuild: mode === 'development' ? {
+    minify: false,
+    keepNames: true,
+  } : undefined,
 }));

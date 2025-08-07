@@ -7,38 +7,29 @@ import (
 )
 
 type ChunkID struct {
-	X, Y int32
+	X, Y int64
 }
 
 type ChunkBits [64]uint64
 
-type Reveal struct {
-	ChunkID  ChunkID `json:"chunkId"`
-	X        int     `json:"x"`
-	Y        int     `json:"y"`
-	PlayerID int32   `json:"playerId"`
+type Flag struct {
+	FlagID uint32
 }
 
-type Flag struct {
-	ChunkID  ChunkID `json:"chunkId"`
-	X        int     `json:"x"`
-	Y        int     `json:"y"`
-	PlayerID int32   `json:"playerId"`
-	FlagID   uint32  `json:"flagId"`
+type PlayerView struct {
+	Chunk ChunkID
+	Cell  uint32
 }
 
 type Player struct {
-	ID          int32
+	ID          uint32
 	Conn        *websocket.Conn
 	Send        chan []byte
 	Mailbox     chan func(*Player) // actor channel
 	TokenBucket TokenBucket
 	Name        string
-
-	// Rate limiting
-	FlagID            uint32
-	RevealWindowStart time.Time
-	RevealCount       int
+	FlagID      uint32
+	View        PlayerView
 
 	// Leaderboard version already sent (protected by mailbox now)
 	LastLBVersion uint64
@@ -47,9 +38,7 @@ type Player struct {
 	SusRevealOverflow int // # of extra reveals processed beyond MaxRevealsPerMin
 
 	// Scoring
-	FlagsInARow    int
-	LastActionTime time.Time
-	Score          int32
+	Score int32
 
 	// outbound-drop counter (closes WS after 32 consecutive drops)
 	dropMisses int

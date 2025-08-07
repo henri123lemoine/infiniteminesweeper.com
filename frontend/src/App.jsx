@@ -36,7 +36,6 @@ function App() {
     ensureChunkSubscription,
     ensureChunkUnsubscription,
     connectWs,
-    sendViewUpdate,
     worldToChunk,
     isMine,
   } = useGameState();
@@ -75,28 +74,13 @@ function App() {
   const handleZoom = useCallback(
     (delta) => {
       setZoom((z) => {
-        const newZoom = Math.min(Math.max(z + delta, 0.5), 3);
-        const container = containerRef.current;
-        if (container) {
-          const centerX = (viewRef.current.x + container.clientWidth / 2) / z;
-          const centerY = (viewRef.current.y + container.clientHeight / 2) / z;
-          scheduleViewUpdate(
-            newZoom * centerX - container.clientWidth / 2,
-            newZoom * centerY - container.clientHeight / 2,
-          );
-        }
-        return newZoom;
+        return Math.min(Math.max(z + delta, 0.5), 3);
       });
     },
-    [scheduleViewUpdate],
+    [],
   );
   const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({
-    x: 0,
-    y: 0,
-    viewX: 0,
-    viewY: 0,
-  });
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0, viewX: 0, viewY: 0 });
   const dragTimeoutRef = useRef(null);
 
   // Rendering optimization refs
@@ -189,41 +173,6 @@ function App() {
     };
     return colors[num] || "#000000";
   }, []);
-
-  const countAdjacentMines = useCallback(
-    async (cx, cy, x, y) => {
-      let count = 0;
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          let nx = x + dx;
-          let ny = y + dy;
-          let ncx = cx;
-          let ncy = cy;
-          if (nx < 0) {
-            ncx--;
-            nx += CHUNK;
-          } else if (nx >= CHUNK) {
-            ncx++;
-            nx -= CHUNK;
-          }
-          if (ny < 0) {
-            ncy--;
-            ny += CHUNK;
-          } else if (ny >= CHUNK) {
-            ncy++;
-            ny -= CHUNK;
-          }
-
-          const nSeed = seedCache.current.get(`${ncx},${ncy}`);
-          if (!nSeed) continue;
-          if (isMine(nSeed, nx, ny)) count++;
-        }
-      }
-      return count;
-    },
-    [isMine],
-  );
 
   // Main Canvas Rendering
   const render = useCallback(() => {
@@ -369,8 +318,11 @@ function App() {
 
       if (!isDragging && dragStart.x) {
         const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
-        const isRight = e.button === 2 || (e.button === 0 && e.ctrlKey);
-        handleCellClick(worldX, worldY, isRight);
+        const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
+        const cellKey = `${chunkX},${chunkY},${cell}`;
+        const isRevealed = revealedCellsRef.current.has(cellKey);
+
+        handleCellClick(worldX, worldY, false, isRevealed);
       }
 
       setIsDragging(false);
@@ -381,10 +333,6 @@ function App() {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
         commitViewRef();
-      }
-
-      if (connected) {
-        sendViewUpdate(viewRef.current.x, viewRef.current.y);
       }
     },
     [
@@ -472,13 +420,18 @@ function App() {
       }
 
       if (!isDragging && dragStart.x && e.changedTouches.length === 1) {
-        // This was a short tap, not a drag or long press - reveal cell
+        // This was a short tap, not a drag or long press - reveal cell or chord
         const touch = e.changedTouches[0];
         const { x: worldX, y: worldY } = screenToWorld(
           touch.clientX,
           touch.clientY,
         );
-        handleCellClick(worldX, worldY, false); // false = left click (reveal)
+        const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
+        const cellKey = `${chunkX},${chunkY},${cell}`;
+        const isRevealed = revealedCellsRef.current.has(cellKey);
+
+        // Pass true for isChord if the cell is already revealed
+        handleCellClick(worldX, worldY, false, isRevealed);
       }
 
       setIsDragging(false);
@@ -489,10 +442,6 @@ function App() {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
         commitViewRef();
-      }
-
-      if (connected) {
-        sendViewUpdate(viewRef.current.x, viewRef.current.y);
       }
     },
     [
@@ -507,14 +456,14 @@ function App() {
 
   useEffect(() => {
     if (!username) return;
-    const cleanup = connectWs(username, flagID);
+    const cleanup = connectWs(username, Number(flagID));
     return cleanup;
-  }, [username, flagID]);
+  }, [username, flagID, connectWs]);
 
   // Subscribe to visible chunks when view changes
   useEffect(() => {
     subscribeToVisibleChunks();
-  }, [subscribeToVisibleChunks]);
+  }, [subscribeToVisibleChunks, viewX, viewY]);
 
   // Sync viewRef to sessionStorage
   useEffect(() => {
@@ -531,6 +480,11 @@ function App() {
       if (renderRequestId.current)
         cancelAnimationFrame(renderRequestId.current);
     };
+  }, []);
+
+  // Pre-load assets
+  useEffect(() => {
+    CanvasRenderer.initSprites();
   }, []);
 
   // Trigger canvas redraw when the game OR the viewport changes
@@ -558,17 +512,16 @@ function App() {
   }, [leaderboard]);
 
   // Calculate current world position for debugging
-  const centerRect = canvasRef.current?.getBoundingClientRect();
-  const container = containerRef.current;
-  const containerWidth = container?.clientWidth || 0;
-  const containerHeight = container?.clientHeight || 0;
+  const container = containerRef.current || { clientWidth: 0, clientHeight: 0 };
+  const containerWidth = container.clientWidth;
+  const containerHeight = container.clientHeight;
   const centerWorldX = Math.floor(
     (viewX + containerWidth / 2 / zoom) / CELL_SIZE,
   );
   const centerWorldY = Math.floor(
     (viewY + containerHeight / 2 / zoom) / CELL_SIZE,
   );
-  const { chunkX: centerChunkX, chunkY: centerChunkY } = worldToChunk(
+  const { chunkX: centerChunkX, chunkY: centerChunkY, cell: centerCell } = worldToChunk(
     centerWorldX,
     centerWorldY,
   );
@@ -612,6 +565,29 @@ function App() {
               }}
               placeholder="Your name"
             />
+            <button
+              onClick={() => {
+                const trimmedName = nameInput.trim();
+                if (trimmedName) {
+                  setUsername(trimmedName);
+                } else {
+                  // Generate a default username with 5 random digits
+                  const randomDigits = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+                  setUsername(`User${randomDigits}`);
+                }
+              }}
+              style={{
+                padding: "10px 20px",
+                backgroundColor: "#4CAF50",
+                color: "white",
+                border: "none",
+                borderRadius: 4,
+                cursor: "pointer",
+                fontSize: 16,
+              }}
+            >
+              Join Game
+            </button>
             <div style={{ margin: "15px 0" }}>
               <div style={{ marginBottom: "10px", fontWeight: "bold" }}>
                 Choose your flag:
@@ -624,23 +600,6 @@ function App() {
                 }}
               />
             </div>
-            <button
-              onClick={() => {
-                if (nameInput.trim()) setUsername(nameInput.trim());
-              }}
-              style={{
-                padding: "10px 20px",
-                backgroundColor: "#4CAF50",
-                color: "white",
-                border: "none",
-                borderRadius: 4,
-                cursor: "pointer",
-                fontSize: 16,
-              }}
-              disabled={!nameInput.trim()}
-            >
-              Join Game
-            </button>
           </div>
         </div>
       )}
@@ -694,7 +653,7 @@ function App() {
             );
           })}
 
-          {import.meta.env.DEV && (
+          {__DEV__ && (
             <div className="coordinates-debug">
               <div
                 className={`connection-status ${connected ? "connected" : "disconnected"}`}
@@ -744,7 +703,7 @@ function App() {
               <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
                 {topPlayers.map((p) => (
                   <li
-                    key={p.playerId}
+                    key={p.name}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -762,7 +721,7 @@ function App() {
                           rendererRef.current
                             .drawSprite(
                               ctx,
-                              playerFlagsRef.current.get(p.playerId) ?? 0,
+                              playerFlagsRef.current.get(p.name) ?? 0,
                               0,
                               0,
                               15,
@@ -772,7 +731,7 @@ function App() {
                         }}
                         style={{ marginRight: 6, verticalAlign: "middle" }}
                       />
-                      {p.name ? p.name : `Player ${p.playerId}`}
+                      {p.name}
                     </span>
                     <span style={{ fontWeight: "bold" }}>{formatScore(p.score)}</span>
                   </li>

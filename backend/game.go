@@ -1,26 +1,21 @@
 package main
 
 import (
-	"encoding/binary"
-	pb "infinite-minesweeper/backend/gen/proto"
+	pb "infiniteminesweeper/backend/gen/proto"
+	"math"
 	"regexp"
-	"time"
+	"sync"
 )
 
-// Helpers
+// Helper Functions
 
-func worldToChunk(x, y int) (ChunkID, int, int) {
-	cx := x / ChunkSize
-	if x < 0 && x%ChunkSize != 0 {
-		cx--
-	}
-	cy := y / ChunkSize
-	if y < 0 && y%ChunkSize != 0 {
-		cy--
-	}
-	lx := x - cx*ChunkSize
-	ly := y - cy*ChunkSize
-	return ChunkID{int32(cx), int32(cy)}, lx, ly
+func worldToChunk(x, y int) (ChunkID, uint32) {
+	cx := int64(math.Floor(float64(x) / float64(ChunkSize)))
+	cy := int64(math.Floor(float64(y) / float64(ChunkSize)))
+
+	lx := x - int(cx)*ChunkSize
+	ly := y - int(cy)*ChunkSize
+	return ChunkID{X: cx, Y: cy}, uint32(ly*ChunkSize + lx)
 }
 
 // splitmix64 - deterministic PRNG for bomb placement (matches frontend)
@@ -31,15 +26,51 @@ func splitmix64(state uint64) uint64 {
 	return state ^ (state >> 31)
 }
 
-// Game logic
+func cellIndexToXY(cell uint32) (int, int) {
+	return int(cell % ChunkSize), int(cell / ChunkSize)
+}
 
-// isMine determines if a cell contains a mine using the same logic as frontend
-func (s *Server) isMine(seed uint64, x, y int) bool {
-	cellSeed := splitmix64(seed + uint64(y*ChunkSize+x))
+//  Adjacent-helper additions
+
+// countAdjacentRevealedMines counts *already-revealed* mines around (chunkID,cell)
+func (s *Server) countAdjacentRevealedMines(chunkID ChunkID, cell uint32) int {
+	x, y := cellIndexToXY(cell)
+	worldX, worldY := int(chunkID.X)*ChunkSize+x, int(chunkID.Y)*ChunkSize+y
+	cnt := 0
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			wx, wy := worldX+dx, worldY+dy
+			cid, cidx := worldToChunk(wx, wy)
+			if s.isCellRevealed(cid, cidx) && s.isMine(cid, cidx) {
+				cnt++
+			}
+		}
+	}
+	return cnt
+}
+
+// applyScore clamps at 0 and returns the new total
+func (s *Server) applyScore(playerID uint32, delta int32) int32 {
+	newScore := s.scores[playerID] + delta
+	if newScore < 0 {
+		newScore = 0
+	}
+	s.scores[playerID] = newScore
+	return newScore
+}
+
+// isMine determines if a cell contains a mine using the chunk's seed.
+func (s *Server) isMine(chunkID ChunkID, cell uint32) bool {
+	seed := s.generateChunkSeed(chunkID)
+	cellSeed := splitmix64(seed + uint64(cell))
 	return (cellSeed % 100) < MineCount
 }
 
-func (s *Server) countAdjacentMines(chunkID ChunkID, x, y int) int {
+func (s *Server) countAdjacentMines(chunkID ChunkID, cell uint32) int {
+	x, y := cellIndexToXY(cell)
 	worldX := int(chunkID.X)*ChunkSize + x
 	worldY := int(chunkID.Y)*ChunkSize + y
 	count := 0
@@ -50,9 +81,8 @@ func (s *Server) countAdjacentMines(chunkID ChunkID, x, y int) int {
 			}
 			wx := worldX + dx
 			wy := worldY + dy
-			cid, lx, ly := worldToChunk(wx, wy)
-			seed := s.generateChunkSeed(cid)
-			if s.isMine(seed, lx, ly) {
+			cid, cidx := worldToChunk(wx, wy)
+			if s.isMine(cid, cidx) {
 				count++
 			}
 		}
@@ -71,464 +101,356 @@ func isValidUsername(name string) bool {
 	return usernameRegex.MatchString(name)
 }
 
-// Player action handlers
-
-// TODO: validate, and possibly add speed score
-// New scoring system:
-// - reveals = 1pt
-// - correct flags = +flag-in-a-row multiplier (capped at 20x)
-// - wrong flags = -20pts (and resets multiplier)
-// - bombs = -100pts
-// - minimum score = 0
-
-func (s *Server) flag(playerID int32, chunkID ChunkID, x, y int) bool {
-	// Bounds check
-	if !s.isValidCoordinate(x, y) {
-		return false
-	}
-
+// Unified reveal / flag / chord handler
+// – All state mutations happen while the write-lock is held
+// – Actual broadcasts happen **after** the lock is released to avoid writer->reader self-dead-locks.
+func (s *Server) handleReveal(
+	playerID uint32,
+	requestID uint64,
+	chunkID ChunkID,
+	cell uint32,
+	isRightClick bool,
+	isChord bool,
+) {
+	// phase 1: mutate shared state under the write-lock and collect the deltas
 	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
 
-	// Check if cell is already revealed
-	chunk := s.chunks[chunkID]
-	if chunk != nil {
-		bitIndex := y*ChunkSize + x
-		wordIndex := bitIndex / 64
-		bitOffset := bitIndex % 64
-		if chunk[wordIndex]&(1<<bitOffset) != 0 {
-			return false // Can't flag revealed cells
+	// 1. Initial State & Validation
+	x, y := cellIndexToXY(cell)
+	if x < 0 || x >= ChunkSize || y < 0 || y >= ChunkSize {
+		s.stateMu.Unlock()
+		return // Invalid cell index.
+	}
+
+	isRevealed := s.isCellRevealed(chunkID, cell)
+	isFlagged := s.isCellFlagged(chunkID, cell)
+
+	// collectors that will be handed to the broadcaster later
+	allRevealedCells := make(map[ChunkID]*pb.RevealedCells)
+	allPlacedFlags := make(map[ChunkID][]*pb.FlagPlacement)
+	var scoreDelta int32
+
+	// 2. Process command intent
+	if isRightClick {
+		// FLAG INTENT
+		if isRevealed || isFlagged {
+			s.sendRevealAck(playerID, requestID, false, nil, 0, chunkID, cell)
+			s.stateMu.Unlock()
+			return
 		}
-	}
 
-	// Check if cell is already flagged
-	bitIndex := y*ChunkSize + x
-	if s.flags[chunkID] != nil {
-		if _, exists := s.flags[chunkID][bitIndex]; exists {
-			return false // Already flagged
-		}
-	}
-
-	// Get player info (atomically under the same read‑lock)
-	s.playersMu.RLock()
-	var player *Player
-	playerFlagID := s.playerFlags[playerID]
-	if conns, ok := s.players[playerID]; ok {
-		for p := range conns {
-			player = p
-			break
-		}
-	}
-	s.playersMu.RUnlock()
-	if player == nil {
-		return false
-	}
-
-	// Determine if this cell contains a mine
-	seed := s.generateChunkSeed(chunkID)
-	isMine := s.isMine(seed, x, y)
-
-	res := make(chan int32, 1)
-	player.Mailbox <- func(pl *Player) {
-		if isMine {
-			// Correct flag: award points with multiplier
-			pl.FlagsInARow++
-			multiplier := pl.FlagsInARow
-			if multiplier > 20 {
-				multiplier = 20
-			}
-			pl.Score += int32(multiplier)
-
-			// Store the flag
-			if s.flags[chunkID] == nil {
-				s.flags[chunkID] = make(map[int]Flag)
-			}
-			flag := Flag{
-				ChunkID:  chunkID,
-				X:        x,
-				Y:        y,
-				PlayerID: playerID,
-				FlagID:   playerFlagID,
-			}
-			s.flags[chunkID][bitIndex] = flag
-
-			// Write to WAL
-			s.writeWALEntry("flag", flag)
-
-			// Broadcast flag to subscribers
-			s.broadcastFlagTo3x3(flag)
-
+		playerFlagID := s.playerFlags[playerID]
+		if s.isMine(chunkID, cell) {
+			scoreDelta = 10 // correct flag
+			s.applyScore(playerID, scoreDelta)
+			s.setCellFlagged(chunkID, cell, playerID, playerFlagID, &allPlacedFlags)
+			ack := &pb.RevealAck{Outcome: &pb.RevealAck_FlaggedCell{FlaggedCell: &pb.FlagPlacement{Cell: cell, FlagID: playerFlagID}}}
+			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
 		} else {
-			// Wrong flag: penalize and auto-reveal
-			pl.Score -= 20
-			pl.FlagsInARow = 0 // Reset multiplier
+			scoreDelta = -20 // wrong flag
+			s.applyScore(playerID, scoreDelta)
+			s.setCellRevealed(chunkID, cell, playerID, &allRevealedCells)
+			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: &pb.RevealedCells{Cells: []uint32{cell}}}}
+			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
+		}
+	} else if isChord {
+		// CHORD INTENT WITH FLOOD FILL
+		if !isRevealed {
+			s.sendRevealAck(playerID, requestID, false, nil, 0, chunkID, cell)
+			s.stateMu.Unlock()
+			return
+		}
 
-			// Auto-reveal the cell (like a normal reveal but with penalty already applied)
-			if chunk == nil {
-				chunk = &ChunkBits{}
-				s.chunks[chunkID] = chunk
+		need := s.countAdjacentMines(chunkID, cell)
+		have := s.countAdjacentFlags(chunkID, cell) +
+			s.countAdjacentRevealedMines(chunkID, cell) // *** revealed mines now count ***
+		if need != have {
+			s.sendRevealAck(playerID, requestID, false, nil, 0, chunkID, cell)
+			s.stateMu.Unlock()
+			return
+		}
+
+		// BFS queue seeded with all adjacent cells
+		type qItem struct {
+			Cid  ChunkID
+			Cidx uint32
+		}
+		queue := []qItem{}
+		visited := make(map[qItem]struct{})
+		for dy := -1; dy <= 1; dy++ {
+			for dx := -1; dx <= 1; dx++ {
+				if dx == 0 && dy == 0 {
+					continue
+				}
+				wx := int(chunkID.X)*ChunkSize + x + dx
+				wy := int(chunkID.Y)*ChunkSize + y + dy
+				cid, cidx := worldToChunk(wx, wy)
+				queue = append(queue, qItem{cid, cidx})
 			}
-			wordIndex := bitIndex / 64
-			bitOffset := bitIndex % 64
-			chunk[wordIndex] |= 1 << bitOffset
+		}
 
-			// Track who revealed it
-			if s.cellOwners[chunkID] == nil {
-				s.cellOwners[chunkID] = make(map[int]int32)
+		// Process flood-fill: reveal neighbors; if zero, enqueue its neighbors
+		for len(queue) > 0 {
+			curr := queue[0]
+			queue = queue[1:]
+			if _, seen := visited[curr]; seen {
+				continue
 			}
-			s.cellOwners[chunkID][bitIndex] = playerID
+			visited[curr] = struct{}{}
 
-			// Write to WAL (auto-reveal from wrong flag)
-			reveal := Reveal{ChunkID: chunkID, X: x, Y: y, PlayerID: playerID}
-			s.writeWALEntry("reveal", reveal)
-
-			// Broadcast the auto-reveal to all players who can see this chunk
-			s.broadcastRevealTo3x3(reveal)
-		}
-
-		pl.LastActionTime = time.Now()
-
-		// Cap score at 0
-		if pl.Score < 0 {
-			pl.Score = 0
-		}
-
-		res <- pl.Score
-	}
-	score := <-res
-
-	old := s.scores[playerID]
-	delta := score - old
-	s.scores[playerID] = score
-
-	// Mark leaderboard as dirty for persistence
-	s.lbDirty = true
-
-	// Send score update to player
-	worldX := int(chunkID.X)*ChunkSize + x
-	worldY := int(chunkID.Y)*ChunkSize + y
-	s.sendScoreUpdate(playerID, score, worldX, worldY, delta)
-
-	return true
-}
-
-func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
-	// Bounds check
-	if !s.isValidCoordinate(x, y) {
-		return false
-	}
-
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-
-	// Get or create chunk
-	chunk, exists := s.chunks[chunkID]
-	if !exists {
-		chunk = &ChunkBits{}
-		s.chunks[chunkID] = chunk
-	}
-
-	// Check if already revealed
-	bitIndex := y*ChunkSize + x
-	wordIndex := bitIndex / 64
-	bitOffset := bitIndex % 64
-
-	if chunk[wordIndex]&(1<<bitOffset) != 0 {
-		return false // Already revealed
-	}
-
-	// Set the bit (mark as revealed)
-	chunk[wordIndex] |= 1 << bitOffset
-
-	// Determine if this cell is a mine
-	seed := s.generateChunkSeed(chunkID)
-	isMine := s.isMine(seed, x, y)
-
-	// Update player score based on reveal
-	s.playersMu.RLock()
-	var player *Player
-	if conns, ok := s.players[playerID]; ok {
-		for p := range conns { // pick first connection while lock is held
-			player = p
-			break
-		}
-	}
-	s.playersMu.RUnlock()
-
-	if player != nil {
-		res := make(chan int32, 1)
-		oldScore := make(chan int32, 1)
-		player.Mailbox <- func(pl *Player) {
-			oldScore <- pl.Score // Send old score before changes
-			if isMine {
-				pl.Score -= 100 // bomb penalty
-				pl.FlagsInARow = 0
-			} else {
-				pl.Score += 1 // normal reveal
+			// skip if already revealed or flagged
+			if s.isCellRevealed(curr.Cid, curr.Cidx) || s.isCellFlagged(curr.Cid, curr.Cidx) {
+				continue
 			}
-			if pl.Score < 0 {
-				pl.Score = 0
+
+			if s.isMine(curr.Cid, curr.Cidx) {
+				// mine hit under chord
+				scoreDelta -= 100
+				s.setCellRevealed(curr.Cid, curr.Cidx, playerID, &allRevealedCells)
+				continue
 			}
-			pl.LastActionTime = time.Now()
-			res <- pl.Score
-		}
-		prevScore := <-oldScore
-		newScore := <-res
-		worldX := int(chunkID.X)*ChunkSize + x
-		worldY := int(chunkID.Y)*ChunkSize + y
-		delta := newScore - prevScore
-		s.sendScoreUpdate(playerID, newScore, worldX, worldY, delta)
-	}
 
-	// Track who revealed it
-	if s.cellOwners[chunkID] == nil {
-		s.cellOwners[chunkID] = make(map[int]int32)
-	}
-	s.cellOwners[chunkID][bitIndex] = playerID
-
-	// Update leaderboard score
-	if player != nil {
-		s.scores[playerID] = player.Score
-	} else {
-		// For tests or cases where player is not registered, just increment score
-		s.scores[playerID]++
-	}
-	s.lbDirty = true
-
-	// Create reveal message
-	reveal := Reveal{
-		ChunkID:  chunkID,
-		X:        x,
-		Y:        y,
-		PlayerID: playerID,
-	}
-
-	// Write to WAL
-	s.writeWALEntry("reveal", reveal)
-
-	// Broadcast to 3x3 neighborhood
-	s.broadcastRevealTo3x3(reveal)
-
-	// persistence: mark dirty so that next snapshot loop rewrites file
-	s.lbDirty = true
-	return true
-}
-
-func (s *Server) floodReveal(playerID int32, chunkID ChunkID, x, y int) bool {
-	if !s.isValidCoordinate(x, y) {
-		return false
-	}
-
-	worldX := int(chunkID.X)*ChunkSize + x
-	worldY := int(chunkID.Y)*ChunkSize + y
-
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-
-	chunk, exists := s.chunks[chunkID]
-	if !exists {
-		chunk = &ChunkBits{}
-		s.chunks[chunkID] = chunk
-	}
-	bitIndex := y*ChunkSize + x
-	wordIndex := bitIndex / 64
-	bitOffset := bitIndex % 64
-	if chunk[wordIndex]&(1<<bitOffset) != 0 {
-		return false
-	}
-
-	seed := s.generateChunkSeed(chunkID)
-	if s.isMine(seed, x, y) {
-		return false
-	}
-	if s.countAdjacentMines(chunkID, x, y) != 0 {
-		return false
-	}
-
-	type cell struct{ wx, wy int }
-	queue := []cell{{worldX, worldY}}
-	visited := make(map[cell]struct{})
-	var reveals []Reveal
-
-	for len(queue) > 0 {
-		c := queue[0]
-		queue = queue[1:]
-		if _, ok := visited[c]; ok {
-			continue
-		}
-		visited[c] = struct{}{}
-
-		cid, lx, ly := worldToChunk(c.wx, c.wy)
-		ch := s.chunks[cid]
-		if ch == nil {
-			ch = &ChunkBits{}
-			s.chunks[cid] = ch
-		}
-		bIdx := ly*ChunkSize + lx
-		wIdx := bIdx / 64
-		bOff := bIdx % 64
-		if ch[wIdx]&(1<<bOff) != 0 {
-			continue
-		}
-
-		seed := s.generateChunkSeed(cid)
-		if s.isMine(seed, lx, ly) {
-			continue
-		}
-
-		ch[wIdx] |= 1 << bOff
-
-		if s.cellOwners[cid] == nil {
-			s.cellOwners[cid] = make(map[int]int32)
-		}
-		s.cellOwners[cid][bIdx] = playerID
-
-		reveals = append(reveals, Reveal{ChunkID: cid, X: lx, Y: ly, PlayerID: playerID})
-
-		if s.countAdjacentMines(cid, lx, ly) == 0 {
-			for dy := -1; dy <= 1; dy++ {
-				for dx := -1; dx <= 1; dx++ {
-					if dx == 0 && dy == 0 {
-						continue
+			// reveal this cell
+			s.setCellRevealed(curr.Cid, curr.Cidx, playerID, &allRevealedCells)
+			scoreDelta += 1 // safe cell revealed via chord
+			adj := s.countAdjacentMines(curr.Cid, curr.Cidx)
+			if adj == 0 {
+				// expand flood-fill around this zero cell
+				cx, cy := cellIndexToXY(curr.Cidx)
+				for dy := -1; dy <= 1; dy++ {
+					for dx := -1; dx <= 1; dx++ {
+						if dx == 0 && dy == 0 {
+							continue
+						}
+						wx := int(curr.Cid.X)*ChunkSize + cx + dx
+						wy := int(curr.Cid.Y)*ChunkSize + cy + dy
+						ncid, ncidx := worldToChunk(wx, wy)
+						queue = append(queue, qItem{ncid, ncidx})
 					}
-					queue = append(queue, cell{c.wx + dx, c.wy + dy})
 				}
 			}
 		}
+
+		s.applyScore(playerID, scoreDelta)
+		ack := &pb.RevealAck{
+			Outcome: &pb.RevealAck_RevealedCells{
+				RevealedCells: allRevealedCells[chunkID],
+			},
+		}
+		s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
+	} else {
+		// STANDARD REVEAL INTENT
+		if isRevealed || isFlagged {
+			s.sendRevealAck(playerID, requestID, false, nil, 0, chunkID, cell)
+			s.stateMu.Unlock()
+			return
+		}
+
+		if s.isMine(chunkID, cell) {
+			scoreDelta = -100
+			s.applyScore(playerID, scoreDelta)
+			s.setCellRevealed(chunkID, cell, playerID, &allRevealedCells)
+			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
+			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
+		} else if s.countAdjacentMines(chunkID, cell) > 0 {
+			scoreDelta = 1
+			s.applyScore(playerID, scoreDelta)
+			s.setCellRevealed(chunkID, cell, playerID, &allRevealedCells)
+			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
+			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
+		} else {
+			// Flood fill logic for empty cells
+			q := []struct {
+				CId  ChunkID
+				CIdx uint32
+			}{{chunkID, cell}}
+			visited := make(map[struct {
+				CId  ChunkID
+				CIdx uint32
+			}]struct{})
+
+			for len(q) > 0 {
+				curr := q[0]
+				q = q[1:]
+
+				if _, exists := visited[curr]; exists || s.isCellRevealed(curr.CId, curr.CIdx) || s.isCellFlagged(curr.CId, curr.CIdx) {
+					continue
+				}
+				visited[curr] = struct{}{}
+				s.setCellRevealed(curr.CId, curr.CIdx, playerID, &allRevealedCells)
+
+				if s.countAdjacentMines(curr.CId, curr.CIdx) == 0 {
+					currX, currY := cellIndexToXY(curr.CIdx)
+					for dy := -1; dy <= 1; dy++ {
+						for dx := -1; dx <= 1; dx++ {
+							if dx == 0 && dy == 0 {
+								continue
+							}
+							wX, wY := int(curr.CId.X)*ChunkSize+currX+dx, int(curr.CId.Y)*ChunkSize+currY+dy
+							nCId, nCIdx := worldToChunk(wX, wY)
+							q = append(q, struct {
+								CId  ChunkID
+								CIdx uint32
+							}{nCId, nCIdx})
+						}
+					}
+				}
+			}
+			scoreDelta = int32(len(visited))
+			s.applyScore(playerID, scoreDelta)
+			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
+			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
+		}
 	}
 
-	if len(reveals) == 0 {
+	s.lbDirty = true
+
+	// phase 2: hand the mutations to the outer scope and release the lock
+	revealsToSend := allRevealedCells
+	flagsToSend := allPlacedFlags
+	s.stateMu.Unlock()
+
+	// phase 3: broadcast while *no* lock is held, preventing dead-locks
+	if len(revealsToSend) > 0 || len(flagsToSend) > 0 {
+		s.broadcastUpdates(revealsToSend, flagsToSend)
+	}
+}
+
+// Logic Helpers
+
+func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, collector *map[ChunkID]*pb.RevealedCells) {
+	if s.chunks[chunkID] == nil {
+		s.chunks[chunkID] = &ChunkBits{}
+	}
+	x, y := cellIndexToXY(cell)
+	bitIndex := y*ChunkSize + x
+	s.chunks[chunkID][bitIndex/64] |= (1 << (bitIndex % 64))
+
+	if (*collector)[chunkID] == nil {
+		(*collector)[chunkID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
+	}
+	(*collector)[chunkID].Cells = append((*collector)[chunkID].Cells, cell)
+}
+
+func (s *Server) setCellFlagged(chunkID ChunkID, cell uint32, playerID uint32, flagID uint32, collector *map[ChunkID][]*pb.FlagPlacement) {
+	if s.flags[chunkID] == nil {
+		s.flags[chunkID] = make(map[uint32]Flag)
+	}
+	s.flags[chunkID][cell] = Flag{FlagID: flagID}
+
+	if (*collector)[chunkID] == nil {
+		(*collector)[chunkID] = make([]*pb.FlagPlacement, 0)
+	}
+	placement := &pb.FlagPlacement{Cell: cell, FlagID: flagID}
+	(*collector)[chunkID] = append((*collector)[chunkID], placement)
+}
+
+func (s *Server) isCellRevealed(chunkID ChunkID, cell uint32) bool {
+	chunk, ok := s.chunks[chunkID]
+	if !ok || chunk == nil {
 		return false
 	}
-
-	s.playersMu.RLock()
-	var player *Player
-	if conns, ok := s.players[playerID]; ok {
-		for p := range conns {
-			player = p
-			break
-		}
-	}
-	s.playersMu.RUnlock()
-
-	var delta int32
-	if player != nil {
-		res := make(chan int32, 1)
-		old := make(chan int32, 1)
-		player.Mailbox <- func(pl *Player) {
-			old <- pl.Score
-			pl.Score += int32(len(reveals))
-			if pl.Score < 0 {
-				pl.Score = 0
-			}
-			pl.LastActionTime = time.Now()
-			res <- pl.Score
-		}
-		prev := <-old
-		newScore := <-res
-		delta = newScore - prev
-		s.scores[playerID] = newScore
-		s.lbDirty = true
-		s.sendScoreUpdate(playerID, newScore, worldX, worldY, delta)
-	} else {
-		s.scores[playerID] += int32(len(reveals))
-		s.lbDirty = true
-	}
-
-	for _, rv := range reveals {
-		s.writeWALEntry("reveal", rv)
-	}
-
-	s.broadcastRevealBatch(reveals)
-
-	return true
+	bitIndex := cell
+	return (chunk[bitIndex/64] & (1 << (bitIndex % 64))) != 0
 }
 
-// Broadcast helpers
+func (s *Server) isCellFlagged(chunkID ChunkID, cell uint32) bool {
+	chunkFlags, ok := s.flags[chunkID]
+	if !ok {
+		return false
+	}
+	_, exists := chunkFlags[cell]
+	return exists
+}
 
-func (s *Server) broadcastFlagTo3x3(flag Flag) {
-	// Caller already holds stateMu
-	pbFlag := &pb.Msg{Payload: &pb.Msg_Flag{Flag: &pb.Flag{
-		ChunkId: &pb.ChunkID{X: flag.ChunkID.X, Y: flag.ChunkID.Y},
-		X:       int32(flag.X), Y: int32(flag.Y),
-		PlayerId: flag.PlayerID, FlagID: flag.FlagID,
-	}}}
-	payload := mustProto(pbFlag)
-	sent := make(map[int32]struct{})
-
-	for dy := int32(-1); dy <= 1; dy++ {
-		for dx := int32(-1); dx <= 1; dx++ {
-			chk := ChunkID{flag.ChunkID.X + dx, flag.ChunkID.Y + dy}
-			for pid := range s.subs[chk] {
-				if _, dup := sent[pid]; dup {
-					continue
-				}
-				s.sendToPlayer(pid, payload)
-				sent[pid] = struct{}{}
+func (s *Server) countAdjacentFlags(chunkID ChunkID, cell uint32) int {
+	x, y := cellIndexToXY(cell)
+	worldX, worldY := int(chunkID.X)*ChunkSize+x, int(chunkID.Y)*ChunkSize+y
+	count := 0
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			wx, wy := worldX+dx, worldY+dy
+			cid, cidx := worldToChunk(wx, wy)
+			if s.isCellFlagged(cid, cidx) {
+				count++
 			}
 		}
 	}
+	return count
 }
 
-func (s *Server) broadcastRevealTo3x3(reveal Reveal) {
-	// Caller already holds stateMu
-	pbReveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{
-		ChunkId: &pb.ChunkID{X: reveal.ChunkID.X, Y: reveal.ChunkID.Y},
-		X:       int32(reveal.X), Y: int32(reveal.Y), PlayerId: reveal.PlayerID,
-	}}}
-	payload := mustProto(pbReveal)
-	sent := make(map[int32]struct{})
+// Broadcast and Response Helpers
 
-	for dy := int32(-1); dy <= 1; dy++ {
-		for dx := int32(-1); dx <= 1; dx++ {
-			chk := ChunkID{reveal.ChunkID.X + dx, reveal.ChunkID.Y + dy}
-			for pid := range s.subs[chk] {
-				if _, dup := sent[pid]; dup {
-					continue
-				}
-				s.sendToPlayer(pid, payload)
-				sent[pid] = struct{}{}
-			}
-		}
-	}
-}
-
-func (s *Server) broadcastRevealBatch(reveals []Reveal) {
-	// Caller already holds stateMu
-	byChunk := make(map[ChunkID][]Reveal)
-	for _, r := range reveals {
-		byChunk[r.ChunkID] = append(byChunk[r.ChunkID], r)
+func (s *Server) sendRevealAck(playerID uint32, requestID uint64, ok bool, ack *pb.RevealAck, delta int32, chunkID ChunkID, cell uint32) {
+	// If the provided ack is nil (which happens on failure), create a new one.
+	if ack == nil {
+		ack = &pb.RevealAck{}
 	}
 
-	for chunkID, list := range byChunk {
-		seed := s.generateChunkSeed(chunkID)
-		var seedBytes [8]byte
-		binary.LittleEndian.PutUint64(seedBytes[:], seed)
-		msg := &pb.Msg{Payload: &pb.Msg_ChunkSync{ChunkSync: &pb.ChunkSync{
+	ack.RequestId = requestID
+	ack.Ok = ok
+
+	if ok {
+		ack.ScoreUpdate = &pb.ScoreUpdate{
+			Score:   s.scores[playerID],
+			Delta:   delta,
 			ChunkId: &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
-			Seed:    seedBytes[:],
-		}}}
-		for _, r := range list {
-			msg.GetChunkSync().Reveals = append(msg.GetChunkSync().Reveals, &pb.Reveal{
-				ChunkId:  &pb.ChunkID{X: r.ChunkID.X, Y: r.ChunkID.Y},
-				X:        int32(r.X),
-				Y:        int32(r.Y),
-				PlayerId: r.PlayerID,
-			})
+			Cell:    cell,
 		}
-		payload := mustProto(msg)
-		sent := make(map[int32]struct{})
-		for dy := int32(-1); dy <= 1; dy++ {
-			for dx := int32(-1); dx <= 1; dx++ {
-				chk := ChunkID{chunkID.X + dx, chunkID.Y + dy}
-				for pid := range s.subs[chk] {
-					if _, dup := sent[pid]; dup {
-						continue
-					}
-					s.sendToPlayer(pid, payload)
-					sent[pid] = struct{}{}
-				}
-			}
+	}
+	s.sendToPlayer(playerID, mustProto(&pb.Msg{Payload: &pb.Msg_RevealAck{RevealAck: ack}}))
+}
+
+func (s *Server) broadcastUpdates(reveals map[ChunkID]*pb.RevealedCells, flags map[ChunkID][]*pb.FlagPlacement) {
+	var wg sync.WaitGroup
+
+	for chunkID, cells := range reveals {
+		wg.Add(1)
+		go func(cid ChunkID, c *pb.RevealedCells) {
+			defer wg.Done()
+			msg := &pb.Msg{Payload: &pb.Msg_ChunkUpdateBroadcast{ChunkUpdateBroadcast: &pb.ChunkUpdateBroadcast{
+				ChunkId: &pb.ChunkID{X: cid.X, Y: cid.Y},
+				Update:  &pb.ChunkUpdateBroadcast_RevealedCells{RevealedCells: c},
+			}}}
+			s.broadcastToChunkSubs(cid, mustProto(msg))
+		}(chunkID, cells)
+	}
+
+	for chunkID, placements := range flags {
+		for _, p := range placements {
+			wg.Add(1)
+			go func(cid ChunkID, placement *pb.FlagPlacement) {
+				defer wg.Done()
+				msg := &pb.Msg{Payload: &pb.Msg_ChunkUpdateBroadcast{ChunkUpdateBroadcast: &pb.ChunkUpdateBroadcast{
+					ChunkId: &pb.ChunkID{X: cid.X, Y: cid.Y},
+					Update:  &pb.ChunkUpdateBroadcast_FlaggedCell{FlaggedCell: placement},
+				}}}
+				s.broadcastToChunkSubs(cid, mustProto(msg))
+			}(chunkID, p)
 		}
+	}
+
+	wg.Wait()
+}
+
+func (s *Server) broadcastToChunkSubs(chunkID ChunkID, payload []byte) {
+	s.stateMu.RLock()
+	subscribers, ok := s.subs[chunkID]
+	if !ok || len(subscribers) == 0 {
+		s.stateMu.RUnlock()
+		return
+	}
+
+	subList := make([]uint32, 0, len(subscribers))
+	for pid := range subscribers {
+		subList = append(subList, pid)
+	}
+	s.stateMu.RUnlock()
+
+	for _, pid := range subList {
+		s.sendToPlayer(pid, payload)
 	}
 }

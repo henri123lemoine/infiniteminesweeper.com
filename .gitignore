@@ -15,5 +15,9 @@ frontend/src/assets/grey-spritesheet*.png
 frontend/src/assets/spritesheet*.json
 scripts/python/**/*.png
 
+# Protobuf
+backend/gen/proto/
+frontend/src/gen/
+
 # Misc
 .llm_info

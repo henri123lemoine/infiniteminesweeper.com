@@ -40,8 +40,8 @@ const (
 // WAL entry types
 type WALEntry struct {
 	Timestamp time.Time `json:"timestamp"`
-	Type      string    `json:"type"` // "reveal" or "flag"
-	Data      []byte    `json:"data"` // JSON encoded Reveal or Flag
+	Type      string    `json:"type"` // "flag" or "score_update"
+	Data      []byte    `json:"data"` // JSON encoded data
 	Sequence  uint64    `json:"sequence"`
 }
 
@@ -49,12 +49,12 @@ type WALEntry struct {
 // struct keys, so we keep the exact types.
 type snapshotData struct {
 	Chunks       map[ChunkID]*ChunkBits
-	CellOwners   map[ChunkID]map[int]int32
-	Flags        map[ChunkID]map[int]Flag
-	Scores       map[int32]int32
-	PlayerNames  map[int32]string
-	PlayerFlags  map[int32]uint32
-	NextPlayerID int32
+	Flags        map[ChunkID]map[uint32]Flag
+	Scores       map[uint32]int32
+	PlayerNames  map[uint32]string
+	PlayerFlags  map[uint32]uint32
+	PlayerViews  map[uint32]PlayerView
+	NextPlayerID uint32
 }
 
 func (s *Server) initAWS() error {
@@ -267,21 +267,28 @@ func (s *Server) replayWAL() error {
 
 	for _, entry := range entries {
 		switch entry.Type {
-		case "reveal":
-			var reveal Reveal
-			if err := json.Unmarshal(entry.Data, &reveal); err != nil {
-				log.Printf("[wal] failed to unmarshal reveal: %v", err)
-				continue
-			}
-			s.replayReveal(reveal)
-
 		case "flag":
-			var flag Flag
-			if err := json.Unmarshal(entry.Data, &flag); err != nil {
+			var flagData struct {
+				ChunkID ChunkID `json:"chunk_id"`
+				Cell    uint32  `json:"cell"`
+				FlagID  uint32  `json:"flag_id"`
+			}
+			if err := json.Unmarshal(entry.Data, &flagData); err != nil {
 				log.Printf("[wal] failed to unmarshal flag: %v", err)
 				continue
 			}
-			s.replayFlag(flag)
+			s.replayFlag(flagData.ChunkID, flagData.Cell, flagData.FlagID)
+
+		case "score_update":
+			var scoreData struct {
+				PlayerID uint32 `json:"player_id"`
+				Score    int32  `json:"score"`
+			}
+			if err := json.Unmarshal(entry.Data, &scoreData); err != nil {
+				log.Printf("[wal] failed to unmarshal score update: %v", err)
+				continue
+			}
+			s.replayScoreUpdate(scoreData.PlayerID, scoreData.Score)
 		}
 
 		// Update WAL sequence number
@@ -293,39 +300,21 @@ func (s *Server) replayWAL() error {
 	return nil
 }
 
-func (s *Server) replayReveal(reveal Reveal) {
+func (s *Server) replayFlag(chunkID ChunkID, cell uint32, flagID uint32) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
-	// Get or create chunk
-	chunk, exists := s.chunks[reveal.ChunkID]
-	if !exists {
-		chunk = &ChunkBits{}
-		s.chunks[reveal.ChunkID] = chunk
+	if s.flags[chunkID] == nil {
+		s.flags[chunkID] = make(map[uint32]Flag)
 	}
-
-	// Set the bit (mark as revealed)
-	bitIndex := reveal.Y*ChunkSize + reveal.X
-	wordIndex := bitIndex / 64
-	bitOffset := bitIndex % 64
-	chunk[wordIndex] |= 1 << bitOffset
-
-	// Track who revealed it
-	if s.cellOwners[reveal.ChunkID] == nil {
-		s.cellOwners[reveal.ChunkID] = make(map[int]int32)
-	}
-	s.cellOwners[reveal.ChunkID][bitIndex] = reveal.PlayerID
+	s.flags[chunkID][cell] = Flag{FlagID: flagID}
 }
 
-func (s *Server) replayFlag(flag Flag) {
+func (s *Server) replayScoreUpdate(playerID uint32, score int32) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
-	bitIndex := flag.Y*ChunkSize + flag.X
-	if s.flags[flag.ChunkID] == nil {
-		s.flags[flag.ChunkID] = make(map[int]Flag)
-	}
-	s.flags[flag.ChunkID][bitIndex] = flag
+	s.scores[playerID] = score
 }
 
 func (s *Server) initPersistence() {
@@ -372,11 +361,11 @@ func (s *Server) saveSnapshotToS3() error {
 	s.stateMu.RLock()
 	data := snapshotData{
 		Chunks:       s.chunks,
-		CellOwners:   s.cellOwners,
 		Flags:        s.flags,
 		Scores:       s.scores,
 		PlayerNames:  s.playerNames,
 		PlayerFlags:  s.playerFlags,
+		PlayerViews:  s.playerViews,
 		NextPlayerID: s.nextPlayerID,
 	}
 	s.stateMu.RUnlock()
@@ -419,11 +408,11 @@ func (s *Server) saveSnapshotToDisk() error {
 	s.stateMu.RLock()
 	data := snapshotData{
 		Chunks:       s.chunks,
-		CellOwners:   s.cellOwners,
 		Flags:        s.flags,
 		Scores:       s.scores,
 		PlayerNames:  s.playerNames,
 		PlayerFlags:  s.playerFlags,
+		PlayerViews:  s.playerViews,
 		NextPlayerID: s.nextPlayerID,
 	}
 	s.stateMu.RUnlock()
@@ -481,22 +470,26 @@ func (s *Server) loadSnapshotFromS3() error {
 
 	s.stateMu.Lock()
 	s.chunks = data.Chunks
-	s.cellOwners = data.CellOwners
 	if data.Flags != nil {
 		s.flags = data.Flags
 	} else {
-		s.flags = make(map[ChunkID]map[int]Flag)
+		s.flags = make(map[ChunkID]map[uint32]Flag)
 	}
 	s.scores = data.Scores
 	if data.PlayerNames != nil {
 		s.playerNames = data.PlayerNames
 	} else {
-		s.playerNames = make(map[int32]string)
+		s.playerNames = make(map[uint32]string)
 	}
 	if data.PlayerFlags != nil {
 		s.playerFlags = data.PlayerFlags
 	} else {
-		s.playerFlags = make(map[int32]uint32)
+		s.playerFlags = make(map[uint32]uint32)
+	}
+	if data.PlayerViews != nil {
+		s.playerViews = data.PlayerViews
+	} else {
+		s.playerViews = make(map[uint32]PlayerView)
 	}
 	if data.NextPlayerID != 0 {
 		s.nextPlayerID = data.NextPlayerID
@@ -528,22 +521,26 @@ func (s *Server) loadSnapshotFromDisk() error {
 
 	s.stateMu.Lock()
 	s.chunks = data.Chunks
-	s.cellOwners = data.CellOwners
 	if data.Flags != nil {
 		s.flags = data.Flags
 	} else {
-		s.flags = make(map[ChunkID]map[int]Flag)
+		s.flags = make(map[ChunkID]map[uint32]Flag)
 	}
 	s.scores = data.Scores
 	if data.PlayerNames != nil {
 		s.playerNames = data.PlayerNames
 	} else {
-		s.playerNames = make(map[int32]string)
+		s.playerNames = make(map[uint32]string)
 	}
 	if data.PlayerFlags != nil {
 		s.playerFlags = data.PlayerFlags
 	} else {
-		s.playerFlags = make(map[int32]uint32)
+		s.playerFlags = make(map[uint32]uint32)
+	}
+	if data.PlayerViews != nil {
+		s.playerViews = data.PlayerViews
+	} else {
+		s.playerViews = make(map[uint32]PlayerView)
 	}
 	if data.NextPlayerID != 0 {
 		s.nextPlayerID = data.NextPlayerID

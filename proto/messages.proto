@@ -1,66 +1,131 @@
 syntax = "proto3";
 package ms;
-option go_package = "infinite-minesweeper/proto";
+option go_package = "infiniteminesweeper/proto";
+
+// ---- Core Data Structures ----
 
 message ChunkID {
-  int32 X = 1;
-  int32 Y = 2;
+  sint64 X = 1;
+  sint64 Y = 2;
 }
 
-message Reveal {
-  ChunkID chunkId = 1;
-  int32 x = 2;
-  int32 y = 3;
-  int32 playerId = 4;
-  bool flow = 5; // true if this is a flow reveal request
+message ScoreUpdate {
+  sint32 score = 1; // The player's new total score.
+  sint32 delta = 2; // The amount the score just changed by.
+  // The world position where the primary score change occurred.
+  ChunkID chunkId = 3;
+  uint32 cell = 4;
 }
 
-message Flag {
-  ChunkID chunkId = 1;
-  int32 x = 2;
-  int32 y = 3;
-  int32 playerId = 4;
-  uint32 flagID = 5;
+message RevealedCells {
+  repeated uint32 cells = 1;
 }
 
+// ---- Client -> Server Messages ----
+
+// Sent on initial connection to authenticate a session or establish a new one.
 message Hello {
-  int32 playerId = 1;
+  // The session token stored in the client's localStorage.
+  // This MUST be empty for a new player.
+  string session_token = 1;
+
+  // The player's chosen name and flag style. Only used if a new identity is created.
   string name = 2;
   uint32 flagID = 3;
 }
 
-message Welcome {
-  int32 playerId = 1;
-  string name = 2;
-  uint32 flagID = 3;
-  int32 viewX = 4;
-  int32 viewY = 5;
-}
-
+// Subscribes the client to real-time updates for a specific chunk.
 message Subscribe {
-  int32 chunkX = 1;
-  int32 chunkY = 2;
+  ChunkID chunkId = 1;
 }
 
+// Unsubscribes the client from a chunk.
 message Unsubscribe {
-  int32 chunkX = 1;
-  int32 chunkY = 2;
+  ChunkID chunkId = 1;
 }
 
+// The unified message for all primary player game actions.
+message Reveal {
+  // A client-generated ID for this specific action, used for reconciliation.
+  uint64 request_id = 1;
+
+  // Position of the user's click.
+  ChunkID chunkId = 2;
+  uint32 cell = 3;
+
+  // The user's intent. These are mutually exclusive from a logic standpoint.
+  bool is_right_click = 4; // User wants to place a flag.
+  bool is_chord = 5; // User wants to perform a chord reveal.
+}
+
+// Informs the server of the client's current viewport center.
+message ViewUpdate {
+  ChunkID chunkId = 1;
+  uint32 cell = 2;
+}
+
+// ---- Server -> Client Messages ----
+
+// Sent once upon successful connection and authentication.
+message Welcome {
+  // The session token for this identity. The client MUST store this in localStorage.
+  string session_token = 1;
+
+  string name = 2;
+  sint32 score = 3;
+  uint32 flagID = 4;
+  ViewUpdate viewUpdate = 5;
+}
+
+message FlagGroup {
+  uint32 flagID = 1;
+  RevealedCells cells = 2; // List of cell indices with this flag style.
+}
+
+// Contains the full state required to render a single chunk.
 message ChunkSync {
   ChunkID chunkId = 1;
-  bytes seed = 2;  // 8‑byte little‑endian HMAC seed (exact 64 bits, JS‑safe).
-  repeated Reveal reveals = 3;
-  repeated Flag flags = 4;
+  bytes seed = 2; // The deterministic seed for mine generation.
+  bytes reveals = 3; // Gzip-compressed bitmap of revealed cells.
+  repeated FlagGroup flagGroups = 4;
 }
 
-message RevealAck { bool ok = 1; }
-message FlagAck { bool ok = 1; }
+// The server's authoritative response to a client's Reveal command.
+message RevealAck {
+  uint64 request_id = 1; // Mirrors the ID from the original Reveal request.
+  bool ok = 2; // False only if the action was fundamentally invalid.
+
+  // If ok=true, describes the specific, authoritative outcome for the primary chunk.
+  // The client MUST use a switch on this `oneof` to determine the result.
+  oneof outcome {
+    // For reveals (chord, single cell, flood-fill, etc).
+    RevealedCells revealed_cells = 3;
+    // For a correct flag placement on a mine. Value is the cell index.
+    FlagPlacement flagged_cell = 4;
+  }
+
+  // The resulting score change. Always sent if `ok` is true.
+  ScoreUpdate score_update = 6;
+}
+
+// Authoritative state update for a chunk, sent to all subscribers.
+message ChunkUpdateBroadcast {
+  ChunkID chunkId = 1;
+  oneof update {
+    RevealedCells revealed_cells = 2;
+    FlagPlacement flagged_cell = 3;
+  }
+}
+
+message FlagPlacement {
+  uint32 cell = 1;
+  uint32 flagID = 2;
+}
 
 message LeaderboardEntry {
-  int32 playerId = 1;
-  string name = 2;
-  string score = 3;
+  string name = 1;
+  sint32 score = 2;
+  uint32 flagID = 3;
 }
 
 message Leaderboard {
@@ -68,31 +133,21 @@ message Leaderboard {
   repeated LeaderboardEntry entries = 2;
 }
 
-message ScoreUpdate {
-  int32 score = 1;
-  int32 worldX = 2;  // world X coordinate where the score change occurred
-  int32 worldY = 3;  // world Y coordinate where the score change occurred
-  int32 delta = 4;   // score change amount (positive or negative)
-}
-
-message ViewUpdate {
-  int32 viewX = 1;
-  int32 viewY = 2;
-}
-
+// Wrapper for all possible messages.
 message Msg {
   oneof payload {
+    // Client -> Server
     Hello hello = 1;
-    Welcome welcome = 2;
-    Reveal reveal = 3;
-    Flag flag = 4;
-    Subscribe subscribe = 5;
-    Unsubscribe unsubscribe = 6;
+    Subscribe subscribe = 2;
+    Unsubscribe unsubscribe = 3;
+    Reveal reveal = 4;
+    ViewUpdate viewUpdate = 5;
+
+    // Server -> Client
+    Welcome welcome = 6;
     ChunkSync chunkSync = 7;
     RevealAck revealAck = 8;
-    FlagAck flagAck = 9;
+    ChunkUpdateBroadcast chunkUpdateBroadcast = 9;
     Leaderboard leaderboard = 10;
-    ScoreUpdate scoreUpdate = 11;
-    ViewUpdate viewUpdate = 12;
   }
 }

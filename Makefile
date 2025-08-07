@@ -38,10 +38,12 @@ proto: backend/gen/proto/messages.pb.go frontend/src/gen/messages_pb.js
 
 backend/gen/proto/messages.pb.go: proto/messages.proto
 	@echo "Generating Go protobuf stubs…"
+	mkdir -p backend/gen
 	protoc --go_out=backend/gen --go_opt=paths=source_relative $<
 
 frontend/src/gen/messages_pb.js: proto/messages.proto
 	@echo "Generating JS protobuf stubs…"
+	mkdir -p frontend/src/gen
 	npx pbjs -t static-module -w es6 -o $@ $<
 
 deps:
