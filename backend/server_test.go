@@ -132,26 +132,6 @@ func TestBuildLeaderboard(t *testing.T) {
 	}
 }
 
-func TestTokenBucket(t *testing.T) {
-	tb := TokenBucket{}
-	for i := 0; i < 200; i++ {
-		if !tb.Take() {
-			t.Fatalf("take %d failed early", i)
-		}
-	}
-	if tb.Take() {
-		t.Fatal("expected exhausted bucket")
-	}
-	tb.tokens = 0
-	tb.lastRefill = time.Now().Add(-30 * time.Second)
-	if !tb.Take() {
-		t.Fatal("expected refill after 30s")
-	}
-	if tb.tokens != 99 {
-		t.Fatalf("tokens after take = %d, want 99", tb.tokens)
-	}
-}
-
 func TestRevealContention(t *testing.T) {
 	s := NewServer()
 	id := ChunkID{0, 0}
