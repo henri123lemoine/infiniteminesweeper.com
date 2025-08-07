@@ -16,45 +16,34 @@ import (
 	pb "infiniteminesweeper/backend/gen/proto"
 )
 
-func debugLogMessage(msg *pb.Msg, playerID int32) {
+func debugLogMessage(msg *pb.Msg, playerID uint32) {
 	if os.Getenv("MODE") != "development" {
 		return
 	}
 
 	switch payload := msg.Payload.(type) {
 	case *pb.Msg_Hello:
-		log.Printf("[DEBUG] Player %d -> Hello: Name=%s, PlayerId=%d",
-			playerID, payload.Hello.Name, payload.Hello.PlayerId)
+		log.Printf("[DEBUG] Player %d -> Hello: Name=%s, SessionToken=%s",
+			playerID, payload.Hello.Name, payload.Hello.SessionToken)
 	case *pb.Msg_Reveal:
-		log.Printf("[DEBUG] Player %d -> Reveal: ChunkId=(%d,%d), X=%d, Y=%d",
-			playerID, payload.Reveal.ChunkId.X, payload.Reveal.ChunkId.Y, payload.Reveal.X, payload.Reveal.Y)
-	case *pb.Msg_Flag:
-		log.Printf("[DEBUG] Player %d -> Flag: ChunkId=(%d,%d), X=%d, Y=%d",
-			playerID, payload.Flag.ChunkId.X, payload.Flag.ChunkId.Y, payload.Flag.X, payload.Flag.Y)
+		log.Printf("[DEBUG] Player %d -> Reveal: ChunkId=(%d,%d), Cell=%d, IsRightClick=%t, IsChord=%t",
+			playerID, payload.Reveal.ChunkId.X, payload.Reveal.ChunkId.Y, payload.Reveal.Cell, payload.Reveal.IsRightClick, payload.Reveal.IsChord)
 	case *pb.Msg_Subscribe:
-		log.Printf("[DEBUG] Player %d -> Subscribe: ChunkX=%d, ChunkY=%d",
-			playerID, payload.Subscribe.ChunkX, payload.Subscribe.ChunkY)
+		log.Printf("[DEBUG] Player %d -> Subscribe: ChunkId=(%d,%d)",
+			playerID, payload.Subscribe.ChunkId.X, payload.Subscribe.ChunkId.Y)
 	case *pb.Msg_Unsubscribe:
-		log.Printf("[DEBUG] Player %d -> Unsubscribe: ChunkX=%d, ChunkY=%d",
-			playerID, payload.Unsubscribe.ChunkX, payload.Unsubscribe.ChunkY)
-	case *pb.Msg_ViewUpdate:
-		log.Printf("[DEBUG] Player %d -> ViewUpdate: ViewX=%d, ViewY=%d",
-			playerID, payload.ViewUpdate.ViewX, payload.ViewUpdate.ViewY)
+		log.Printf("[DEBUG] Player %d -> Unsubscribe: ChunkId=(%d,%d)",
+			playerID, payload.Unsubscribe.ChunkId.X, payload.Unsubscribe.ChunkId.Y)
 	default:
 		log.Printf("[DEBUG] Player %d -> Unknown message type: %T", playerID, payload)
 	}
 }
 
-// mustProto marshals a protobuf message and gzips it only if the
-// serialized size exceeds CompressThreshold.
+// mustProto marshals a protobuf message and gzips it
 func mustProto(m *pb.Msg) []byte {
 	b, err := proto.Marshal(m)
 	if err != nil {
 		panic(err)
-	}
-	if len(b) < CompressThreshold {
-		// Send small payloads uncompressed to avoid gzip overhead.
-		return b
 	}
 
 	var buf bytes.Buffer
@@ -66,39 +55,7 @@ func mustProto(m *pb.Msg) []byte {
 	return buf.Bytes()
 }
 
-func encodeChunkRLE(bits *ChunkBits) []byte {
-	total := ChunkSize * ChunkSize
-	out := make([]byte, 0, 64)
-	run := 0
-	cur := uint64(0)
-
-	flush := func() {
-		for run >= 255 {
-			out = append(out, 255)
-			run -= 255
-		}
-		out = append(out, byte(run))
-	}
-
-	for i := 0; i < total; i++ {
-		bit := (bits[i/64] >> (i % 64)) & 1
-		if bit == cur {
-			run++
-			if run == 65535 {
-				flush()
-				run = 0
-			}
-		} else {
-			flush()
-			run = 1
-			cur = bit
-		}
-	}
-	flush()
-	return out
-}
-
-func (s *Server) sendToPlayer(playerID int32, data []byte) {
+func (s *Server) sendToPlayer(playerID uint32, data []byte) {
 	s.playersMu.RLock()
 	conns, exists := s.players[playerID]
 	s.playersMu.RUnlock()
@@ -132,126 +89,138 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// connection hygiene
-	conn.SetReadLimit(1 << 20)                             // max 1 MiB frame
-	conn.SetReadDeadline(time.Now().Add(35 * time.Second)) // liveness timer
-	conn.SetPongHandler(func(string) error {               // refresh on pong
+	// Connection hygiene
+	conn.SetReadLimit(1 << 20)
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(35 * time.Second))
 		return nil
 	})
 
-	// Expect hello message with optional playerId and name
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	// 1. Receive and Decode the Hello Message
 	_, data, err := conn.ReadMessage()
 	if err != nil {
 		conn.Close()
 		return
 	}
 
-	var pbBytes []byte
-	if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
-		gz, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			conn.Close()
-			return
-		}
-		pbBytes, err = io.ReadAll(gz)
-		gz.Close()
-		if err != nil {
-			conn.Close()
-			return
-		}
-	} else {
-		pbBytes = data
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		conn.Close()
+		return
 	}
+	pbBytes, err := io.ReadAll(gz)
+	gz.Close()
+	if err != nil {
+		conn.Close()
+		return
+	}
+
 	var msg pb.Msg
 	if err := proto.Unmarshal(pbBytes, &msg); err != nil {
 		conn.Close()
 		return
 	}
-	debugLogMessage(&msg, 0)
+	debugLogMessage(&msg, 0) // PlayerID is not known yet
 
 	hello := msg.GetHello()
-	if hello == nil || !isValidUsername(hello.Name) {
+	if hello == nil {
 		conn.Close()
 		return
 	}
-	conn.SetReadDeadline(time.Time{})
 
-	playerID := hello.PlayerId
+	// 2. Execute Authentication Logic from the Spec
 	s.stateMu.Lock()
-	if playerID <= 0 || playerID >= s.nextPlayerID {
+	var playerID uint32
+	var sessionToken string
+	isNewPlayer := false
+
+	if hello.SessionToken != "" {
+		pid, ok := s.sessionTokens[hello.SessionToken]
+		if ok {
+			playerID = pid
+			sessionToken = hello.SessionToken
+		} else {
+			// Invalid or expired token; treat as a new player
+			isNewPlayer = true
+		}
+	} else {
+		// No token provided; treat as a new player
+		isNewPlayer = true
+	}
+
+	if isNewPlayer {
+		if !isValidUsername(hello.Name) {
+			s.stateMu.Unlock()
+			conn.Close()
+			return
+		}
 		playerID = s.nextPlayerID
 		s.nextPlayerID++
+		sessionToken = generateSessionToken()
+		s.sessionTokens[sessionToken] = playerID
+		s.playerNames[playerID] = hello.Name
+		s.playerFlags[playerID] = hello.FlagID
+		s.scores[playerID] = 0 // New players always start with a score of 0
+		log.Printf("New player identity created: ID=%d, Name=%s", playerID, hello.Name)
 	}
-	// Grab any previously‑saved score before we touch the player map
+
+	// Read player state while still under the lock
+	playerName := s.playerNames[playerID]
+	playerFlag := s.playerFlags[playerID]
 	initScore := s.scores[playerID]
-	s.playerNames[playerID] = hello.Name
-	s.playerFlags[playerID] = hello.FlagID
 	s.lbDirty = true
 	s.stateMu.Unlock()
 
-	// Create player and register connection under this id
+	// 3. Create the Player Actor and Register its Connection
 	s.playersMu.Lock()
 	if s.players[playerID] == nil {
 		s.players[playerID] = make(map[*Player]struct{})
 	}
 	player := &Player{
-		ID:                playerID,
-		Conn:              conn,
-		Send:              make(chan []byte, SendBufSize),
-		Mailbox:           make(chan func(*Player), 64),
-		TokenBucket:       TokenBucket{tokens: 200},
-		RevealWindowStart: time.Now(),
-		RevealCount:       0,
-		Name:              hello.Name,
-		FlagID:            hello.FlagID,
-		Score:             initScore, // preserve previous score
-		done:              make(chan struct{}),
+		ID:          playerID,
+		Conn:        conn,
+		Send:        make(chan []byte, SendBufSize),
+		Mailbox:     make(chan func(*Player), 64),
+		TokenBucket: TokenBucket{tokens: 200},
+		Name:        playerName,
+		FlagID:      playerFlag,
+		Score:       initScore,
+		done:        make(chan struct{}),
 	}
 	s.players[playerID][player] = struct{}{}
 	s.playersMu.Unlock()
 
-	// start actor loop
 	go func(p *Player) {
 		for fn := range p.Mailbox {
 			fn(p)
 		}
 	}(player)
 
-	// Send initial leaderboard and welcome after goroutines start
-	s.stateMu.Lock()
-	if s.lbProto == nil {
-		s.buildLeaderboardUnsafe()
-		s.lbDirty = false
-	}
-	lbBytes := s.lbProto
-	lbVer := s.lbVersion
-	view := s.playerViews[playerID]
-	s.stateMu.Unlock()
-
 	go s.writePump(player)
 	go s.readPump(player)
 
-	welcomeMsg := &pb.Msg{Payload: &pb.Msg_Welcome{Welcome: &pb.Welcome{PlayerId: playerID, Name: hello.Name, FlagID: hello.FlagID, ViewX: view.X, ViewY: view.Y}}}
+	// 4. Send the Welcome Message with the Authoritative Session Token
+	welcomeMsg := &pb.Msg{Payload: &pb.Msg_Welcome{Welcome: &pb.Welcome{
+		SessionToken: sessionToken,
+		Name:         playerName,
+		Score:        initScore,
+		FlagID:       playerFlag,
+	}}}
 	s.sendToPlayer(playerID, mustProto(welcomeMsg))
 
-	// auto-subscribe to surrounding chunks
-	cx := int(view.X) / ChunkSize
-	cy := int(view.Y) / ChunkSize
-	for dy := -1; dy <= 1; dy++ {
-		for dx := -1; dx <= 1; dx++ {
-			s.subscribeToChunk(playerID, ChunkID{X: int32(cx + dx), Y: int32(cy + dy)})
-		}
+	// 5. Send Initial Leaderboard State
+	s.stateMu.RLock()
+	lbBytes := s.lbProto
+	lbVer := s.lbVersion
+	s.stateMu.RUnlock()
+
+	if lbBytes != nil {
+		s.sendToPlayer(playerID, lbBytes)
+		player.LastLBVersion = lbVer
 	}
-	s.sendToPlayer(playerID, lbBytes)
-	player.LastLBVersion = lbVer
 
-	// Send initial score (keeps existing progress)
-	// Use dummy coordinates since this is not associated with a specific cell action
-	s.sendScoreUpdate(playerID, initScore, 0, 0, 0)
-
-	log.Printf("Player %d connected", playerID)
+	log.Printf("Player %d (%s) connected.", playerID, playerName)
 }
 
 func (s *Server) readPump(player *Player) {
@@ -260,25 +229,23 @@ func (s *Server) readPump(player *Player) {
 		player.Conn.Close()
 	}()
 
+	// The connection is now established; reset the read deadline.
+	player.Conn.SetReadDeadline(time.Time{})
+
 	for {
 		_, data, err := player.Conn.ReadMessage()
 		if err != nil {
 			break
 		}
 
-		var pbData []byte
-		if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
-			gz, err := gzip.NewReader(bytes.NewReader(data))
-			if err != nil {
-				continue
-			}
-			pbData, err = io.ReadAll(gz)
-			gz.Close()
-			if err != nil {
-				continue
-			}
-		} else {
-			pbData = data
+		gz, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			continue
+		}
+		pbData, err := io.ReadAll(gz)
+		gz.Close()
+		if err != nil {
+			continue
 		}
 
 		var msg pb.Msg
@@ -291,50 +258,35 @@ func (s *Server) readPump(player *Player) {
 		switch t := msg.Payload.(type) {
 		case *pb.Msg_Reveal:
 			r := t.Reveal
-
-			// Rate limiting
-			player.Mailbox <- func(pl *Player) {
-				now := time.Now()
-				if now.Sub(pl.RevealWindowStart) > time.Minute {
-					pl.RevealWindowStart = now
-					pl.RevealCount = 0
-				}
-				if pl.RevealCount >= MaxRevealsPerMin {
-					pl.SusRevealOverflow++
-				}
-				pl.RevealCount++
+			if r.ChunkId == nil {
+				continue
 			}
-
 			chunkID := ChunkID{X: r.ChunkId.X, Y: r.ChunkId.Y}
-			var ok bool
-			if r.Flow {
-				ok = s.floodReveal(player.ID, chunkID, int(r.X), int(r.Y))
-			} else {
-				ok = s.reveal(player.ID, chunkID, int(r.X), int(r.Y))
+
+			// Serialize all actions from this player through the per-player mailbox for ordering.
+			player.Mailbox <- func(*Player) {
+				s.handleReveal(
+					player.ID,
+					r.RequestId,
+					chunkID,
+					r.Cell,
+					r.IsRightClick,
+					r.IsChord,
+				)
 			}
-
-			ack := &pb.Msg{Payload: &pb.Msg_RevealAck{RevealAck: &pb.RevealAck{Ok: ok}}}
-			s.sendToPlayer(player.ID, mustProto(ack))
-
-		case *pb.Msg_Flag:
-			m := t.Flag
-			chunkID := ChunkID{X: m.ChunkId.X, Y: m.ChunkId.Y}
-			ok := s.flag(player.ID, chunkID, int(m.X), int(m.Y))
-			ack := &pb.Msg{Payload: &pb.Msg_FlagAck{FlagAck: &pb.FlagAck{Ok: ok}}}
-			s.sendToPlayer(player.ID, mustProto(ack))
-
 		case *pb.Msg_Subscribe:
 			m := t.Subscribe
-			s.subscribeToChunk(player.ID, ChunkID{X: m.ChunkX, Y: m.ChunkY})
+			if m.ChunkId == nil {
+				continue
+			}
+			s.subscribeToChunk(player.ID, ChunkID{X: m.ChunkId.X, Y: m.ChunkId.Y})
 
 		case *pb.Msg_Unsubscribe:
 			m := t.Unsubscribe
-			s.unsubscribeFromChunk(player.ID, ChunkID{X: m.ChunkX, Y: m.ChunkY})
-		case *pb.Msg_ViewUpdate:
-			m := t.ViewUpdate
-			s.stateMu.Lock()
-			s.playerViews[player.ID] = struct{ X, Y int32 }{X: m.ViewX, Y: m.ViewY}
-			s.stateMu.Unlock()
+			if m.ChunkId == nil {
+				continue
+			}
+			s.unsubscribeFromChunk(player.ID, ChunkID{X: m.ChunkId.X, Y: m.ChunkId.Y})
 		}
 	}
 }
@@ -362,10 +314,11 @@ func (s *Server) writePump(player *Player) {
 	}
 }
 
-func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
+func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
 	s.stateMu.Lock()
+
 	if s.subs[chunkID] == nil {
-		s.subs[chunkID] = make(map[int32]struct{})
+		s.subs[chunkID] = make(map[uint32]struct{})
 	}
 	s.subs[chunkID][playerID] = struct{}{}
 
@@ -380,33 +333,41 @@ func (s *Server) subscribeToChunk(playerID int32, chunkID ChunkID) {
 		bits = *chunk
 	}
 
-	// Group flags by flagID (the flag's appearance)
-	groups := make(map[uint32][]*pb.FlagLocation)
-	for idx, fl := range flagsMap {
-		x := int32(idx % ChunkSize)
-		y := int32(idx / ChunkSize)
-		groups[fl.FlagID] = append(groups[fl.FlagID], &pb.FlagLocation{X: x, Y: y})
+	// Group flags by their flagID (appearance)
+	groups := make(map[uint32]*pb.RevealedCells)
+	for cell, fl := range flagsMap {
+		if groups[fl.FlagID] == nil {
+			groups[fl.FlagID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
+		}
+		groups[fl.FlagID].Cells = append(groups[fl.FlagID].Cells, cell)
 	}
-	s.stateMu.Unlock()
+
+	flagGroups := make([]*pb.FlagGroup, 0, len(groups))
+	for flagID, cells := range groups {
+		flagGroups = append(flagGroups, &pb.FlagGroup{
+			FlagID: flagID,
+			Cells:  cells,
+		})
+	}
+
+	revealsBytes := make([]byte, len(bits)*8)
+	for i, word := range bits {
+		binary.LittleEndian.PutUint64(revealsBytes[i*8:], word)
+	}
 
 	cs := &pb.Msg{Payload: &pb.Msg_ChunkSync{ChunkSync: &pb.ChunkSync{
 		ChunkId:    &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
 		Seed:       seedBytes[:],
-		Reveals:    encodeChunkRLE(&bits),
-		FlagGroups: make([]*pb.FlagGroup, 0, len(groups)),
+		Reveals:    revealsBytes,
+		FlagGroups: flagGroups,
 	}}}
 
-	for flagID, locs := range groups {
-		cs.GetChunkSync().FlagGroups = append(cs.GetChunkSync().FlagGroups, &pb.FlagGroup{
-			FlagID:    flagID,
-			Locations: locs,
-		})
-	}
-
+	// Unlock the state mutex *before* sending data to avoid deadlocks.
+	s.stateMu.Unlock()
 	s.sendToPlayer(playerID, mustProto(cs))
 }
 
-func (s *Server) unsubscribeFromChunk(playerID int32, chunkID ChunkID) {
+func (s *Server) unsubscribeFromChunk(playerID uint32, chunkID ChunkID) {
 	s.stateMu.Lock()
 	if subs, ok := s.subs[chunkID]; ok {
 		if _, exists := subs[playerID]; exists {
