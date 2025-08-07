@@ -13,5 +13,9 @@ node_modules/
 frontend/src/assets/spritesheet*.png
 frontend/src/assets/spritesheet*.json
 
+# Protobuf
+backend/gen/proto/
+frontend/src/gen/
+
 # Misc
 .llm_info

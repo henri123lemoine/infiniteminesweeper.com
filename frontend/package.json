@@ -9,11 +9,10 @@
     "build": "vite build --mode production",
     "preview": "vite preview"
   },
-  "main": "index.js",
   "keywords": [],
-  "author": "",
+  "author": "Henri Lemoine",
   "license": "ISC",
-  "description": "",
+  "description": "Infinite Minesweeper",
   "dependencies": {
     "dotenv": "^17.2.1",
     "pako": "^2.1.0",

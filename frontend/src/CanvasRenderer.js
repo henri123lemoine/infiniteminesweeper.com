@@ -291,8 +291,8 @@ export class CanvasRenderer {
         const screenX = worldX * CELL_SIZE - viewRef.current.x;
         const screenY = worldY * CELL_SIZE - viewRef.current.y;
 
-        const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
-        const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+        const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
+        const cellKey = `${chunkX},${chunkY},${cell}`;
         const cellData = revealedCellsRef.current.get(cellKey);
         const isRevealed = cellData !== undefined;
 
@@ -325,8 +325,8 @@ export class CanvasRenderer {
         return;
 
       // Don't draw flag if cell is revealed
-      const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
-      const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+      const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
+      const cellKey = `${chunkX},${chunkY},${cell}`;
       if (revealedCellsRef.current.has(cellKey)) return;
 
       this.drawSprite(ctx, flagID, screenX, screenY, CELL_SIZE, CELL_SIZE);

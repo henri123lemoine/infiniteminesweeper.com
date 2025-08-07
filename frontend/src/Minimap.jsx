@@ -70,8 +70,8 @@ export default function Minimap({
         const worldX = worldStartX + px;
         const worldY = worldStartY + py;
 
-        const { chunkX, chunkY, localX, localY } = worldToChunk(worldX, worldY);
-        const cellKey = `${chunkX},${chunkY},${localX},${localY}`;
+        const { chunkX, chunkY, cell: cellIndex } = worldToChunk(worldX, worldY);
+        const cellKey = `${chunkX},${chunkY},${cellIndex}`;
         const flagKey = `${worldX},${worldY}`;
         const seed = seedCache.current.get(`${chunkX},${chunkY}`);
 
@@ -103,7 +103,7 @@ export default function Minimap({
                             ? "#d0f0f0"
                             : "#c0c0c0";
           }
-        } else if (seed && isMine(seed, localX, localY)) {
+        } else if (seed && isMine(seed, cellIndex)) {
           color = "#909090";
         }
 

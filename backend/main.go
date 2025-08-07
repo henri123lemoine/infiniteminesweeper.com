@@ -18,11 +18,25 @@ const (
 	SendBufSize      = 4096  // outbound msgs kept per player before back‑pressure
 	MineCount        = 20    // mines per 100 cells (20% chance)
 	MaxRevealsPerMin = 10000 // relaxed flood‑fill budget
-	// CompressThreshold defines the minimum size (in bytes) before
-	// protobuf messages are gzipped. Smaller payloads are sent
-	// uncompressed to avoid gzip overhead.
-	CompressThreshold = 100
 )
+
+// Reveal a starter patch around (0,0) in dev mode for faster testing
+func (s *Server) devRevealOriginArea() {
+	if os.Getenv("MODE") != "development" {
+		return
+	}
+	const radius = 40 // cells
+	for y := -radius; y <= radius; y++ {
+		for x := -radius; x <= radius; x++ {
+			cid, cell := worldToChunk(x, y)
+			if s.chunks[cid] == nil {
+				s.chunks[cid] = &ChunkBits{}
+			}
+			bit := cell
+			(*s.chunks[cid])[bit/64] |= 1 << (bit % 64)
+		}
+	}
+}
 
 func main() {
 	mustLoadEnv()
@@ -38,6 +52,10 @@ func main() {
 
 	server := NewServer()
 	server.initPersistence()
+
+	if os.Getenv("MODE") == "development" {
+		server.devRevealOriginArea()
+	}
 
 	http.HandleFunc("/ws", server.handleWebSocket)
 	distFS, _ := fs.Sub(content, "dist")

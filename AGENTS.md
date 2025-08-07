@@ -1,0 +1,196 @@
+# Technical Specification: Infinite Minesweeper Real-Time Logic
+
+## 1. Architectural Overview
+
+The system employs a server-authoritative architecture with an optimistic client-side UI using a **Command/Event-Stream** model.
+
+The Server is the single source of truth for all game state, including revealed cells, flags, and scores. It processes commands from clients and emits state change events to all relevant subscribers.
+
+The Client issues commands to the server and consumes a stream of state change events. It performs optimistic updates for immediate feedback, then reconciles its state piece-by-piece as authoritative events arrive from the server.
+
+Authentication is handled via a server-issued session token model to prevent player impersonation.
+
+## 2. Data Structures and Definitions
+
+**Chunk**: A 64x64 grid of cells, forming the base unit of the world.
+
+**Chunk Coordinates**: A 2D coordinate (sint64 X, sint64 Y) identifying a unique Chunk.
+
+**Cell Index**: A uint32 value from 0 to 4095 representing a specific cell within a chunk, calculated as y \* 64 + x.
+
+**Subscription Model**: Players maintain a dynamic list of chunks they are subscribed to for real-time updates.
+
+## 3. Protocol Buffers Definition (messages.proto)
+
+Definitions are found in `proto/messages.proto`.
+
+## 4. Server-Side Logic Implementation
+
+### 4.1. Connection & Authentication (handleWebSocket)
+
+The server MUST establish and verify player identity. The client is never trusted to declare its own ID.
+
+Upon a new WebSocket connection, receive the initial Hello message.
+
+Extract the session_token from the Hello message.
+
+**Authentication Logic:**
+
+If session_token is present and non-empty:
+
+- Look up the token in the server's sessionTokens map (map[string]int32).
+- If a corresponding playerID is found, the session is authenticated. Assign this playerID to the connection.
+
+If session_token is empty or not found in the map:
+
+- This is a new player. Generate a new, unique, internal playerID (e.g., from an incrementing counter).
+- Generate a new, cryptographically secure sessionToken (e.g., a UUID v4 or a random 32-byte string).
+- Store the mapping: sessionTokens[<new_token>] = <new_playerID>. This MUST be persisted in snapshots.
+- Initialize the new player's state (name, flagID, score=0) in the server's state maps.
+- Assign this playerID to the connection.
+
+**Welcome Message:**
+
+Send a Welcome message to the client. This message MUST contain the session_token but should NOT expose the internal playerID. The client only needs its session token for authentication.
+
+### 4.2. Subscription Management
+
+Players dynamically subscribe and unsubscribe from chunks based on their viewport. The server maintains a mapping of chunks to their subscribers for efficient broadcasting.
+
+When a Subscribe message is received, add the player to the subscriber list for that chunk.
+
+When an Unsubscribe message is received, remove the player from the subscriber list for that chunk.
+
+### 4.3. Authoritative Command Handler (handleReveal)
+
+This function processes Reveal commands and generates the resulting state change events.
+
+**Acquire Lock**: The function must operate under a global state mutex to ensure atomicity.
+
+**Command Validation:**
+
+Perform validation based on user intent and cell state:
+
+- Right-clicking a revealed cell is invalid.
+- Standard left-clicking a revealed cell is invalid unless it's a chord action.
+- Chord actions are only valid on revealed cells.
+
+**Process Command:**
+
+Execute the game logic based on the command intent:
+
+If is_right_click is true:
+
+- Determine if the target cell contains a mine.
+- If it is a mine: Create a flag and calculate score bonus.
+- If it is not a mine: Reveal the cell and calculate score penalty.
+
+Else if is_chord is true:
+
+- Validate that adjacent mine count equals adjacent flag count.
+- If valid, reveal all adjacent un-flagged, un-revealed cells.
+- Process each revealed cell (mine hit, number reveal, or flood-fill trigger).
+
+Else (Standard Reveal):
+
+- If the cell is a mine, calculate penalty and reveal it.
+- If the cell is safe with adjacent mines > 0, reveal it with +1 score.
+- If the cell is safe with no adjacent mines, execute flood-fill logic.
+
+**Generate Events:**
+
+Create state change events for all affected chunks:
+
+- Update player score in global state.
+- Update chunk bitmap states for all revealed cells.
+- Add or remove flags as appropriate.
+- Write all changes to the Write-Ahead Log (WAL).
+
+**Dispatch Responses:**
+
+Send RevealAck to the commanding player:
+
+- Include request_id, ok status, and score_update.
+- Include the primary chunk's changes in the outcome field for immediate reconciliation.
+
+Generate ChunkUpdateBroadcast events:
+
+- For each modified chunk, create a broadcast containing all state changes.
+- Send to all players subscribed to that chunk (including the original actor for secondary chunks).
+
+## 5. Client-Side Logic Implementation
+
+### 5.1. Connection & Authentication
+
+On application start, attempt to read session_token from localStorage.
+
+When opening a WebSocket connection, send a Hello message containing the token (or an empty string if none was found).
+
+Implement a handler for the Welcome message. Upon receiving it, unconditionally overwrite any existing session_token in localStorage with the one provided by the server.
+
+### 5.2. Subscription Management
+
+Dynamically subscribe to chunks based on viewport changes. Send Subscribe/Unsubscribe messages as the player's view moves through the world.
+
+Maintain a local set of subscribed chunks to optimize reconciliation logic.
+
+### 5.3. Optimistic Command Flow (handleCellClick)
+
+When a user clicks a cell, generate a new, unique request_id.
+
+**Perform Bounded Optimistic Update:**
+
+- Execute game logic locally, but only for chunks the client is subscribed to.
+- Store results in optimisticActions as a map of chunk coordinates to changed cells within those chunks.
+- Apply visual changes immediately for subscribed chunks only.
+- Do not attempt to predict changes for chunks the client doesn't have seed data for.
+
+**Send Command**: Send the Reveal message to the server with the request_id and action details.
+
+### 5.4. Intelligent Piecewise Reconciliation (onmessage)
+
+**RevealAck Handling:**
+
+- Find the request_id and corresponding optimistic changes.
+- Reconcile only the primary chunk mentioned in the RevealAck:
+  - Undo optimistic changes for that specific chunk.
+  - Apply authoritative outcome from the message.
+  - Update player's global score.
+- Remove the reconciled chunk from the optimistic change set.
+- Keep the request_id entry if other chunks were optimistically modified.
+
+**ChunkUpdateBroadcast Handling:**
+
+- Check if the broadcast chunk is part of any pending optimistic action.
+- If yes (part of client's own action):
+  - Undo optimistic changes for that specific chunk.
+  - Apply authoritative changes from the broadcast.
+  - Remove the reconciled chunk from the optimistic set.
+- If no (another player's action):
+  - Apply changes directly to game state.
+- If all chunks for a request_id have been reconciled, delete the optimistic action entry.
+
+**Final Cleanup:**
+
+After each reconciliation step, check if any optimistic action sets are now empty and clean them up.
+
+This approach ensures the client's visual state converges to server truth piece-by-piece, handling large cross-chunk actions gracefully while maintaining immediate feedback for the user's viewport.
+
+## Game Logic
+
+- Left click:
+  - On revealed cell:
+    - The cell is a mine (includes flagged cells):
+      - skip
+    - The cell is not a mine:
+      - revealed_mines + flagged_cells = adjacent mines at this cell
+        - Perform a chord reveal (is_right_click off, is_chord flag on)
+      - else:
+        - skip
+  - On unrevealed cell:
+    - reveal the cell (is_right_click off, is_chord flags off)
+- Right click:
+  - On revealed cell:
+    - skip
+  - On unrevealed cell:
+    - reveal the cell (is_right_click flag on, is_chord flag off)
