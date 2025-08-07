@@ -474,7 +474,9 @@ export const useGameState = () => {
             const primaryChunkKey = `${X},${Y}`;
 
             if (outcomeType === "revealedCells") {
-              for (const cell of outcome.cells) {
+              // guard against missing or non-array cells
+              const cells = Array.isArray(outcome.cells) ? outcome.cells : [];
+              for (const cell of cells) {
                 const cellKey = `${primaryChunkKey},${cell}`;
                 const seed = seedCache.current.get(primaryChunkKey);
                 const isMineVal = seed ? isMine(seed, cell) : false;
@@ -537,7 +539,9 @@ export const useGameState = () => {
             }
 
             if (updateType === "revealedCells") {
-                for (const cell of updateData.cells) {
+                // guard against missing or non-array cells
+                const cells = Array.isArray(updateData.cells) ? updateData.cells : [];
+                for (const cell of cells) {
                     const cellKey = `${chunkKey},${cell}`;
                     // Remove any optimistic flag before revealing
                     const lX = cell % CHUNK, lY = Math.floor(cell / CHUNK);
