@@ -9,6 +9,7 @@ import Minimap from "./Minimap.jsx";
 import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
+import AchievementsPanel from "./AchievementsPanel.jsx";
 
 if (__DEV__) console.log("dev mode!");
 else console.log("production mode!");
@@ -746,6 +747,7 @@ function App() {
         <button onClick={() => handleZoom(0.25)}>+</button>
         <button onClick={() => handleZoom(-0.25)}>-</button>
       </div>
+      <AchievementsPanel />
     </div>
   );
 }

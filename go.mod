@@ -9,6 +9,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/pierrec/lz4/v4 v4.1.22
 	google.golang.org/protobuf v1.36.6
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require github.com/jmespath/go-jmespath v0.4.0 // indirect

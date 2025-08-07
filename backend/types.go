@@ -40,6 +40,9 @@ type Player struct {
 	// Scoring
 	Score int32
 
+	Coins PlayerCoins
+	Stats PlayerStats
+
 	// outbound-drop counter (closes WS after 32 consecutive drops)
 	dropMisses int
 
