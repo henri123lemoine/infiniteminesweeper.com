@@ -19,7 +19,6 @@ function App() {
 
   const {
     connected,
-    playerId,
     playerScore,
     username,
     setUsername,

@@ -586,6 +586,7 @@ export const useGameState = () => {
     leaderboard,
     scorePopups,
     tick,
+    setTick,
     seedCache,
     subscribedChunks,
     revealedCellsRef,
