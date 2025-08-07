@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -20,24 +21,24 @@ type Server struct {
 	stateMu sync.RWMutex
 
 	// World state - just what cells are revealed and by whom
-	chunks     map[ChunkID]*ChunkBits         // Which cells are revealed (bitset)
-	cellOwners map[ChunkID]map[int]int32      // bitIndex -> playerID
-	flags      map[ChunkID]map[int]Flag       // bitIndex -> Flag (with id)
-	scores     map[int32]int32                // playerID -> score
-	subs       map[ChunkID]map[int32]struct{} // who wants reveals for each chunk
+	chunks map[ChunkID]*ChunkBits          // Which cells are revealed (bitset)
+	flags  map[ChunkID]map[uint32]Flag     // cellIndex -> Flag (with id)
+	scores map[uint32]int32                // playerID -> score
+	subs   map[ChunkID]map[uint32]struct{} // who wants reveals for each chunk
 
 	// leaderboard cache
 	lbVersion   uint64
 	lbProto     []byte
 	lbDirty     bool
-	playerFlags map[int32]uint32               // playerID -> flagID
-	playerViews map[int32]struct{ X, Y int32 } // last known view position
+	playerFlags map[uint32]uint32     // playerID -> flagID
+	playerViews map[uint32]PlayerView // last known view position (chunk, cell)
 
 	// Players
-	playersMu    sync.RWMutex
-	players      map[int32]map[*Player]struct{}
-	playerNames  map[int32]string
-	nextPlayerID int32
+	playersMu     sync.RWMutex
+	players       map[uint32]map[*Player]struct{}
+	playerNames   map[uint32]string
+	nextPlayerID  uint32
+	sessionTokens map[string]uint32 // session_token -> playerID
 
 	// Seed cache for performance
 	seedCache   map[ChunkID]uint64
@@ -59,19 +60,19 @@ type Server struct {
 
 func NewServer() *Server {
 	return &Server{
-		secret:       []byte("minesweeper-secret-key"),
-		chunks:       make(map[ChunkID]*ChunkBits),
-		cellOwners:   make(map[ChunkID]map[int]int32),
-		flags:        make(map[ChunkID]map[int]Flag),
-		scores:       make(map[int32]int32),
-		subs:         make(map[ChunkID]map[int32]struct{}),
-		players:      make(map[int32]map[*Player]struct{}),
-		playerNames:  make(map[int32]string),
-		playerFlags:  make(map[int32]uint32),
-		playerViews:  make(map[int32]struct{ X, Y int32 }),
-		seedCache:    make(map[ChunkID]uint64),
-		nextPlayerID: 1,
-		dataDir:      "data",
+		secret:        []byte("minesweeper-secret-key"),
+		chunks:        make(map[ChunkID]*ChunkBits),
+		flags:         make(map[ChunkID]map[uint32]Flag),
+		scores:        make(map[uint32]int32),
+		subs:          make(map[ChunkID]map[uint32]struct{}),
+		players:       make(map[uint32]map[*Player]struct{}),
+		playerNames:   make(map[uint32]string),
+		playerFlags:   make(map[uint32]uint32),
+		playerViews:   make(map[uint32]PlayerView),
+		sessionTokens: make(map[string]uint32), // Initialize the new map
+		seedCache:     make(map[ChunkID]uint64),
+		nextPlayerID:  1,
+		dataDir:       "data",
 		upgrader: websocket.Upgrader{
 			// Reject cross-site WebSocket requests (prevents CSRF via <iframe>).
 			CheckOrigin: func(r *http.Request) bool {
@@ -92,6 +93,11 @@ func NewServer() *Server {
 			},
 		},
 	}
+}
+
+// generateSessionToken creates a new, cryptographically secure session token.
+func generateSessionToken() string {
+	return uuid.New().String()
 }
 
 func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
