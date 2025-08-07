@@ -11,9 +11,10 @@ import (
 // Leaderboard helpers
 
 type lbEntry struct {
-	PlayerID int32  `json:"playerId"`
+	PlayerID uint32 `json:"playerID"`
 	Name     string `json:"name"`
-	Score    string `json:"score"`
+	Score    int32  `json:"score"`
+	FlagID   uint32 `json:"flagID"`
 }
 
 func formatScore(n int32) string {
@@ -32,14 +33,19 @@ func (s *Server) buildLeaderboardUnsafe() {
 	// Collect & sort
 	entries := make([]lbEntry, 0, len(s.scores))
 	for pid, sc := range s.scores {
-		entries = append(entries, lbEntry{PlayerID: pid, Name: s.playerNames[pid], Score: formatScore(sc)})
+		entries = append(entries, lbEntry{
+			PlayerID: pid,
+			Name:     s.playerNames[pid],
+			Score:    sc,
+			FlagID:   s.playerFlags[pid],
+		})
 	}
-	// Sort by the real uint32 score
+	// Sort by the raw score
 	sort.Slice(entries, func(i, j int) bool {
-		return s.scores[entries[i].PlayerID] > s.scores[entries[j].PlayerID]
+		return entries[i].Score > entries[j].Score
 	})
-	if len(entries) > 20 {
-		entries = entries[:20]
+	if len(entries) > 10 {
+		entries = entries[:10]
 	}
 
 	s.lbVersion++
@@ -48,7 +54,11 @@ func (s *Server) buildLeaderboardUnsafe() {
 		Entries: make([]*pb.LeaderboardEntry, len(entries)),
 	}}}
 	for i, e := range entries {
-		lbMsg.GetLeaderboard().Entries[i] = &pb.LeaderboardEntry{PlayerId: e.PlayerID, Name: e.Name, Score: e.Score}
+		lbMsg.GetLeaderboard().Entries[i] = &pb.LeaderboardEntry{
+			Name:   e.Name,
+			Score:  e.Score,
+			FlagID: e.FlagID,
+		}
 	}
 	s.lbProto = mustProto(lbMsg)
 }
@@ -91,14 +101,4 @@ func (s *Server) runLeaderboardBroadcaster() {
 		}
 		s.playersMu.RUnlock()
 	}
-}
-
-func (s *Server) sendScoreUpdate(playerID int32, score int32, worldX, worldY int, delta int32) {
-	msg := &pb.Msg{Payload: &pb.Msg_ScoreUpdate{ScoreUpdate: &pb.ScoreUpdate{
-		Score:  score,
-		WorldX: int32(worldX),
-		WorldY: int32(worldY),
-		Delta:  delta,
-	}}}
-	s.sendToPlayer(playerID, mustProto(msg))
 }

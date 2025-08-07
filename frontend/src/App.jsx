@@ -612,6 +612,29 @@ function App() {
               }}
               placeholder="Your name"
             />
+            <button
+              onClick={() => {
+                const trimmedName = nameInput.trim();
+                if (trimmedName) {
+                  setUsername(trimmedName);
+                } else {
+                  // Generate a default username with 5 random digits
+                  const randomDigits = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+                  setUsername(`User${randomDigits}`);
+                }
+              }}
+              style={{
+                padding: "10px 20px",
+                backgroundColor: "#4CAF50",
+                color: "white",
+                border: "none",
+                borderRadius: 4,
+                cursor: "pointer",
+                fontSize: 16,
+              }}
+            >
+              Join Game
+            </button>
             <div style={{ margin: "15px 0" }}>
               <div style={{ marginBottom: "10px", fontWeight: "bold" }}>
                 Choose your flag:
@@ -624,23 +647,6 @@ function App() {
                 }}
               />
             </div>
-            <button
-              onClick={() => {
-                if (nameInput.trim()) setUsername(nameInput.trim());
-              }}
-              style={{
-                padding: "10px 20px",
-                backgroundColor: "#4CAF50",
-                color: "white",
-                border: "none",
-                borderRadius: 4,
-                cursor: "pointer",
-                fontSize: 16,
-              }}
-              disabled={!nameInput.trim()}
-            >
-              Join Game
-            </button>
           </div>
         </div>
       )}
@@ -694,7 +700,7 @@ function App() {
             );
           })}
 
-          {import.meta.env.DEV && (
+          {__DEV__ && (
             <div className="coordinates-debug">
               <div
                 className={`connection-status ${connected ? "connected" : "disconnected"}`}
@@ -744,7 +750,7 @@ function App() {
               <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
                 {topPlayers.map((p) => (
                   <li
-                    key={p.playerId}
+                    key={p.name}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -762,7 +768,7 @@ function App() {
                           rendererRef.current
                             .drawSprite(
                               ctx,
-                              playerFlagsRef.current.get(p.playerId) ?? 0,
+                              playerFlagsRef.current.get(p.name) ?? 0,
                               0,
                               0,
                               15,
@@ -772,7 +778,7 @@ function App() {
                         }}
                         style={{ marginRight: 6, verticalAlign: "middle" }}
                       />
-                      {p.name ? p.name : `Player ${p.playerId}`}
+                      {p.name}
                     </span>
                     <span style={{ fontWeight: "bold" }}>{formatScore(p.score)}</span>
                   </li>
