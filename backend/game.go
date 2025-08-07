@@ -32,6 +32,26 @@ func cellIndexToXY(cell uint32) (int, int) {
 
 //  Adjacent-helper additions
 
+// hasNearbyReveal reports whether any cell within `dist` of (chunkID,cell)
+// is already revealed. Distance is measured in Chebyshev terms so the search
+// area forms a square around the target cell.
+func (s *Server) hasNearbyReveal(chunkID ChunkID, cell uint32, dist int) bool {
+	x, y := cellIndexToXY(cell)
+	worldX := int(chunkID.X)*ChunkSize + x
+	worldY := int(chunkID.Y)*ChunkSize + y
+	for dy := -dist; dy <= dist; dy++ {
+		for dx := -dist; dx <= dist; dx++ {
+			wx := worldX + dx
+			wy := worldY + dy
+			cid, cidx := worldToChunk(wx, wy)
+			if s.isCellRevealed(cid, cidx) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // countAdjacentRevealedMines counts *already-revealed* mines around (chunkID,cell)
 func (s *Server) countAdjacentRevealedMines(chunkID ChunkID, cell uint32) int {
 	x, y := cellIndexToXY(cell)
@@ -120,6 +140,12 @@ func (s *Server) handleReveal(
 	if x < 0 || x >= ChunkSize || y < 0 || y >= ChunkSize {
 		s.stateMu.Unlock()
 		return // Invalid cell index.
+	}
+
+	if !s.hasNearbyReveal(chunkID, cell, 2) {
+		s.sendRevealAck(playerID, requestID, false, nil, 0, chunkID, cell)
+		s.stateMu.Unlock()
+		return
 	}
 
 	isRevealed := s.isCellRevealed(chunkID, cell)

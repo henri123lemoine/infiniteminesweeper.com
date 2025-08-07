@@ -239,6 +239,20 @@ export const useGameState = () => {
       if (!isChord && revealedCell) return;
       if (flaggedCellsRef.current.has(flagKey)) return;
 
+      // Only allow interactions near already revealed cells to encourage
+      // connected exploration. Client-side guard mirrors server validation.
+      let nearRevealed = false;
+      for (let dy = -2; dy <= 2 && !nearRevealed; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const { chunkX: nx, chunkY: ny, cell: ncell } = worldToChunk(worldX + dx, worldY + dy);
+          if (revealedCellsRef.current.has(`${nx},${ny},${ncell}`)) {
+            nearRevealed = true;
+            break;
+          }
+        }
+      }
+      if (!nearRevealed) return;
+
       const requestId = Date.now().toString();
       const optimisticChanges = new Map();
       optimisticActions.current.set(requestId, optimisticChanges);
