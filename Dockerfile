@@ -26,33 +26,14 @@ WORKDIR /app
 # Install dependencies first (better caching)
 COPY frontend/package*.json ./
 RUN npm ci
-
-# Copy source and proto
 COPY frontend ./
-RUN mkdir -p src/assets src/gen
-COPY proto/messages.proto ./proto/messages.proto
 
-# Copy generated sprite assets
-COPY --from=sprite-gen /gen/spritesheet.png ./src/assets/spritesheet.png
-COPY --from=sprite-gen /gen/spritesheet.json ./src/assets/spritesheet.json
+RUN mkdir -p src/assets
 
-# Generate JavaScript protobuf stubs
-RUN npx --no-install pbjs \
-      -t static-module -w es6 \
-      -o src/gen/messages_pb.js \
-      proto/messages.proto
-RUN ls -l src/gen && head -5 src/gen/messages_pb.js
-
-# Set production environment
-ENV NODE_ENV=production
-
-# Build based on MODE
-ARG MODE=production
-RUN if [ "$MODE" = "production" ]; then \
-      npm run build:production; \
-    else \
-      npm run build:development; \
-    fi
+# pull in just the generated sprite assets
+COPY --from=sprite-gen /gen/spritesheet.png  src/assets/spritesheet.png
+COPY --from=sprite-gen /gen/spritesheet.json src/assets/spritesheet.json
+RUN npm run build:production
 
 # Stage 2: Backend build
 FROM golang:${GO_VERSION}-bookworm AS gobuild
