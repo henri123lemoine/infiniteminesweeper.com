@@ -1,0 +1,15 @@
+name: Fly Validate
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  validate:
+    name: Validate app
+    runs-on: ubuntu-latest
+    concurrency: deploy-group
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only --build-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
