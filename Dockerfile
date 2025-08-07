@@ -1,7 +1,6 @@
 ARG PYTHON_VERSION=3.11
 ARG NODE_VERSION=22
 ARG GO_VERSION=1.23.0
-ARG MODE=production
 
 # 0. Python stage just for sprite gen
 FROM python:${PYTHON_VERSION}-slim AS sprite-gen
@@ -23,9 +22,12 @@ WORKDIR /app
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend ./
+
+RUN mkdir -p src/assets
+
 # pull in just the generated sprite assets
-COPY --from=sprite-gen /gen/spritesheet.png  frontend/src/assets/spritesheet.png
-COPY --from=sprite-gen /gen/spritesheet.json frontend/src/assets/spritesheet.json
+COPY --from=sprite-gen /gen/spritesheet.png  src/assets/spritesheet.png
+COPY --from=sprite-gen /gen/spritesheet.json src/assets/spritesheet.json
 RUN npm run build:production
 
 # 2. Go builder
