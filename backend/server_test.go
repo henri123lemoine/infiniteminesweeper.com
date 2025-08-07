@@ -26,20 +26,16 @@ func encodeMsg(m *pb.Msg) []byte {
 }
 
 func decodeMsg(data []byte) (*pb.Msg, error) {
-	var b []byte
-	if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
-		gz, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, err
-		}
-		b, err = io.ReadAll(gz)
-		gz.Close()
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		b = data
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
 	}
+	b, err := io.ReadAll(gz)
+	gz.Close()
+	if err != nil {
+		return nil, err
+	}
+
 	var m pb.Msg
 	if err := proto.Unmarshal(b, &m); err != nil {
 		return nil, err
@@ -121,13 +117,13 @@ func TestBuildLeaderboard(t *testing.T) {
 	if len(lb.Entries) != 3 {
 		t.Fatalf("entries = %d, want 3", len(lb.Entries))
 	}
-	if lb.Entries[0].PlayerId != 1 || lb.Entries[0].Score != "20.0k" || lb.Entries[0].Name != "one" {
+	if lb.Entries[0].Name != "one" || lb.Entries[0].Score != 20000 {
 		t.Fatalf("first entry %+v", lb.Entries[0])
 	}
-	if lb.Entries[1].PlayerId != 3 || lb.Entries[1].Score != "1.2k" || lb.Entries[1].Name != "three" {
+	if lb.Entries[1].Name != "three" || lb.Entries[1].Score != 1200 {
 		t.Fatalf("second entry %+v", lb.Entries[1])
 	}
-	if lb.Entries[2].PlayerId != 2 || lb.Entries[2].Score != "999" || lb.Entries[2].Name != "two" {
+	if lb.Entries[2].Name != "two" || lb.Entries[2].Score != 999 {
 		t.Fatalf("third entry %+v", lb.Entries[2])
 	}
 }
@@ -237,9 +233,8 @@ type leaderboardMsg struct {
 	Type    string `json:"type"`
 	Version uint64 `json:"version"`
 	Entries []struct {
-		PlayerID int32  `json:"playerId"`
-		Name     string `json:"name"`
-		Score    string `json:"score"`
+		Name  string `json:"name"`
+		Score int32  `json:"score"`
 	} `json:"entries"`
 }
 
@@ -259,10 +254,9 @@ func readLeaderboard(c *websocket.Conn, timeout time.Duration) (*leaderboardMsg,
 			out := &leaderboardMsg{Type: "leaderboard", Version: lb.Version}
 			for _, e := range lb.Entries {
 				out.Entries = append(out.Entries, struct {
-					PlayerID int32  `json:"playerId"`
-					Name     string `json:"name"`
-					Score    string `json:"score"`
-				}{e.PlayerId, e.Name, e.Score})
+					Name  string `json:"name"`
+					Score int32  `json:"score"`
+				}{e.Name, e.Score})
 			}
 			return out, nil
 		}
@@ -311,7 +305,7 @@ func TestFullStackIntegration(t *testing.T) {
 		}
 		conns[i] = conn
 
-		hello := &pb.Msg{Payload: &pb.Msg_Hello{Hello: &pb.Hello{PlayerId: 0, Name: fmt.Sprintf("p%d", i)}}}
+		hello := &pb.Msg{Payload: &pb.Msg_Hello{Hello: &pb.Hello{Name: fmt.Sprintf("p%d", i)}}}
 		if err := conn.WriteMessage(websocket.BinaryMessage, encodeMsg(hello)); err != nil {
 			t.Fatalf("hello %d: %v", i, err)
 		}
@@ -344,7 +338,7 @@ func TestFullStackIntegration(t *testing.T) {
 		go func(i int, c *websocket.Conn) {
 			defer wg.Done()
 			<-start
-			reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{ChunkId: &pb.ChunkID{X: 0, Y: 0}, X: 1, Y: 1}}}
+			reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{ChunkId: &pb.ChunkID{X: 0, Y: 0}, Cell: 1}}}
 			if err := c.WriteMessage(websocket.BinaryMessage, encodeMsg(reveal)); err != nil {
 				t.Errorf("write contention %d: %v", i, err)
 				return
@@ -375,7 +369,7 @@ func TestFullStackIntegration(t *testing.T) {
 	// Phase 2: each client reveals its own unique safe cell
 	successes := 0
 	for i, conn := range conns {
-		reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{ChunkId: &pb.ChunkID{X: 0, Y: 0}, X: int32(i), Y: int32(i + 2)}}}
+		reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{ChunkId: &pb.ChunkID{X: 0, Y: 0}, Cell: uint32(i)}}}
 		if err := conn.WriteMessage(websocket.BinaryMessage, encodeMsg(reveal)); err != nil {
 			t.Fatalf("write unique %d: %v", i, err)
 		}

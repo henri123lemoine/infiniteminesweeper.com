@@ -1,6 +1,7 @@
 package main
 
 import (
+	pb "infiniteminesweeper/backend/gen/proto"
 	"math/rand"
 	"runtime"
 	"sort"
@@ -114,7 +115,7 @@ func BenchmarkRevealHeavy(b *testing.B) {
 	chunks := make([]ChunkID, 0, grid*grid)
 	for x := -grid / 2; x < grid/2; x++ {
 		for y := -grid / 2; y < grid/2; y++ {
-			chunk := ChunkID{X: int32(x), Y: int32(y)}
+			chunk := ChunkID{X: int64(x), Y: int64(y)}
 			chunks = append(chunks, chunk)
 			// Touch each chunk once to ensure it's allocated
 			srv.reveal(1, chunk, 0, 0)
@@ -168,7 +169,7 @@ func BenchmarkRevealFreshVsExisting(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			// Each reveal hits a new chunk
-			chunk := ChunkID{X: int32(i), Y: int32(i)}
+			chunk := ChunkID{X: int64(i), Y: int64(i)}
 			srv.reveal(1, chunk, 0, 0)
 		}
 
@@ -200,4 +201,33 @@ func BenchmarkRevealFreshVsExisting(b *testing.B) {
 			b.Logf("WARNING: Unexpectedly slow cache access")
 		}
 	})
+}
+
+// reveal is a stripped-down, single-threaded shortcut that the benchmarks/tests
+// hammer.  It does **not** broadcast – it just mutates state + score and tells
+// the caller whether this exact bit was newly revealed.
+func (s *Server) reveal(playerID int32, chunkID ChunkID, x, y int) bool {
+	if !s.isValidCoordinate(x, y) {
+		return false
+	}
+	cell := uint32(y*ChunkSize + x)
+
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	if s.isCellRevealed(chunkID, cell) {
+		return false
+	}
+
+	s.setCellRevealed(chunkID, cell, uint32(playerID), &map[ChunkID]*pb.RevealedCells{})
+
+	if _, ok := s.scores[uint32(playerID)]; !ok {
+		s.scores[uint32(playerID)] = 0
+	}
+	if s.isMine(chunkID, cell) {
+		s.scores[uint32(playerID)] -= 100 // stepped on a mine
+	} else {
+		s.scores[uint32(playerID)] += 1 // ordinary safe reveal
+	}
+	return true
 }
