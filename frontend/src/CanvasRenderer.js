@@ -6,6 +6,15 @@ export class CanvasRenderer {
     this.canvasSizeRef = { w: 0, h: 0, dpr: 1 };
   }
 
+  // Fast numeric-ID -> key table (built once at module load-time)
+  static #idToKey = (() => {
+    const map = {};
+    for (const k of Object.keys(meta.frames)) {
+      if (!Number.isNaN(Number(k))) map[Number(k)] = k; // numeric keys only
+    }
+    return map;
+  })();
+
   // 3D Cell Drawing Functions
   draw3DCell(ctx, x, y, size, isRevealed) {
     const borderWidth = Math.max(1, size * 0.08);
@@ -187,15 +196,30 @@ export class CanvasRenderer {
 
   /**
    * @param {CanvasRenderingContext2D} ctx
-   * @param {number|string} flagID   uint32 from server OR direct key string
+   * @param {number|string} spriteID uint32 from server OR direct key/string
    */
-  async drawSprite(ctx, flagID, dx, dy, dw, dh) {
+  async drawSprite(ctx, spriteID, dx, dy, dw, dh) {
     await CanvasRenderer.initSprites();
-    const key =
-      typeof flagID === "string"
-        ? flagID
-        : CanvasRenderer.#frameKeys[flagID % CanvasRenderer.#frameKeys.length];
-    const { x, y, w, h } = CanvasRenderer.#frames[key].frame;
+    let key;
+    if (typeof spriteID === "string") {
+      key = spriteID;                           // direct string lookup
+    } else {
+      key = CanvasRenderer.#idToKey[spriteID];  // numeric-ID fast path
+      if (!key) {
+        // Fallback for legacy / out-of-range IDs
+        key =
+          CanvasRenderer.#frameKeys[
+            spriteID % CanvasRenderer.#frameKeys.length
+          ];
+      }
+    }
+
+    const frame = CanvasRenderer.#frames[key];
+    if (!frame) {
+      console.warn("⚠️  Unknown sprite", spriteID, "(resolved key:", key, ")");
+      return;
+    }
+    const { x, y, w, h } = frame.frame;
     ctx.drawImage(CanvasRenderer.#sheetImg, x, y, w, h, dx, dy, dw, dh);
   }
 
@@ -217,7 +241,8 @@ export class CanvasRenderer {
 
     // Draw revealed cell content
     if (cellData.isMine) {
-      this.drawMine(ctx, screenX, screenY, cellSize);
+      // Use the real mine sprite (stable key "mine", ID 162)
+      this.drawSprite(ctx, "mine", screenX, screenY, cellSize, cellSize);
     } else if (cellData.adjacentMines > 0) {
       this.drawNumber(
         ctx,
