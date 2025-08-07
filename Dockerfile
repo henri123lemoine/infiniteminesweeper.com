@@ -21,7 +21,7 @@ FROM node:${NODE_VERSION}-bookworm AS frontend
 WORKDIR /app
 COPY frontend/package*.json ./
 RUN npm ci
-COPY frontend ./
+COPY frontend/ ./
 
 RUN mkdir -p src/assets
 
