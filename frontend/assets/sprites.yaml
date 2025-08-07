@@ -1,124 +1,138 @@
-default_settings:
-  generate_colors: true
-  unlocked: true
-  wavy: false
-  broken: false
-  pointing: 'side'
-  # TODO: Obviously un-unlocked later
+# Sprite configuration with category-based defaults
+# Categories automatically get appropriate defaults from CATEGORY_DEFAULTS
 
 sprites:
+  # Mines
+  mine:
+    name: 'Mine'
+    category: 'mine'
+
+  # Basic flags - minimal config needed due to category defaults
   flag0:
-    name: 'Rectangular Flag'
-    type: 'flag'
+    name: 'Rectangle Flag'
+    category: 'flag'
     shape: 'rectangle'
-    cost: 0
+    cost: 5
 
   flag1:
     name: 'Triangle Flag'
-    type: 'flag'
+    category: 'flag'
     shape: 'triangle'
-    cost: 0
+    cost: 5
 
   flag2:
     name: 'Guidon Flag'
-    type: 'flag'
+    category: 'flag'
     shape: 'guidon'
-    cost: 0
+    cost: 5
 
   flag3:
-    name: 'Very Wavy Guidon Flag'
-    type: 'flag'
-    shape: 'guidon'
+    name: 'Wavy Rectangle Flag'
+    category: 'flag'
+    shape: 'rectangle'
     wavy: true
-    cost: 40
+    cost: 50
 
   flag4:
-    name: 'Very Wavy Triangle Flag'
-    type: 'flag'
+    name: 'Wavy Triangle Flag'
+    category: 'flag'
     shape: 'triangle'
     wavy: true
     cost: 30
 
   flag5:
-    name: 'Broken Rectangular Flag'
-    type: 'flag'
-    shape: 'rectangle'
-    broken: true
-    cost: 10
+    name: 'Wavy Guidon Flag'
+    category: 'flag'
+    shape: 'guidon'
+    wavy: true
+    cost: 50
 
   flag6:
-    name: 'Wavy Triangle Flag'
-    type: 'flag'
+    name: 'Very Wavy Triangle Flag'
+    category: 'flag'
     shape: 'triangle'
     wavy: true
-    cost: 30
+    cost: 120
 
   flag7:
-    name: 'Rectagular wavy flag'
-    type: 'flag'
-    shape: 'rectangle'
+    name: 'Very Wavy Guidon Flag'
+    category: 'flag'
+    shape: 'guidon'
     wavy: true
-    cost: 5
+    cost: 150
 
   flag8:
-    name: 'Wavy Guidon flag'
-    type: 'flag'
-    shape: 'guidon'
-    wavy: true
-    cost: 25
+    name: 'Down Rectangle Flag'
+    category: 'flag'
+    pointing: 'down'
+    shape: 'rectangle'
+    cost: 300
 
   flag9:
-    name: 'Broken Guidon Flag'
-    type: 'flag'
-    shape: 'guidon'
-    broken: true
-    cost: 100
+    name: 'Down Pointy Rectangle Flag'
+    category: 'flag'
+    pointing: 'down'
+    shape: 'triangle'
+    cost: 400
 
   flag10:
     name: 'Down Triangle Flag'
-    type: 'flag'
+    category: 'flag'
     pointing: 'down'
     shape: 'triangle'
-    cost: 20
+    cost: 250
 
   flag11:
-    name: 'Down Rectangular Flag'
-    type: 'flag'
+    name: 'Down Guidon Flag'
+    category: 'flag'
     pointing: 'down'
-    shape: 'rectangle'
-    cost: 20
+    shape: 'guidon'
+    cost: 450
 
   flag12:
-    name: 'Down Guidon Flag'
-    type: 'flag'
-    pointing: 'down'
-    shape: 'guidon'
-    cost: 30
+    name: 'Broken Rectangle Flag'
+    category: 'flag'
+    shape: 'rectangle'
+    broken: true
+    cost: 1000
 
   flag13:
-    name: 'Down Triangle Flag'
-    type: 'flag'
-    pointing: 'down'
-    shape: 'triangle'
-    cost: 30
+    name: 'Broken Guidon Flag'
+    category: 'flag'
+    shape: 'guidon'
+    broken: true
+    cost: 1500
 
   flag14:
-    name: 'Dragon Eye Flag'
-    type: 'flag'
+    name: 'Black Down Guidon Flag'
+    category: 'flag'
     pointing: 'down'
     shape: 'guidon'
-    cost: 300
+    cost: 750
+    generate_colors: false  # Override category default
 
   flag15:
-    name: 'Black Down Guidon Flag'
-    type: 'flag'
+    name: 'Dragon Eye Flag'
+    category: 'flag'
     pointing: 'down'
     shape: 'guidon'
-    cost: 100
-    generate_colors: false
+    cost: 3000
 
   flag16:
     name: 'Dragon Flag'
-    type: 'flag'
+    category: 'flag'
     shape: 'rectangle'
-    cost: 500
+    cost: 10000
+
+  # # Advancement icons
+  # achievement_first_flag:
+  #   name: 'First Flag Achievement'
+  #   category: 'advancement'
+  #   unlock_level: 1
+  #   achievement_type: 'milestone'
+
+  # achievement_speedrun:
+  #   name: 'Speed Runner'
+  #   category: 'advancement'
+  #   unlock_level: 10
+  #   achievement_type: 'challenge'
