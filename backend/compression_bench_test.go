@@ -62,9 +62,7 @@ func fromBytes(data []byte) (*ChunkBits, error) {
 	return &chunk, nil
 }
 
-// ----------------------------------------------------------------------------
 // CHUNK GENERATORS
-// ----------------------------------------------------------------------------
 
 func newEmptyChunk() *ChunkBits {
 	return &ChunkBits{}
@@ -126,19 +124,16 @@ func newHorizontalLinesChunk() *ChunkBits {
 	return &chunk
 }
 
-// ----------------------------------------------------------------------------
 // ENCODING & DECODING ALGORITHMS
-// ----------------------------------------------------------------------------
 
-// --- Raw (No Compression) ---
 func encodeRaw(chunk *ChunkBits) []byte {
 	return chunk.toBytes()
 }
+
 func decodeRaw(data []byte) (*ChunkBits, error) {
 	return fromBytes(data)
 }
 
-// --- Coordinate List ---
 func encodeCoordinateList(chunk *ChunkBits) []byte {
 	var coords []uint16
 	for y := 0; y < ChunkSize; y++ {
@@ -152,6 +147,7 @@ func encodeCoordinateList(chunk *ChunkBits) []byte {
 	binary.Write(buf, binary.LittleEndian, coords)
 	return buf.Bytes()
 }
+
 func decodeCoordinateList(data []byte) (*ChunkBits, error) {
 	var chunk ChunkBits
 	reader := bytes.NewReader(data)
@@ -169,29 +165,29 @@ func decodeCoordinateList(data []byte) (*ChunkBits, error) {
 	return &chunk, nil
 }
 
-// --- Run-Length Encoding (RLE) ---
 func encodeRLE(chunk *ChunkBits) []byte {
 	var out []byte
-	if TotalCells == 0 {
-		return out
+	var runLength uint16
+	currentBit := false
+
+	emit := func(n uint16) {
+		// little-endian: low byte then high byte
+		out = append(out, byte(n), byte(n>>8))
 	}
 
-	var runLength uint16 = 0
-	currentBit := false // RLE starts by counting 0s
 	for y := 0; y < ChunkSize; y++ {
 		for x := 0; x < ChunkSize; x++ {
 			bit := chunk.get(x, y)
 			if bit == currentBit {
 				runLength++
 			} else {
-				binary.Write(&bytes.Buffer{}, binary.LittleEndian, runLength)
-				out = append(out, byte(runLength)) // Simple RLE for this decoder
+				emit(runLength)
 				currentBit = bit
 				runLength = 1
 			}
 		}
 	}
-	out = append(out, byte(runLength)) // Append the final run
+	emit(runLength)
 	return out
 }
 
@@ -218,7 +214,6 @@ func decodeRLE(data []byte) (*ChunkBits, error) {
 	return &chunk, nil
 }
 
-// --- Gzip ---
 func encodeGzip(chunk *ChunkBits) ([]byte, error) {
 	var buf bytes.Buffer
 	writer := gzip.NewWriter(&buf)
@@ -231,6 +226,7 @@ func encodeGzip(chunk *ChunkBits) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
+
 func decodeGzip(data []byte) (*ChunkBits, error) {
 	reader, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -244,7 +240,6 @@ func decodeGzip(data []byte) (*ChunkBits, error) {
 	return fromBytes(rawBytes)
 }
 
-// --- LZ4 ---
 func encodeLZ4(chunk *ChunkBits) ([]byte, error) {
 	src := chunk.toBytes()
 	dst := make([]byte, lz4.CompressBlockBound(len(src)))
@@ -257,6 +252,7 @@ func encodeLZ4(chunk *ChunkBits) ([]byte, error) {
 	}
 	return dst[:n], nil
 }
+
 func decodeLZ4(data []byte) (*ChunkBits, error) {
 	dst := make([]byte, RawChunkBytes)
 	n, err := lz4.UncompressBlock(data, dst)
@@ -270,7 +266,6 @@ func decodeLZ4(data []byte) (*ChunkBits, error) {
 	return fromBytes(dst[:n])
 }
 
-// --- Quadtree ---
 type QuadtreeNode struct {
 	IsLeaf   bool
 	Value    bool
@@ -378,7 +373,6 @@ func decodeQuadtree(data []byte) (*ChunkBits, error) {
 	return &chunk, nil
 }
 
-// --- Huffman Coding on RLE ---
 type huffmanNode struct {
 	char  byte
 	freq  int
@@ -532,9 +526,7 @@ func decodeRLEHuffman(data []byte) (*ChunkBits, error) {
 	return decodeRLE(rleData)
 }
 
-// ----------------------------------------------------------------------------
 // VERIFICATION TESTS
-// ----------------------------------------------------------------------------
 
 func TestMain(m *testing.M) {
 	runBenchmarks()
@@ -585,10 +577,6 @@ func TestEncodingVerification(t *testing.T) {
 		}
 	}
 }
-
-// ----------------------------------------------------------------------------
-// BENCHMARKS
-// ----------------------------------------------------------------------------
 
 func runBenchmarks() {
 	fmt.Println("--- Chunk Compression Analysis ---")
