@@ -23,7 +23,7 @@ body {
 
 .board-container {
   flex: 1;
-  background: white;
+  background: #c0c0c0;
   border-radius: 0;
   overflow: hidden;
   position: relative;
@@ -141,6 +141,21 @@ body {
   border: 1px solid #000;
 }
 
+.player-score {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-weight: bold;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  z-index: 19; /* below login modal (zIndex: 20) */
+  pointer-events: none;
+}
+
 .score-popup {
   position: absolute;
   color: gold;
@@ -158,6 +173,34 @@ body {
     opacity: 0;
     transform: translateY(-20px);
   }
+}
+
+/* Help & Scoring dropdown */
+.help-dropdown {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+}
+
+.help-button {
+  background: #1976d2;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.help-content {
+  margin-top: 8px;
+  background: white;
+  padding: 12px;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  max-width: 320px;
+  font-size: 14px;
 }
 
 @media (max-width: 768px) {

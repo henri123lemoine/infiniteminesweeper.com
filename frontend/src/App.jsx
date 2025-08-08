@@ -157,6 +157,7 @@ function App() {
 
   // Leaderboard visibility and number formatting
   const [leaderboardVisible, setLeaderboardVisible] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   // Build numeric sprite ID list for the 'flag' category only
   const FLAG_IDS = useMemo(
@@ -704,7 +705,7 @@ function App() {
       )}
 
       {/* Player Score Display */}
-      <div className="player-score">Score: {playerScore}</div>
+      <div className="player-score">Score: {playerScore ?? 0}</div>
 
       <div className="header">
         <div className="status">
@@ -714,6 +715,34 @@ function App() {
             {connected ? "Connected" : "Disconnected"}
           </div>
         </div>
+      </div>
+
+      {/* Help & Scoring dropdown */}
+      <div className="help-dropdown">
+        <button className="help-button" onClick={() => setHelpOpen((v) => !v)}>
+          {helpOpen ? "Close" : "Help & Scoring"}
+        </button>
+        {helpOpen && (
+          <div className="help-content">
+            <h3 style={{ marginTop: 0 }}>Scoring</h3>
+            <ul style={{ paddingLeft: 18, marginTop: 8 }}>
+              <li>Reveal a hidden cell: +1</li>
+              <li>Place a flag on a mine: +10</li>
+              <li>Wrong flag: -20</li>
+              <li>Hit a mine: -100 (ouch!)</li>
+              <li>Your total score never goes below 0</li>
+            </ul>
+            <h4 style={{ marginBottom: 6 }}>Learn Minesweeper</h4>
+            <a
+              href="https://www.youtube.com/watch?v=ytKOmS8vJng"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontWeight: 600 }}
+            >
+              Watch on YouTube
+            </a>
+          </div>
+        )}
       </div>
 
       <div className="board-container">
@@ -811,59 +840,58 @@ function App() {
         <div
           style={{
             display: "flex",
-            justifyContent: "space-between",
             alignItems: "center",
           }}
         >
           <h3 style={{ margin: 0 }}>Leaderboard</h3>
-          <button onClick={toggleLeaderboard}>
-            {leaderboardVisible ? "Hide" : "Show"}
-          </button>
         </div>
-        {leaderboardVisible && (
-          <>
-            {topPlayers.length > 0 ? (
-              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                {topPlayers.map((p) => (
-                  <li
-                    key={p.name}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: 2,
+        {topPlayers.length > 0 ? (
+          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+            {topPlayers.map((p) => (
+              <li
+                key={p.name}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: 2,
+                }}
+              >
+                <span style={{ display: "flex", alignItems: "center" }}>
+                  <canvas
+                    ref={(c) => {
+                      if (!c) return;
+                      const ctx = c.getContext("2d");
+                      const cssSize = 32; // CSS pixels
+                      const dpr = window.devicePixelRatio || 1;
+                      c.width = Math.round(cssSize * dpr);
+                      c.height = Math.round(cssSize * dpr);
+                      c.style.width = `${cssSize}px`;
+                      c.style.height = `${cssSize}px`;
+                      ctx.imageSmoothingEnabled = false;
+                      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                      rendererRef.current
+                        .drawSprite(
+                          ctx,
+                          playerFlagsRef.current.get(p.name) ?? 0,
+                          0,
+                          0,
+                          cssSize,
+                          cssSize,
+                        )
+                        .catch(console.error);
                     }}
-                  >
-                    <span style={{ display: "flex", alignItems: "center" }}>
-                      <canvas
-                        width="15"
-                        height="15"
-                        ref={(c) => {
-                          if (!c) return;
-                          const ctx = c.getContext("2d");
-                          rendererRef.current
-                            .drawSprite(
-                              ctx,
-                              playerFlagsRef.current.get(p.name) ?? 0,
-                              0,
-                              0,
-                              15,
-                              15,
-                            )
-                            .catch(console.error);
-                        }}
-                        style={{ marginRight: 6, verticalAlign: "middle" }}
-                      />
-                      {p.name}
-                    </span>
-                    <span style={{ fontWeight: "bold" }}>{formatScore(p.score)}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>No players yet</p>
-            )}
-          </>
+                    key={`flag-${p.name}-${playerFlagsRef.current.get(p.name) ?? 0}`}
+                    style={{ marginRight: 6, verticalAlign: "middle", imageRendering: "pixelated" }}
+                  />
+                  {p.name}
+                </span>
+                    <span style={{ fontWeight: "bold" }}>{formatScore(p.score ?? 0)}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No players yet</p>
         )}
       </div>
       <div className="zoom-controls">
