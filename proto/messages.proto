@@ -106,6 +106,9 @@ message RevealAck {
 
   // The resulting score change. Always sent if `ok` is true.
   ScoreUpdate score_update = 6;
+
+  // The user's current global rank (1-based). Only sent if `ok` is true.
+  uint32 user_rank = 7;
 }
 
 // Authoritative state update for a chunk, sent to all subscribers.

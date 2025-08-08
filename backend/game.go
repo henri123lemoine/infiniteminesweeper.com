@@ -487,6 +487,9 @@ func (s *Server) sendRevealAck(playerID uint32, requestID uint64, ok bool, ack *
 			ChunkId: &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
 			Cell:    cell,
 		}
+
+		// Calculate and include user rank
+		ack.UserRank = s.getUserRankUnsafe(s.scores[playerID])
 	}
 	s.sendToPlayer(playerID, mustProto(&pb.Msg{Payload: &pb.Msg_RevealAck{RevealAck: ack}}))
 }

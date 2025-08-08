@@ -118,6 +118,7 @@ export const useGameState = () => {
   const [connected, setConnected] = useState(false);
   const [leaderboard, setLeaderboard] = useState([]);
   const [playerScore, setPlayerScore] = useState(0);
+  const [userRank, setUserRank] = useState(0);
   const [username, setUsername] = useState(initialName);
   const [scorePopups, setScorePopups] = useState([]);
   const [hintPopups, setHintPopups] = useState([]);
@@ -311,9 +312,11 @@ export const useGameState = () => {
       if (isRightClick) {
         const myFlagId = playerFlagsRef.current.get(username);
         const seed = seedCache.current.get(chunkKey);
+        // Always send flag placement requests to the server
+        didLocalMutation = true;
         // If we know the seed and this is NOT a mine, suppress optimistic flag but still send the request.
         if (seed && !isMine(seed, cell)) {
-          didLocalMutation = true; // force sending to server without local mutation
+          // Don't set optimistic flag for non-mines
         } else if (myFlagId !== undefined) {
           // Only optimistic-flag when unknown or when it is actually a mine
           flaggedCellsRef.current.set(flagKey, myFlagId);
@@ -505,7 +508,7 @@ export const useGameState = () => {
             return;
           }
           const requestId = String(reqRaw);
-          const { ok, scoreUpdate } = data;
+          const { ok, scoreUpdate, userRank } = data;
 
           const optimisticAction = optimisticActions.current.get(requestId);
           if (!optimisticAction) return;
@@ -580,6 +583,9 @@ export const useGameState = () => {
 
             // update score + popup
             setPlayerScore(scoreUpdate.score);
+            if (userRank) {
+              setUserRank(userRank);
+            }
             if (scoreUpdate.delta !== 0) {
               const cell = scoreUpdate.cell;
               const lx = cell % CHUNK;
@@ -657,7 +663,13 @@ export const useGameState = () => {
               const prev = byName.get(e.name);
               if (!prev || (e.score ?? 0) > (prev.score ?? 0)) byName.set(e.name, e);
             }
-            const uniqueEntries = Array.from(byName.values()).sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+            // Use stable sorting to match server-side behavior
+            const uniqueEntries = Array.from(byName.values()).sort((a, b) => {
+                if (a.score !== b.score) {
+                    return b.score - a.score;
+                }
+                return a.name.localeCompare(b.name);
+            });
             setLeaderboard(uniqueEntries);
             playerFlagsRef.current.clear();
             for (const entry of uniqueEntries) {
@@ -684,6 +696,7 @@ export const useGameState = () => {
   return {
     connected,
     playerScore,
+    userRank,
     username,
     setUsername,
     leaderboard,

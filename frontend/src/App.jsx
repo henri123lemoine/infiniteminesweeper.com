@@ -26,6 +26,7 @@ function App() {
   const {
     connected,
     playerScore,
+    userRank,
     username,
     setUsername,
     disconnect,
@@ -1046,7 +1047,7 @@ function App() {
         </div>
         {topPlayers.length > 0 ? (
           <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-            {topPlayers.map((p) => (
+            {topPlayers.map((p, index) => (
               <li
                 key={p.name}
                 style={{
@@ -1061,7 +1062,7 @@ function App() {
                     ref={(c) => {
                       if (!c) return;
                       const ctx = c.getContext("2d");
-                      const cssSize = 32; // CSS pixels
+                      const cssSize = 25; // CSS pixels
                       const dpr = window.devicePixelRatio || 1;
                       c.width = Math.round(cssSize * dpr);
                       c.height = Math.round(cssSize * dpr);
@@ -1085,9 +1086,23 @@ function App() {
                   />
                   {p.name}
                 </span>
-                    <span style={{ fontWeight: "bold" }}>{formatScore(p.score ?? 0)}</span>
+                <span style={{ fontWeight: "bold" }}>{formatScore(p.score ?? 0)}</span>
               </li>
             ))}
+            {userRank > 10 && (
+              <>
+                <li style={{
+                  borderTop: "1px solid #ccc",
+                  marginTop: 4,
+                  paddingTop: 4,
+                  marginBottom: 2
+                }}>
+                  <span style={{ fontSize: "12px", color: "#666" }}>
+                    You: #{userRank} ({formatScore(playerScore)})
+                  </span>
+                </li>
+              </>
+            )}
           </ul>
         ) : (
           <p>No players yet</p>
