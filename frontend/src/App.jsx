@@ -705,7 +705,7 @@ function App() {
       )}
 
       {/* Player Score Display */}
-      <div className="player-score">Score: {playerScore}</div>
+      <div className="player-score">Score: {playerScore ?? 0}</div>
 
       <div className="header">
         <div className="status">
@@ -879,7 +879,7 @@ function App() {
                   />
                   {p.name}
                 </span>
-                <span style={{ fontWeight: "bold" }}>{formatScore(p.score)}</span>
+                    <span style={{ fontWeight: "bold" }}>{formatScore(p.score ?? 0)}</span>
               </li>
             ))}
           </ul>

@@ -54,7 +54,8 @@ function decodeMsg(data) {
   // Convert to plain JS so we can easily introspect keys
   const decodedPlain = PB.Msg.toObject(PB.Msg.decode(bytes), {
     longs: String,
-    defaults: false,
+    // Include default values so scalar fields like score=0 are preserved
+    defaults: true,
   });
 
   // Un-wrap `{ payload:{ … } }` envelope (older builds)
@@ -434,11 +435,11 @@ export const useGameState = () => {
           didWelcome = true;
           localStorage.setItem("session_token", data.sessionToken);
           localStorage.setItem("username", data.name || "");
-          localStorage.setItem("score", String(data.score));
+          localStorage.setItem("score", String(data.score ?? 0));
           localStorage.setItem("flagID", String(data.flagID));
           playerFlagsRef.current.set(data.name, data.flagID);
           setUsername(data.name || "");
-          setPlayerScore(data.score);
+          setPlayerScore(data.score ?? 0);
         } else if (type === "chunkSync") {
           const { chunkId, seed, reveals, flagGroups: fgRaw } = data;
           const { X, Y } = normalizeChunkId(chunkId);
