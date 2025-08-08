@@ -62,6 +62,10 @@ message Reveal {
 message ViewUpdate {
   ChunkID chunkId = 1;
   uint32 cell = 2;
+  // Dimensions of the visible area in world cells (not pixels), so the server
+  // can scale the region proportionally to the user's viewport.
+  uint32 widthCells = 3;
+  uint32 heightCells = 4;
 }
 
 // ---- Server -> Client Messages ----

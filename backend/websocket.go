@@ -35,6 +35,10 @@ func debugLogMessage(msg *pb.Msg, playerID uint32) {
 	case *pb.Msg_Unsubscribe:
 		log.Printf("[DEBUG] Player %d -> Unsubscribe: ChunkId=(%d,%d)",
 			playerID, payload.Unsubscribe.ChunkId.X, payload.Unsubscribe.ChunkId.Y)
+	case *pb.Msg_ViewUpdate:
+		log.Printf("[DEBUG] Player %d -> ViewUpdate: ChunkId=(%d,%d), Cell=%d, SizeCells=(%d x %d)",
+			playerID, payload.ViewUpdate.ChunkId.X, payload.ViewUpdate.ChunkId.Y, payload.ViewUpdate.Cell, payload.ViewUpdate.WidthCells, payload.ViewUpdate.HeightCells)
+
 	default:
 		log.Printf("[DEBUG] Player %d -> Unknown message type: %T", playerID, payload)
 	}
@@ -332,6 +336,107 @@ func (s *Server) readPump(player *Player) {
 				continue
 			}
 			s.unsubscribeFromChunk(player.ID, ChunkID{X: m.ChunkId.X, Y: m.ChunkId.Y})
+
+		case *pb.Msg_ViewUpdate:
+			vu := t.ViewUpdate
+			if vu.ChunkId == nil {
+				continue
+			}
+			// Record player's view
+			view := PlayerView{Chunk: ChunkID{X: vu.ChunkId.X, Y: vu.ChunkId.Y}, Cell: vu.Cell}
+			s.stateMu.Lock()
+			s.playerViews[player.ID] = view
+			s.stateMu.Unlock()
+
+			// Determine a proportional region around the viewport.
+			// Convert width/height in world cells to chunk dimensions and add a small margin.
+			widthCells := int(vu.WidthCells)
+			heightCells := int(vu.HeightCells)
+			if widthCells <= 0 || heightCells <= 0 {
+				// Fallback: default to 3x3 chunks around the center if client didn't send dims
+				widthCells, heightCells = ChunkSize*3, ChunkSize*3
+			}
+			chunksWide := (widthCells + ChunkSize - 1) / ChunkSize
+			chunksHigh := (heightCells + ChunkSize - 1) / ChunkSize
+			// Aim to cover at least the viewport, plus one chunk margin around for smoother panning
+			chunksWide += 2
+			chunksHigh += 2
+
+			// Center of the view in world coords
+			cellX := int(vu.Cell % uint32(ChunkSize))
+			cellY := int(vu.Cell / uint32(ChunkSize))
+			centerWorldX := int(vu.ChunkId.X)*ChunkSize + cellX
+			centerWorldY := int(vu.ChunkId.Y)*ChunkSize + cellY
+
+			// Convert center to chunk coords
+			centerChunkX := int64(centerWorldX / ChunkSize)
+			centerChunkY := int64(centerWorldY / ChunkSize)
+
+			// Compute rectangle of chunk IDs
+			halfW := chunksWide / 2
+			halfH := chunksHigh / 2
+			startX := centerChunkX - int64(halfW)
+			startY := centerChunkY - int64(halfH)
+			endX := startX + int64(chunksWide) - 1
+			endY := startY + int64(chunksHigh) - 1
+
+			// Build new desired set; compute diff against previous per-player subs
+			newSet := make(map[ChunkID]struct{}, chunksWide*chunksHigh)
+			for cy := startY; cy <= endY; cy++ {
+				for cx := startX; cx <= endX; cx++ {
+					newSet[ChunkID{X: cx, Y: cy}] = struct{}{}
+				}
+			}
+
+			s.stateMu.Lock()
+			current := s.playerSubs[player.ID]
+			if current == nil {
+				current = make(map[ChunkID]struct{})
+				s.playerSubs[player.ID] = current
+			}
+
+			// Compute adds and drops
+			adds := make([]ChunkID, 0)
+			drops := make([]ChunkID, 0)
+			for cid := range newSet {
+				if _, ok := current[cid]; !ok {
+					adds = append(adds, cid)
+				}
+			}
+			for cid := range current {
+				if _, ok := newSet[cid]; !ok {
+					drops = append(drops, cid)
+				}
+			}
+
+			// Apply subs/dels
+			for _, cid := range adds {
+				if s.subs[cid] == nil {
+					s.subs[cid] = make(map[uint32]struct{})
+				}
+				s.subs[cid][player.ID] = struct{}{}
+				current[cid] = struct{}{}
+			}
+			for _, cid := range drops {
+				if subs, ok := s.subs[cid]; ok {
+					delete(subs, player.ID)
+					if len(subs) == 0 {
+						delete(s.subs, cid)
+					}
+				}
+				delete(current, cid)
+			}
+
+			// Prepare region chunks to send only for newly added (or if first time)
+			chunkIDs := adds
+			s.stateMu.Unlock()
+
+			if len(chunkIDs) > 0 {
+				if os.Getenv("MODE") == "development" {
+					log.Printf("[DEBUG] Player %d <- ChunkRegionSync add %d chunks (rect %dx%d)", player.ID, len(chunkIDs), chunksWide, chunksHigh)
+				}
+				s.sendChunkRegionSync(player.ID, chunkIDs)
+			}
 		}
 	}
 }
@@ -418,102 +523,108 @@ func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
 		FlagGroups: flagGroups,
 	}}}
 
+	// Track reverse index for per-player subscriptions as well
+	if s.playerSubs[playerID] == nil {
+		s.playerSubs[playerID] = make(map[ChunkID]struct{})
+	}
+	s.playerSubs[playerID][chunkID] = struct{}{}
+
 	// Unlock the state mutex *before* sending data to avoid deadlocks.
 	s.stateMu.Unlock()
-        s.sendToPlayer(playerID, mustProto(cs))
+	s.sendToPlayer(playerID, mustProto(cs))
 }
 
 // sendChunkRegionSync gathers the state of multiple chunks and transmits them
 // in a single compressed message. The provided chunkIDs should describe a
 // rectangular region.
 func (s *Server) sendChunkRegionSync(playerID uint32, chunkIDs []ChunkID) {
-        if len(chunkIDs) == 0 {
-                return
-        }
+	if len(chunkIDs) == 0 {
+		return
+	}
 
-        s.stateMu.Lock()
+	s.stateMu.Lock()
 
-        chunks := make([]*pb.ChunkSync, 0, len(chunkIDs))
-        minX, maxX := chunkIDs[0].X, chunkIDs[0].X
-        minY, maxY := chunkIDs[0].Y, chunkIDs[0].Y
+	chunks := make([]*pb.ChunkSync, 0, len(chunkIDs))
+	minX, maxX := chunkIDs[0].X, chunkIDs[0].X
+	minY, maxY := chunkIDs[0].Y, chunkIDs[0].Y
 
-        for _, chunkID := range chunkIDs {
-                if chunkID.X < minX {
-                        minX = chunkID.X
-                }
-                if chunkID.X > maxX {
-                        maxX = chunkID.X
-                }
-                if chunkID.Y < minY {
-                        minY = chunkID.Y
-                }
-                if chunkID.Y > maxY {
-                        maxY = chunkID.Y
-                }
+	for _, chunkID := range chunkIDs {
+		if chunkID.X < minX {
+			minX = chunkID.X
+		}
+		if chunkID.X > maxX {
+			maxX = chunkID.X
+		}
+		if chunkID.Y < minY {
+			minY = chunkID.Y
+		}
+		if chunkID.Y > maxY {
+			maxY = chunkID.Y
+		}
 
-                chunk, chunkExists := s.chunks[chunkID]
-                flagsMap := s.flags[chunkID]
-                seed64 := s.generateChunkSeed(chunkID)
-                var seedBytes [8]byte
-                binary.LittleEndian.PutUint64(seedBytes[:], seed64)
+		chunk, chunkExists := s.chunks[chunkID]
+		flagsMap := s.flags[chunkID]
+		seed64 := s.generateChunkSeed(chunkID)
+		var seedBytes [8]byte
+		binary.LittleEndian.PutUint64(seedBytes[:], seed64)
 
-                var bits ChunkBits
-                if chunkExists {
-                        bits = *chunk
-                }
+		var bits ChunkBits
+		if chunkExists {
+			bits = *chunk
+		}
 
-                groups := make(map[uint32]*pb.RevealedCells)
-                for cell, fl := range flagsMap {
-                        if groups[fl.FlagID] == nil {
-                                groups[fl.FlagID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
-                        }
-                        groups[fl.FlagID].Cells = append(groups[fl.FlagID].Cells, cell)
-                }
+		groups := make(map[uint32]*pb.RevealedCells)
+		for cell, fl := range flagsMap {
+			if groups[fl.FlagID] == nil {
+				groups[fl.FlagID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
+			}
+			groups[fl.FlagID].Cells = append(groups[fl.FlagID].Cells, cell)
+		}
 
-                flagGroups := make([]*pb.FlagGroup, 0, len(groups))
-                for flagID, cells := range groups {
-                        flagGroups = append(flagGroups, &pb.FlagGroup{
-                                FlagID: flagID,
-                                Cells:  cells,
-                        })
-                }
+		flagGroups := make([]*pb.FlagGroup, 0, len(groups))
+		for flagID, cells := range groups {
+			flagGroups = append(flagGroups, &pb.FlagGroup{
+				FlagID: flagID,
+				Cells:  cells,
+			})
+		}
 
-                revealsBytes := make([]byte, len(bits)*8)
-                for i, word := range bits {
-                        binary.LittleEndian.PutUint64(revealsBytes[i*8:], word)
-                }
+		revealsBytes := make([]byte, len(bits)*8)
+		for i, word := range bits {
+			binary.LittleEndian.PutUint64(revealsBytes[i*8:], word)
+		}
 
-                chunks = append(chunks, &pb.ChunkSync{
-                        ChunkId:    &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
-                        Seed:       seedBytes[:],
-                        Reveals:    revealsBytes,
-                        FlagGroups: flagGroups,
-                })
-        }
+		chunks = append(chunks, &pb.ChunkSync{
+			ChunkId:    &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
+			Seed:       seedBytes[:],
+			Reveals:    revealsBytes,
+			FlagGroups: flagGroups,
+		})
+	}
 
-        s.stateMu.Unlock()
+	s.stateMu.Unlock()
 
-        region := &pb.ChunkRegion{Chunks: chunks}
-        raw, err := proto.Marshal(region)
-        if err != nil {
-                return
-        }
+	region := &pb.ChunkRegion{Chunks: chunks}
+	raw, err := proto.Marshal(region)
+	if err != nil {
+		return
+	}
 
-        var buf bytes.Buffer
-        gz := gzip.NewWriter(&buf)
-        if _, err := gz.Write(raw); err != nil {
-                return
-        }
-        gz.Close()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(raw); err != nil {
+		return
+	}
+	gz.Close()
 
-        msg := &pb.Msg{Payload: &pb.Msg_ChunkRegionSync{ChunkRegionSync: &pb.ChunkRegionSync{
-                Origin: &pb.ChunkID{X: minX, Y: minY},
-                Width:  uint32(maxX - minX + 1),
-                Height: uint32(maxY - minY + 1),
-                Chunks: buf.Bytes(),
-        }}}
+	msg := &pb.Msg{Payload: &pb.Msg_ChunkRegionSync{ChunkRegionSync: &pb.ChunkRegionSync{
+		Origin: &pb.ChunkID{X: minX, Y: minY},
+		Width:  uint32(maxX - minX + 1),
+		Height: uint32(maxY - minY + 1),
+		Chunks: buf.Bytes(),
+	}}}
 
-        s.sendToPlayer(playerID, mustProto(msg))
+	s.sendToPlayer(playerID, mustProto(msg))
 }
 
 func (s *Server) unsubscribeFromChunk(playerID uint32, chunkID ChunkID) {
@@ -524,6 +635,12 @@ func (s *Server) unsubscribeFromChunk(playerID uint32, chunkID ChunkID) {
 			if len(subs) == 0 {
 				delete(s.subs, chunkID)
 			}
+		}
+	}
+	if m, ok := s.playerSubs[playerID]; ok {
+		delete(m, chunkID)
+		if len(m) == 0 {
+			delete(s.playerSubs, playerID)
 		}
 	}
 	s.stateMu.Unlock()

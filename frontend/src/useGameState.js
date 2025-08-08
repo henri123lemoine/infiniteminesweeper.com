@@ -116,6 +116,10 @@ export const useGameState = () => {
 
   const [ws, setWs] = useState(null);
   const [connected, setConnected] = useState(false);
+  const wsRef = useRef(null);
+  const connectedRef = useRef(false);
+  const lastViewSentRef = useRef({ startX: null, startY: null, w: 0, h: 0, at: 0 });
+  const MIN_VIEW_SEND_INTERVAL_MS = 180;
   const [leaderboard, setLeaderboard] = useState([]);
   const [playerScore, setPlayerScore] = useState(0);
   const [userRank, setUserRank] = useState(0);
@@ -255,46 +259,88 @@ export const useGameState = () => {
     return placedFlags + revealedMines === expectedMines;
   }, [countAdjacentFlags, countAdjacentMines]);
 
-  const ensureChunkSubscription = useCallback(
-    (chunkX, chunkY) => {
-      const key = `${chunkX},${chunkY}`;
-      if (
-        !subscribedChunks.current.has(key) &&
-        ws &&
-        connected &&
-        ws.readyState === WebSocket.OPEN
-      ) {
-        // FIFO with hard cap
-        subscribedChunks.current.add(key);
-        subscriptionOrder.current.push(key);
+  // Deprecated per-chunk subscribe path is replaced by view-based updates.
+  const ensureChunkSubscription = useCallback(() => {}, []);
 
-        while (subscriptionOrder.current.length > 50) {
-          const oldest = subscriptionOrder.current.shift();
-          subscribedChunks.current.delete(oldest);
-          const [ox, oy] = oldest.split(",").map(Number);
-          ws.send(encodeMsg({ unsubscribe: { chunkId: { X: ox, Y: oy } } }));
-        }
-        ws.send(encodeMsg({ subscribe: { chunkId: { X: chunkX, Y: chunkY } } }));
-      }
-    },
-    [ws, connected],
+  const ensureChunkUnsubscription = useCallback(() => {}, []);
+
+  // Send throttled view updates with viewport size in world cells
+  const sendViewUpdate = useRef(
+    (() => {
+      let raf = null;
+      let pending = null;
+      return (chunkX, chunkY, cell, widthCells, heightCells) => {
+        pending = { chunkX, chunkY, cell, widthCells, heightCells };
+        if (raf) return;
+        raf = requestAnimationFrame(() => {
+          raf = null;
+          const p = pending;
+          pending = null;
+          const s = wsRef.current;
+          const isConn = connectedRef.current;
+          if (!p) return;
+
+          // Compute intended chunk-rect (mirror server logic)
+          const chunksWide = Math.ceil(p.widthCells / CHUNK) + 2;
+          const chunksHigh = Math.ceil(p.heightCells / CHUNK) + 2;
+          const halfW = Math.floor(chunksWide / 2);
+          const halfH = Math.floor(chunksHigh / 2);
+          const startX = p.chunkX - halfW;
+          const startY = p.chunkY - halfH;
+
+          // Skip if identical rect and within min interval
+          const now = performance.now();
+          const last = lastViewSentRef.current;
+          const sameRect = last.startX === startX && last.startY === startY && last.w === chunksWide && last.h === chunksHigh;
+          if (sameRect && now - last.at < MIN_VIEW_SEND_INTERVAL_MS) {
+            if (__DEV__) console.log("viewUpdate coalesced: same rect + within interval");
+            return;
+          }
+          // Update last before send to avoid bursts
+          lastViewSentRef.current = { startX, startY, w: chunksWide, h: chunksHigh, at: now };
+
+          if (!s || !isConn || s.readyState !== WebSocket.OPEN) {
+            if (__DEV__) console.log("viewUpdate skip: not connected or ws not open", { hasWs: !!s, isConn, readyState: s?.readyState });
+            return;
+          }
+          if (__DEV__) console.log("OUTGOING(viewUpdate)", p);
+          s.send(
+            encodeMsg({
+              viewUpdate: {
+                chunkId: { X: p.chunkX, Y: p.chunkY },
+                cell: p.cell,
+                widthCells: p.widthCells,
+                heightCells: p.heightCells,
+              },
+            }),
+          );
+        });
+      };
+    })(),
   );
 
-  const ensureChunkUnsubscription = useCallback(
-    (chunkX, chunkY) => {
-      const key = `${chunkX},${chunkY}`;
-      if (subscribedChunks.current.has(key) && ws && connected) {
-        subscribedChunks.current.delete(key);
-        subscriptionOrder.current = subscriptionOrder.current.filter(
-          (k) => k !== key,
-        );
-        ws.send(
-          encodeMsg({ unsubscribe: { chunkId: { X: chunkX, Y: chunkY } } }),
-        );
-      }
-    },
-    [ws, connected],
-  );
+  // Small helper for App.jsx to compute + send view update based on current DOM/zoom
+  const computeAndSendViewUpdate = useCallback(() => {
+    const container = document.querySelector('#root')?.firstElementChild || null;
+    const c = container;
+    if (!c) return;
+    const width = c.clientWidth;
+    const height = c.clientHeight;
+    // width/height in world cells (1 world cell == 1 game cell, size-independent)
+    const worldWidthCells = Math.ceil(width / (window.devicePixelRatio || 1) / 1);
+    const worldHeightCells = Math.ceil(height / (window.devicePixelRatio || 1) / 1);
+
+    const centerWorldX = Math.floor((viewRef.current.x + (width / 1) / 2) / 1);
+    const centerWorldY = Math.floor((viewRef.current.y + (height / 1) / 2) / 1);
+    const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
+    sendViewUpdate.current(
+      chunkX,
+      chunkY,
+      cell,
+      worldWidthCells,
+      worldHeightCells,
+    );
+  }, [worldToChunk]);
 
   // Return true if all chunks intersecting a Chebyshev radius (default 2) are known (we have their seed)
   const isRadiusFullyKnown = useCallback((worldX, worldY, radius = 2) => {
@@ -482,11 +528,32 @@ export const useGameState = () => {
         websocket.send(encodeMsg({ hello: { sessionToken, name: nameInput, flagID } }));
         setConnected(true);
         setWs(websocket);
+        wsRef.current = websocket;
+        connectedRef.current = true;
+        // Kick an initial view update on the next frame once the DOM is ready
+        requestAnimationFrame(() => {
+          try {
+            // Use DOM-based helper to compute current viewport in world cells
+            const root = document.querySelector('#root')?.firstElementChild;
+            if (root) {
+              const width = root.clientWidth;
+              const height = root.clientHeight;
+              const worldWidthCells = Math.ceil(width / 1);
+              const worldHeightCells = Math.ceil(height / 1);
+              const centerWorldX = Math.floor((viewRef.current.x + width / 2) / 1);
+              const centerWorldY = Math.floor((viewRef.current.y + height / 2) / 1);
+              const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
+              sendViewUpdate.current(chunkX, chunkY, cell, worldWidthCells, worldHeightCells);
+            }
+          } catch {}
+        });
       };
 
       websocket.onclose = () => {
         setConnected(false);
         setWs(null);
+        wsRef.current = null;
+        connectedRef.current = false;
         subscribedChunks.current.clear();
         optimisticActions.current.clear();
         revealedCellsRef.current.clear();
@@ -513,6 +580,22 @@ export const useGameState = () => {
           playerFlagsRef.current.set(data.name, data.flagID);
           setUsername(data.name || "");
           setPlayerScore(data.score ?? 0);
+          // Send a view update after processing welcome
+          requestAnimationFrame(() => {
+            try {
+              const root = document.querySelector('#root')?.firstElementChild;
+              if (root) {
+                const width = root.clientWidth;
+                const height = root.clientHeight;
+                const worldWidthCells = Math.ceil(width / 1);
+                const worldHeightCells = Math.ceil(height / 1);
+                const centerWorldX = Math.floor((viewRef.current.x + width / 2) / 1);
+                const centerWorldY = Math.floor((viewRef.current.y + height / 2) / 1);
+                const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
+                sendViewUpdate.current(chunkX, chunkY, cell, worldWidthCells, worldHeightCells);
+              }
+            } catch {}
+          });
         } else if (type === "chunkSync") {
           applyChunkSync(data);
           setTick(t => t + 1);
@@ -742,5 +825,8 @@ export const useGameState = () => {
     disconnect,
     worldToChunk,
     isMine,
+    // expose throttled view-update sender to App.jsx
+    sendViewUpdateRef: sendViewUpdate,
+    computeAndSendViewUpdate,
   };
 };

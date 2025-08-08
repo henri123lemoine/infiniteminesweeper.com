@@ -19,6 +19,9 @@ type Flag struct {
 type PlayerView struct {
 	Chunk ChunkID
 	Cell  uint32
+	// Last region dimensions in chunks used for subscription window
+	RectWChunks int
+	RectHChunks int
 }
 
 type Player struct {
