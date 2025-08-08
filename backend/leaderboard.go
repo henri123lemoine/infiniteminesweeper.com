@@ -32,13 +32,17 @@ func formatScore(n int32) string {
 func (s *Server) buildLeaderboardUnsafe() {
 	// Collect & sort
 	entries := make([]lbEntry, 0, len(s.scores))
+	// Deduplicate by name at the source to avoid duplicates caused by identity glitches
+	bestByName := make(map[string]lbEntry)
 	for pid, sc := range s.scores {
-		entries = append(entries, lbEntry{
-			PlayerID: pid,
-			Name:     s.playerNames[pid],
-			Score:    sc,
-			FlagID:   s.playerFlags[pid],
-		})
+		name := s.playerNames[pid]
+		e := lbEntry{PlayerID: pid, Name: name, Score: sc, FlagID: s.playerFlags[pid]}
+		if prev, ok := bestByName[name]; !ok || e.Score > prev.Score {
+			bestByName[name] = e
+		}
+	}
+	for _, e := range bestByName {
+		entries = append(entries, e)
 	}
 	// Sort by the raw score
 	sort.Slice(entries, func(i, j int) bool {

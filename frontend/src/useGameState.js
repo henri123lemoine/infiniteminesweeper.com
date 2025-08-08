@@ -565,9 +565,16 @@ export const useGameState = () => {
             setTick(t => t+1);
         } else if (type === "leaderboard") {
             const entries = Array.isArray(data.entries) ? data.entries : [];
-            setLeaderboard(entries.length ? entries.sort((a, b) => b.score - a.score) : []);
+            // De-duplicate by name on the client defensively; keep the highest score
+            const byName = new Map();
+            for (const e of entries) {
+              const prev = byName.get(e.name);
+              if (!prev || (e.score ?? 0) > (prev.score ?? 0)) byName.set(e.name, e);
+            }
+            const uniqueEntries = Array.from(byName.values()).sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+            setLeaderboard(uniqueEntries);
             playerFlagsRef.current.clear();
-            for (const entry of entries) {
+            for (const entry of uniqueEntries) {
                 playerFlagsRef.current.set(entry.name, entry.flagID);
             }
         }

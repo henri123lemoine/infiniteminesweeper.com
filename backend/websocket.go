@@ -155,14 +155,30 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			conn.Close()
 			return
 		}
-		playerID = s.nextPlayerID
-		s.nextPlayerID++
-		sessionToken = generateSessionToken()
-		s.sessionTokens[sessionToken] = playerID
-		s.playerNames[playerID] = hello.Name
-		s.playerFlags[playerID] = hello.FlagID
-		s.scores[playerID] = 0 // New players always start with a score of 0
-		log.Printf("New player identity created: ID=%d, Name=%s", playerID, hello.Name)
+
+		// If a player with the same name already exists, reuse that identity.
+		if existingID, ok := s.nameToPlayerID[hello.Name]; ok {
+			playerID = existingID
+			// Issue a fresh token for this session and bind it.
+			sessionToken = generateSessionToken()
+			s.sessionTokens[sessionToken] = playerID
+			// Update flag if provided (treat 0 as a no-op; otherwise set)
+			if hello.FlagID != 0 {
+				s.playerFlags[playerID] = hello.FlagID
+			}
+			log.Printf("Reused player identity: ID=%d, Name=%s", playerID, hello.Name)
+		} else {
+			// Create a brand new identity
+			playerID = s.nextPlayerID
+			s.nextPlayerID++
+			sessionToken = generateSessionToken()
+			s.sessionTokens[sessionToken] = playerID
+			s.playerNames[playerID] = hello.Name
+			s.nameToPlayerID[hello.Name] = playerID
+			s.playerFlags[playerID] = hello.FlagID
+			s.scores[playerID] = 0 // New players always start with a score of 0
+			log.Printf("New player identity created: ID=%d, Name=%s", playerID, hello.Name)
+		}
 	}
 
 	// Read player state while still under the lock

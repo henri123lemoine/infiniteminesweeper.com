@@ -34,11 +34,13 @@ type Server struct {
 	playerViews map[uint32]PlayerView // last known view position (chunk, cell)
 
 	// Players
-	playersMu     sync.RWMutex
-	players       map[uint32]map[*Player]struct{}
-	playerNames   map[uint32]string
-	nextPlayerID  uint32
-	sessionTokens map[string]uint32 // session_token -> playerID
+	playersMu   sync.RWMutex
+	players     map[uint32]map[*Player]struct{}
+	playerNames map[uint32]string
+	// Fast lookup to reuse identity by name if token is missing/invalid
+	nameToPlayerID map[string]uint32
+	nextPlayerID   uint32
+	sessionTokens  map[string]uint32 // session_token -> playerID
 
 	// Seed cache for performance
 	seedCache   map[ChunkID]uint64
@@ -60,19 +62,20 @@ type Server struct {
 
 func NewServer() *Server {
 	return &Server{
-		secret:        []byte("minesweeper-secret-key"),
-		chunks:        make(map[ChunkID]*ChunkBits),
-		flags:         make(map[ChunkID]map[uint32]Flag),
-		scores:        make(map[uint32]int32),
-		subs:          make(map[ChunkID]map[uint32]struct{}),
-		players:       make(map[uint32]map[*Player]struct{}),
-		playerNames:   make(map[uint32]string),
-		playerFlags:   make(map[uint32]uint32),
-		playerViews:   make(map[uint32]PlayerView),
-		sessionTokens: make(map[string]uint32), // Initialize the new map
-		seedCache:     make(map[ChunkID]uint64),
-		nextPlayerID:  1,
-		dataDir:       "data",
+		secret:         []byte("minesweeper-secret-key"),
+		chunks:         make(map[ChunkID]*ChunkBits),
+		flags:          make(map[ChunkID]map[uint32]Flag),
+		scores:         make(map[uint32]int32),
+		subs:           make(map[ChunkID]map[uint32]struct{}),
+		players:        make(map[uint32]map[*Player]struct{}),
+		playerNames:    make(map[uint32]string),
+		nameToPlayerID: make(map[string]uint32),
+		playerFlags:    make(map[uint32]uint32),
+		playerViews:    make(map[uint32]PlayerView),
+		sessionTokens:  make(map[string]uint32), // Initialize the new map
+		seedCache:      make(map[ChunkID]uint64),
+		nextPlayerID:   1,
+		dataDir:        "data",
 		upgrader: websocket.Upgrader{
 			// Reject cross-site WebSocket requests (prevents CSRF via <iframe>).
 			CheckOrigin: func(r *http.Request) bool {
