@@ -121,3 +121,17 @@ func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
 
 	return seed
 }
+
+// densestChunk returns the ChunkID with the highest number of subscribed players.
+// If no subscriptions exist, it returns the zero ChunkID (0,0).
+func (s *Server) densestChunk() ChunkID {
+	var best ChunkID
+	max := -1
+	for cid, subs := range s.subs {
+		if c := len(subs); c > max {
+			max = c
+			best = cid
+		}
+	}
+	return best
+}

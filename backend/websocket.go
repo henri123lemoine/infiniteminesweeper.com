@@ -165,10 +165,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Printf("New player identity created: ID=%d, Name=%s", playerID, hello.Name)
 	}
 
-	// Read player state while still under the lock
+	// Read player state and determine spawn while still under the lock
 	playerName := s.playerNames[playerID]
 	playerFlag := s.playerFlags[playerID]
 	initScore := s.scores[playerID]
+
+	spawnChunk := s.densestChunk()
+	spawnCell := uint32((ChunkSize/2)*ChunkSize + ChunkSize/2)
+	s.playerViews[playerID] = PlayerView{Chunk: spawnChunk, Cell: spawnCell}
 	s.lbDirty = true
 	s.stateMu.Unlock()
 
@@ -206,6 +210,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Name:         playerName,
 		Score:        initScore,
 		FlagID:       playerFlag,
+		ViewUpdate: &pb.ViewUpdate{
+			ChunkId: &pb.ChunkID{X: spawnChunk.X, Y: spawnChunk.Y},
+			Cell:    spawnCell,
+		},
 	}}}
 	s.sendToPlayer(playerID, mustProto(welcomeMsg))
 
@@ -219,6 +227,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		s.sendToPlayer(playerID, lbBytes)
 		player.LastLBVersion = lbVer
 	}
+
+	// Auto-subscribe new player to the chosen spawn chunk
+	s.subscribeToChunk(playerID, spawnChunk)
 
 	log.Printf("Player %d (%s) connected.", playerID, playerName)
 }

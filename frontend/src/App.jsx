@@ -37,6 +37,7 @@ function App() {
     connectWs,
     worldToChunk,
     isMine,
+    spawnView,
   } = useGameState();
 
   const canvasRef = useRef(null);
@@ -70,16 +71,18 @@ function App() {
     [commitViewRef],
   );
   const [zoom, setZoom] = useState(1);
-  const handleZoom = useCallback(
-    (delta) => {
-      setZoom((z) => {
-        return Math.min(Math.max(z + delta, 0.5), 3);
-      });
-    },
-    [],
-  );
+  const handleZoom = useCallback((delta) => {
+    setZoom((z) => {
+      return Math.min(Math.max(z + delta, 0.5), 3);
+    });
+  }, []);
   const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0, viewX: 0, viewY: 0 });
+  const [dragStart, setDragStart] = useState({
+    x: 0,
+    y: 0,
+    viewX: 0,
+    viewY: 0,
+  });
   const dragTimeoutRef = useRef(null);
 
   // Rendering optimization refs
@@ -459,6 +462,15 @@ function App() {
     return cleanup;
   }, [username, flagID, connectWs]);
 
+  useEffect(() => {
+    if (!spawnView) return;
+    viewRef.current.x = spawnView.worldX * CELL_SIZE;
+    viewRef.current.y = spawnView.worldY * CELL_SIZE;
+    commitViewRef();
+    const { chunkX, chunkY } = worldToChunk(spawnView.worldX, spawnView.worldY);
+    ensureChunkSubscription(chunkX, chunkY);
+  }, [spawnView, commitViewRef, worldToChunk, ensureChunkSubscription]);
+
   // Subscribe to visible chunks when view changes
   useEffect(() => {
     subscribeToVisibleChunks();
@@ -520,10 +532,11 @@ function App() {
   const centerWorldY = Math.floor(
     (viewY + containerHeight / 2 / zoom) / CELL_SIZE,
   );
-  const { chunkX: centerChunkX, chunkY: centerChunkY, cell: centerCell } = worldToChunk(
-    centerWorldX,
-    centerWorldY,
-  );
+  const {
+    chunkX: centerChunkX,
+    chunkY: centerChunkY,
+    cell: centerCell,
+  } = worldToChunk(centerWorldX, centerWorldY);
 
   return (
     <div className="game-container">
@@ -571,7 +584,9 @@ function App() {
                   setUsername(trimmedName);
                 } else {
                   // Generate a default username with 5 random digits
-                  const randomDigits = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+                  const randomDigits = Math.floor(Math.random() * 100000)
+                    .toString()
+                    .padStart(5, "0");
                   setUsername(`User${randomDigits}`);
                 }
               }}
@@ -732,7 +747,9 @@ function App() {
                       />
                       {p.name}
                     </span>
-                    <span style={{ fontWeight: "bold" }}>{formatScore(p.score)}</span>
+                    <span style={{ fontWeight: "bold" }}>
+                      {formatScore(p.score)}
+                    </span>
                   </li>
                 ))}
               </ul>

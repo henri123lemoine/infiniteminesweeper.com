@@ -6,15 +6,14 @@ const log = __DEV__ ? console.log.bind(console) : () => {};
 
 // Robust one-of detector: ignore numeric placeholders & legacy “payload”
 const activeKey = (m) =>
-  Object.keys(m)
-    .filter(
-      (k) =>
-        k !== "constructor" &&
-        k !== "$type" &&
-        k !== "payload" &&
-        isNaN(Number(k)) &&
-        m[k] != null
-    )[0];
+  Object.keys(m).filter(
+    (k) =>
+      k !== "constructor" &&
+      k !== "$type" &&
+      k !== "payload" &&
+      isNaN(Number(k)) &&
+      m[k] != null,
+  )[0];
 
 const normalizeChunkId = (cid = {}) => ({ X: cid.X ?? 0, Y: cid.Y ?? 0 });
 
@@ -116,6 +115,7 @@ export const useGameState = () => {
   const [username, setUsername] = useState(storedName);
   const [scorePopups, setScorePopups] = useState([]);
   const [tick, setTick] = useState(0);
+  const [spawnView, setSpawnView] = useState(null);
 
   // Game state refs
   const seedCache = useRef(new Map());
@@ -162,27 +162,31 @@ export const useGameState = () => {
   }, []);
 
   // Check if a chord operation is valid by comparing placed flags + revealed mines to expected adjacent mines
-  const canChord = useCallback((worldX, worldY) => {
-    const placedFlags = countAdjacentFlags(worldX, worldY);
-    let revealedMines = 0;
+  const canChord = useCallback(
+    (worldX, worldY) => {
+      const placedFlags = countAdjacentFlags(worldX, worldY);
+      let revealedMines = 0;
 
-    // Count revealed mines in the 8 adjacent cells
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0) continue;
-        const wx = worldX + dx, wy = worldY + dy;
-        const { chunkX: cx, chunkY: cy, cell: c } = worldToChunk(wx, wy);
-        const key = `${cx},${cy},${c}`;
-        const data = revealedCellsRef.current.get(key);
-        if (data?.isMine) revealedMines++;
+      // Count revealed mines in the 8 adjacent cells
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const wx = worldX + dx,
+            wy = worldY + dy;
+          const { chunkX: cx, chunkY: cy, cell: c } = worldToChunk(wx, wy);
+          const key = `${cx},${cy},${c}`;
+          const data = revealedCellsRef.current.get(key);
+          if (data?.isMine) revealedMines++;
+        }
       }
-    }
 
-    const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
-    const expectedMines = countAdjacentMines(chunkX, chunkY, cell);
+      const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
+      const expectedMines = countAdjacentMines(chunkX, chunkY, cell);
 
-    return placedFlags + revealedMines === expectedMines;
-  }, [countAdjacentFlags, countAdjacentMines]);
+      return placedFlags + revealedMines === expectedMines;
+    },
+    [countAdjacentFlags, countAdjacentMines],
+  );
 
   const ensureChunkSubscription = useCallback(
     (chunkX, chunkY) => {
@@ -203,7 +207,9 @@ export const useGameState = () => {
           const [ox, oy] = oldest.split(",").map(Number);
           ws.send(encodeMsg({ unsubscribe: { chunkId: { X: ox, Y: oy } } }));
         }
-        ws.send(encodeMsg({ subscribe: { chunkId: { X: chunkX, Y: chunkY } } }));
+        ws.send(
+          encodeMsg({ subscribe: { chunkId: { X: chunkX, Y: chunkY } } }),
+        );
       }
     },
     [ws, connected],
@@ -242,14 +248,16 @@ export const useGameState = () => {
       const requestId = Date.now().toString();
       const optimisticChanges = new Map();
       optimisticActions.current.set(requestId, optimisticChanges);
-      let didLocalMutation = false;          // track if we really changed stuff
+      let didLocalMutation = false; // track if we really changed stuff
 
       const recordChange = (cKey, change) => {
         if (!optimisticChanges.has(cKey)) {
-            optimisticChanges.set(cKey, { reveals: new Set(), flags: new Set() });
+          optimisticChanges.set(cKey, { reveals: new Set(), flags: new Set() });
         }
-        if (change.type === "reveal") optimisticChanges.get(cKey).reveals.add(change.cell);
-        if (change.type === "flag")   optimisticChanges.get(cKey).flags.add(change.cell);
+        if (change.type === "reveal")
+          optimisticChanges.get(cKey).reveals.add(change.cell);
+        if (change.type === "flag")
+          optimisticChanges.get(cKey).flags.add(change.cell);
         didLocalMutation = true;
       };
 
@@ -257,7 +265,7 @@ export const useGameState = () => {
         const myFlagId = playerFlagsRef.current.get(username);
         if (myFlagId !== undefined) {
           flaggedCellsRef.current.set(flagKey, myFlagId);
-          recordChange(chunkKey, {type: 'flag', cell});
+          recordChange(chunkKey, { type: "flag", cell });
         }
       } else if (isChord) {
         // Only chord if flags == adjacentMines
@@ -281,7 +289,8 @@ export const useGameState = () => {
           const { chunkX: cx, chunkY: cy, cell: cidx } = worldToChunk(wx, wy);
           const chunkKey = `${cx},${cy}`;
           const cellKey = `${cx},${cy},${cidx}`;
-          if (revealedCellsRef.current.has(cellKey) || visited.has(cellKey)) continue;
+          if (revealedCellsRef.current.has(cellKey) || visited.has(cellKey))
+            continue;
           visited.add(cellKey);
 
           const seed = seedCache.current.get(chunkKey);
@@ -290,8 +299,11 @@ export const useGameState = () => {
           // reveal
           const isM = isMine(seed, cidx);
           const adj = isM ? 0 : countAdjacentMines(cx, cy, cidx);
-          revealedCellsRef.current.set(cellKey, { isMine: isM, adjacentMines: adj });
-          recordChange(chunkKey, { type: 'reveal', cell: cidx });
+          revealedCellsRef.current.set(cellKey, {
+            isMine: isM,
+            adjacentMines: adj,
+          });
+          recordChange(chunkKey, { type: "reveal", cell: cidx });
 
           // if zero, expand around it
           if (!isM && adj === 0) {
@@ -303,16 +315,23 @@ export const useGameState = () => {
             }
           }
         }
-      } else { // Standard reveal
+      } else {
+        // Standard reveal
         const seed = seedCache.current.get(chunkKey);
         if (seed) {
           if (isMine(seed, cell)) {
-            revealedCellsRef.current.set(cellKey, { isMine: true, adjacentMines: 0 });
+            revealedCellsRef.current.set(cellKey, {
+              isMine: true,
+              adjacentMines: 0,
+            });
           } else {
             const adjacent = countAdjacentMines(chunkX, chunkY, cell);
-            revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: adjacent });
+            revealedCellsRef.current.set(cellKey, {
+              isMine: false,
+              adjacentMines: adjacent,
+            });
           }
-          recordChange(chunkKey, { type: 'reveal', cell });
+          recordChange(chunkKey, { type: "reveal", cell });
         }
       }
 
@@ -331,13 +350,17 @@ export const useGameState = () => {
       }
 
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(encodeMsg({ reveal: {
-            requestId,
-            chunkId: { X: chunkX, Y: chunkY },
-            cell,
-            isRightClick,
-            isChord,
-        }}));
+        ws.send(
+          encodeMsg({
+            reveal: {
+              requestId,
+              chunkId: { X: chunkX, Y: chunkY },
+              cell,
+              isRightClick,
+              isChord,
+            },
+          }),
+        );
       }
     },
     [ws, connected, countAdjacentMines, countAdjacentFlags, canChord, username],
@@ -351,7 +374,9 @@ export const useGameState = () => {
 
       websocket.onopen = () => {
         const sessionToken = localStorage.getItem("session_token") || "";
-        websocket.send(encodeMsg({ hello: { sessionToken, name: nameInput, flagID } }));
+        websocket.send(
+          encodeMsg({ hello: { sessionToken, name: nameInput, flagID } }),
+        );
         setConnected(true);
         setWs(websocket);
       };
@@ -379,11 +404,25 @@ export const useGameState = () => {
           playerFlagsRef.current.set(data.name, data.flagID);
           setUsername(data.name || "");
           setPlayerScore(data.score);
+          if (data.viewUpdate) {
+            const { X, Y } = normalizeChunkId(data.viewUpdate.chunkId);
+            const cell = data.viewUpdate.cell ?? 0;
+            const localX = cell % CHUNK;
+            const localY = Math.floor(cell / CHUNK);
+            const worldX = X * CHUNK + localX;
+            const worldY = Y * CHUNK + localY;
+            setSpawnView({ worldX, worldY });
+            ensureChunkSubscription(X, Y);
+          }
         } else if (type === "chunkSync") {
           const { chunkId, seed, reveals, flagGroups: fgRaw } = data;
           const { X, Y } = normalizeChunkId(chunkId);
           const chunkKey = `${X},${Y}`;
-          const seedBigInt = new DataView(seed.buffer, seed.byteOffset, 8).getBigUint64(0, true);
+          const seedBigInt = new DataView(
+            seed.buffer,
+            seed.byteOffset,
+            8,
+          ).getBigUint64(0, true);
           seedCache.current.set(chunkKey, seedBigInt);
 
           // `flagGroups` might be `undefined` when the chunk has no flags
@@ -403,22 +442,36 @@ export const useGameState = () => {
               const localY = Math.floor(cell / CHUNK);
               const flagWorldX = X * CHUNK + localX;
               const flagWorldY = Y * CHUNK + localY;
-              flaggedCellsRef.current.set(`${flagWorldX},${flagWorldY}`, flagID);
+              flaggedCellsRef.current.set(
+                `${flagWorldX},${flagWorldY}`,
+                flagID,
+              );
             }
           }
 
-          const view = new DataView(reveals.buffer, reveals.byteOffset, reveals.byteLength);
+          const view = new DataView(
+            reveals.buffer,
+            reveals.byteOffset,
+            reveals.byteLength,
+          );
           for (let i = 0; i < CHUNK * CHUNK; i++) {
             const wordIndex = Math.floor(i / CHUNK);
             const bitIndex = i % CHUNK;
-            if ((view.getBigUint64(wordIndex * 8, true) & (1n << BigInt(bitIndex))) !== 0n) {
+            if (
+              (view.getBigUint64(wordIndex * 8, true) &
+                (1n << BigInt(bitIndex))) !==
+              0n
+            ) {
               const cellKey = `${X},${Y},${i}`;
               const isMineVal = isMine(seedBigInt, i);
               const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, i);
-              revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent });
+              revealedCellsRef.current.set(cellKey, {
+                isMine: isMineVal,
+                adjacentMines: adjacent,
+              });
             }
           }
-          setTick(t => t + 1);
+          setTick((t) => t + 1);
         } else if (type === "revealAck") {
           // `requestId` arrives as string (because we set `longs:"String"`).
           const reqRaw = data.requestId ?? data.request_id;
@@ -435,12 +488,12 @@ export const useGameState = () => {
           // 1) Revert *all* optimistic changes for this action
           for (const [chunkKey, changes] of optimisticAction.entries()) {
             // revert reveals
-            changes.reveals.forEach(cell => {
+            changes.reveals.forEach((cell) => {
               revealedCellsRef.current.delete(`${chunkKey},${cell}`);
             });
 
             // revert flags
-            changes.flags.forEach(cell => {
+            changes.flags.forEach((cell) => {
               // chunkKey is "cx,cy"
               const [cx, cy] = chunkKey.split(",").map(Number);
               const lx = cell % CHUNK;
@@ -458,10 +511,10 @@ export const useGameState = () => {
           if (ok) {
             // protobufjs flattens one-of’s, so we look for the fields directly
             const outcomeType = data.revealedCells
-                                   ? "revealedCells"
-                                   : data.flaggedCell
-                                     ? "flaggedCell"
-                                     : null;
+              ? "revealedCells"
+              : data.flaggedCell
+                ? "flaggedCell"
+                : null;
             if (!outcomeType) {
               if (__DEV__) console.warn("RevealAck with unknown outcome", data);
               return;
@@ -480,9 +533,7 @@ export const useGameState = () => {
                 const cellKey = `${primaryChunkKey},${cell}`;
                 const seed = seedCache.current.get(primaryChunkKey);
                 const isMineVal = seed ? isMine(seed, cell) : false;
-                const adjacent = isMineVal
-                  ? 0
-                  : countAdjacentMines(X, Y, cell);
+                const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
                 revealedCellsRef.current.set(cellKey, {
                   isMine: isMineVal,
                   adjacentMines: adjacent,
@@ -496,7 +547,7 @@ export const useGameState = () => {
               const worldY = Y * CHUNK + ly;
               flaggedCellsRef.current.set(
                 `${worldX},${worldY}`,
-                playerFlagsRef.current.get(username)
+                playerFlagsRef.current.get(username),
               );
             }
 
@@ -515,61 +566,72 @@ export const useGameState = () => {
               ]);
               setTimeout(
                 () => setScorePopups((p) => p.filter((s) => s.id !== id)),
-                1000
+                1000,
               );
             }
           }
 
           // force a re-render
           setTick((t) => t + 1);
-
         } else if (type === "chunkUpdateBroadcast") {
-            const { chunkId, ...update } = data;
-            const { X, Y } = normalizeChunkId(chunkId);
-            const chunkKey = `${X},${Y}`;
-            const updateType = data.revealedCells ? "revealedCells" : data.flaggedCell ? "flaggedCell" : null;
-            if (!updateType) return; // Or log an error
-            const updateData = update[updateType];
+          const { chunkId, ...update } = data;
+          const { X, Y } = normalizeChunkId(chunkId);
+          const chunkKey = `${X},${Y}`;
+          const updateType = data.revealedCells
+            ? "revealedCells"
+            : data.flaggedCell
+              ? "flaggedCell"
+              : null;
+          if (!updateType) return; // Or log an error
+          const updateData = update[updateType];
 
-            for (const [reqId, action] of optimisticActions.current.entries()) {
-                if (action.has(chunkKey)) {
-                    action.delete(chunkKey);
-                    if (action.size === 0) optimisticActions.current.delete(reqId);
-                }
+          for (const [reqId, action] of optimisticActions.current.entries()) {
+            if (action.has(chunkKey)) {
+              action.delete(chunkKey);
+              if (action.size === 0) optimisticActions.current.delete(reqId);
             }
+          }
 
-            if (updateType === "revealedCells") {
-                // guard against missing or non-array cells
-                const cells = Array.isArray(updateData.cells) ? updateData.cells : [];
-                for (const cell of cells) {
-                    const cellKey = `${chunkKey},${cell}`;
-                    // Remove any optimistic flag before revealing
-                    const lX = cell % CHUNK, lY = Math.floor(cell / CHUNK);
-                    flaggedCellsRef.current.delete(
-                        `${X * CHUNK + lX},${Y * CHUNK + lY}`
-                    );
+          if (updateType === "revealedCells") {
+            // guard against missing or non-array cells
+            const cells = Array.isArray(updateData.cells)
+              ? updateData.cells
+              : [];
+            for (const cell of cells) {
+              const cellKey = `${chunkKey},${cell}`;
+              // Remove any optimistic flag before revealing
+              const lX = cell % CHUNK,
+                lY = Math.floor(cell / CHUNK);
+              flaggedCellsRef.current.delete(
+                `${X * CHUNK + lX},${Y * CHUNK + lY}`,
+              );
 
-                    const seed = seedCache.current.get(chunkKey);
-                    const isMineVal = seed ? isMine(seed, cell) : false;
-                    const adjacent = isMineVal
-                        ? 0
-                        : countAdjacentMines(X, Y, cell);
-                    revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent });
-                }
-            } else if (updateType === "flaggedCell") {
-                const lX = updateData.cell % CHUNK, lY = Math.floor(updateData.cell / CHUNK);
-                const wX = X * CHUNK + lX, wY = Y * CHUNK + lY;
-                flaggedCellsRef.current.set(`${wX},${wY}`, updateData.flagID ?? 0);
+              const seed = seedCache.current.get(chunkKey);
+              const isMineVal = seed ? isMine(seed, cell) : false;
+              const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
+              revealedCellsRef.current.set(cellKey, {
+                isMine: isMineVal,
+                adjacentMines: adjacent,
+              });
             }
+          } else if (updateType === "flaggedCell") {
+            const lX = updateData.cell % CHUNK,
+              lY = Math.floor(updateData.cell / CHUNK);
+            const wX = X * CHUNK + lX,
+              wY = Y * CHUNK + lY;
+            flaggedCellsRef.current.set(`${wX},${wY}`, updateData.flagID ?? 0);
+          }
 
-            setTick(t => t+1);
+          setTick((t) => t + 1);
         } else if (type === "leaderboard") {
-            const entries = Array.isArray(data.entries) ? data.entries : [];
-            setLeaderboard(entries.length ? entries.sort((a, b) => b.score - a.score) : []);
-            playerFlagsRef.current.clear();
-            for (const entry of entries) {
-                playerFlagsRef.current.set(entry.name, entry.flagID);
-            }
+          const entries = Array.isArray(data.entries) ? data.entries : [];
+          setLeaderboard(
+            entries.length ? entries.sort((a, b) => b.score - a.score) : [],
+          );
+          playerFlagsRef.current.clear();
+          for (const entry of entries) {
+            playerFlagsRef.current.set(entry.name, entry.flagID);
+          }
         }
       };
 
@@ -598,5 +660,6 @@ export const useGameState = () => {
     connectWs,
     worldToChunk,
     isMine,
+    spawnView,
   };
 };
