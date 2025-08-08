@@ -660,6 +660,9 @@ function App() {
                 width: "80%",
               }}
               placeholder="Your name"
+              maxLength={20}
+              pattern="[A-Za-z0-9_-]{1,20}"
+              title="Use 1-20 characters: letters, numbers, underscores, or hyphens"
             />
             <button
               onClick={() => {

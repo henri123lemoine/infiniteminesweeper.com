@@ -401,6 +401,7 @@ export const useGameState = () => {
       const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
       const websocket = new WebSocket(wsUrl);
       websocket.binaryType = "arraybuffer";
+      let didWelcome = false;
 
       websocket.onopen = () => {
         const sessionToken = localStorage.getItem("session_token") || "";
@@ -417,6 +418,11 @@ export const useGameState = () => {
         revealedCellsRef.current.clear();
         flaggedCellsRef.current.clear();
         playerFlagsRef.current.clear();
+        // If server rejected the handshake (e.g., invalid or taken username),
+        // reset username so the join dialog is shown again.
+        if (!didWelcome) {
+          setUsername("");
+        }
       };
 
       websocket.onmessage = (event) => {
@@ -425,6 +431,7 @@ export const useGameState = () => {
         const data = msg[type];
 
         if (type === "welcome") {
+          didWelcome = true;
           localStorage.setItem("session_token", data.sessionToken);
           localStorage.setItem("username", data.name || "");
           localStorage.setItem("score", String(data.score));

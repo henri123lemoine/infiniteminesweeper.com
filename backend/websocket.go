@@ -156,17 +156,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// If a player with the same name already exists, reuse that identity.
-		if existingID, ok := s.nameToPlayerID[hello.Name]; ok {
-			playerID = existingID
-			// Issue a fresh token for this session and bind it.
-			sessionToken = generateSessionToken()
-			s.sessionTokens[sessionToken] = playerID
-			// Update flag if provided (treat 0 as a no-op; otherwise set)
-			if hello.FlagID != 0 {
-				s.playerFlags[playerID] = hello.FlagID
-			}
-			log.Printf("Reused player identity: ID=%d, Name=%s", playerID, hello.Name)
+		// If a player with the same name already exists, reject this new identity.
+		if _, ok := s.nameToPlayerID[hello.Name]; ok {
+			// Username is taken – close the connection without creating a new identity.
+			s.stateMu.Unlock()
+			conn.Close()
+			return
 		} else {
 			// Create a brand new identity
 			playerID = s.nextPlayerID
