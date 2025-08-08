@@ -445,15 +445,20 @@ func (s *Server) countAdjacentFlags(chunkID ChunkID, cell uint32) int {
 	return count
 }
 
-// hasRevealedWithinTwo returns true if any cell within Chebyshev distance 2 of (worldX, worldY) is revealed.
-// If no cells are revealed anywhere yet, returns true to allow the first reveal.
+// hasRevealedWithinTwo returns true if any cell within the configured Chebyshev
+// distance of (worldX, worldY) is revealed. If proximity is disabled (radius < 0)
+// or no cells are revealed yet, returns true to allow the first reveal.
 func (s *Server) hasRevealedWithinTwo(worldX, worldY int) bool {
 	// Allow the very first reveal to seed the exploration.
 	if s.totalRevealed == 0 {
 		return true
 	}
-	for dy := -2; dy <= 2; dy++ {
-		for dx := -2; dx <= 2; dx++ {
+	radius := s.proximityRadius
+	if radius < 0 {
+		return true
+	}
+	for dy := -radius; dy <= radius; dy++ {
+		for dx := -radius; dx <= radius; dx++ {
 			wx, wy := worldX+dx, worldY+dy
 			cid, cidx := worldToChunk(wx, wy)
 			if s.isCellRevealed(cid, cidx) {

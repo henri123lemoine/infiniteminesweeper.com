@@ -179,6 +179,8 @@ func startTestServer(t *testing.T) (*Server, string, func()) {
 	t.Helper()
 
 	s := NewServer()
+	// Disable proximity rule for tests to match legacy behavior
+	s.proximityRadius = -1
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWebSocket)
 

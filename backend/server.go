@@ -58,25 +58,31 @@ type Server struct {
 	walMutex   sync.Mutex
 	walSeq     uint64
 
+	// Gameplay rules
+	// Chebyshev distance for proximity-limited actions (reveal/flag).
+	// Negative value disables the restriction (used in tests).
+	proximityRadius int
+
 	upgrader websocket.Upgrader
 }
 
 func NewServer() *Server {
 	return &Server{
-		secret:         []byte("minesweeper-secret-key"),
-		chunks:         make(map[ChunkID]*ChunkBits),
-		flags:          make(map[ChunkID]map[uint32]Flag),
-		scores:         make(map[uint32]int32),
-		subs:           make(map[ChunkID]map[uint32]struct{}),
-		players:        make(map[uint32]map[*Player]struct{}),
-		playerNames:    make(map[uint32]string),
-		nameToPlayerID: make(map[string]uint32),
-		playerFlags:    make(map[uint32]uint32),
-		playerViews:    make(map[uint32]PlayerView),
-		sessionTokens:  make(map[string]uint32), // Initialize the new map
-		seedCache:      make(map[ChunkID]uint64),
-		nextPlayerID:   1,
-		dataDir:        "data",
+		secret:          []byte("minesweeper-secret-key"),
+		chunks:          make(map[ChunkID]*ChunkBits),
+		flags:           make(map[ChunkID]map[uint32]Flag),
+		scores:          make(map[uint32]int32),
+		subs:            make(map[ChunkID]map[uint32]struct{}),
+		players:         make(map[uint32]map[*Player]struct{}),
+		playerNames:     make(map[uint32]string),
+		nameToPlayerID:  make(map[string]uint32),
+		playerFlags:     make(map[uint32]uint32),
+		playerViews:     make(map[uint32]PlayerView),
+		sessionTokens:   make(map[string]uint32), // Initialize the new map
+		seedCache:       make(map[ChunkID]uint64),
+		nextPlayerID:    1,
+		dataDir:         "data",
+		proximityRadius: 2, // default behavior: must be within distance <= 2 of any revealed cell
 		upgrader: websocket.Upgrader{
 			// Reject cross-site WebSocket requests (prevents CSRF via <iframe>).
 			CheckOrigin: func(r *http.Request) bool {
