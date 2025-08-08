@@ -18,7 +18,7 @@ function App() {
   const storedName = localStorage.getItem("username") || "";
   const [nameInput, setNameInput] = useState(storedName);
   const [hotspotInfo, setHotspotInfo] = useState(null);
-  const [activeTab, setActiveTab] = useState("play"); // play | leaderboard | flags | advancements
+  const [activeTab, setActiveTab] = useState("play"); // play | leaderboard | advancements
   const [fullLeaderboard, setFullLeaderboard] = useState(null);
   const [lbLoading, setLbLoading] = useState(false);
   const [joinError, setJoinError] = useState("");
@@ -59,6 +59,7 @@ function App() {
   const viewRef = useRef({ x: storedViewX, y: storedViewY });
   const rafRef = useRef(null);
   const guestCleanupRef = useRef(null);
+  const userMovedRef = useRef(false);
 
   const commitViewRef = useCallback(() => {
     setViewX(viewRef.current.x);
@@ -81,6 +82,7 @@ function App() {
   const [zoom, setZoom] = useState(1);
   const handleZoom = useCallback(
     (delta) => {
+      userMovedRef.current = true;
       const container = containerRef.current;
       const MIN_ZOOM = 0.5;
       const MAX_ZOOM = 3;
@@ -114,6 +116,7 @@ function App() {
   const handleWheel = useCallback(
     (e) => {
       e.preventDefault();
+      userMovedRef.current = true;
 
       const container = containerRef.current;
       if (!container) return;
@@ -371,6 +374,7 @@ function App() {
       }
 
       if (e.button !== 0) return;
+      userMovedRef.current = true;
 
       setDragStart({
         x: e.clientX,
@@ -404,6 +408,7 @@ function App() {
       }
 
       if (isDragging) {
+        userMovedRef.current = true;
         const deltaX = (e.clientX - dragStart.x) / zoom;
         const deltaY = (e.clientY - dragStart.y) / zoom;
 
@@ -460,6 +465,7 @@ function App() {
       if (e.touches.length === 1) {
         const touch = e.touches[0];
         e.preventDefault(); // Prevent text selection
+        userMovedRef.current = true;
         setDragStart({
           x: touch.clientX,
           y: touch.clientY,
@@ -502,6 +508,7 @@ function App() {
         }
 
         if (isDragging) {
+          userMovedRef.current = true;
           const deltaX = (touch.clientX - dragStart.x) / zoom;
           const deltaY = (touch.clientY - dragStart.y) / zoom;
 
@@ -614,16 +621,22 @@ function App() {
 
   // Fetch hotspot to showcase activity on landing
   useEffect(() => {
+    let canceled = false;
     fetch("/hotspot")
-      .then(r => r.ok ? r.json() : null)
+      .then(r => (r.ok ? r.json() : null))
       .then(data => {
-        if (!data) return;
+        if (canceled || !data) return;
         setHotspotInfo(data);
+        // Only auto-center if the user hasn't moved the camera yet
+        if (userMovedRef.current) return;
         const chunkWorldX = data.X * CHUNK + CHUNK / 2;
         const chunkWorldY = data.Y * CHUNK + CHUNK / 2;
         requestAnimationFrame(() => centerCameraOnWorld(chunkWorldX, chunkWorldY));
       })
       .catch(() => {});
+    return () => {
+      canceled = true;
+    };
   }, [centerCameraOnWorld]);
 
   // Handle window resize
@@ -721,7 +734,6 @@ function App() {
               {[
                 { k: "play", label: "Play" },
                 { k: "leaderboard", label: "Leaderboard" },
-                { k: "flags", label: "Flags" },
                 { k: "advancements", label: "Advancements" },
               ].map((t) => (
                 <button
@@ -878,34 +890,6 @@ function App() {
               </div>
             )}
 
-            {activeTab === "flags" && (
-              <div style={{ maxWidth: 720, margin: "0 auto" }}>
-                <div style={{ marginBottom: 8, fontWeight: 600 }}>Pick your flag style</div>
-                <FlagSelector
-                  value={flagID}
-                  onChange={async (id) => {
-                    setFlagID(id);
-                    localStorage.setItem("flagID", id);
-                    // If already authenticated, try to persist flag change without new identity
-                    const token = localStorage.getItem("session_token");
-                    const currentName = localStorage.getItem("username") || "";
-                    if (token && currentName) {
-                      try {
-                        await fetch("/profile/update", {
-                          method: "POST",
-                          headers: {
-                            "Content-Type": "application/json",
-                            "X-Session-Token": token,
-                          },
-                          body: JSON.stringify({ flagID: id }),
-                        });
-                      } catch {}
-                    }
-                  }}
-                />
-              </div>
-            )}
-
             {activeTab === "advancements" && (
               <div style={{ color: "#666" }}>
                 Coming soon: personal milestones, streaks, and discoveries.
@@ -973,8 +957,10 @@ function App() {
           <canvas ref={canvasRef} id="game-canvas" />
 
           {scorePopups.map((p) => {
-            const x = (p.worldX * CELL_SIZE - viewX) * zoom;
-            const y = (p.worldY * CELL_SIZE - viewY) * zoom;
+            const vx = viewRef.current.x;
+            const vy = viewRef.current.y;
+            const x = (p.worldX * CELL_SIZE - vx) * zoom;
+            const y = (p.worldY * CELL_SIZE - vy) * zoom;
             return (
               <div
                 key={p.id}
@@ -993,8 +979,10 @@ function App() {
           })}
 
           {hintPopups.map((h) => {
-            const x = (h.worldX * CELL_SIZE - viewX) * zoom;
-            const y = (h.worldY * CELL_SIZE - viewY) * zoom;
+            const vx = viewRef.current.x;
+            const vy = viewRef.current.y;
+            const x = (h.worldX * CELL_SIZE - vx) * zoom;
+            const y = (h.worldY * CELL_SIZE - vy) * zoom;
             return (
               <div
                 key={h.id}
