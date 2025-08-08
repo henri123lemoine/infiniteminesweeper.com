@@ -73,12 +73,79 @@ function App() {
   const [zoom, setZoom] = useState(1);
   const handleZoom = useCallback(
     (delta) => {
-      setZoom((z) => {
-        return Math.min(Math.max(z + delta, 0.5), 3);
+      const container = containerRef.current;
+      const MIN_ZOOM = 0.5;
+      const MAX_ZOOM = 3;
+      const direction = Math.sign(delta) || 1; // interpret delta as intent
+      const STEP = 1.2; // multiplicative step feels linear perceptually
+
+      setZoom((prevZoom) => {
+        const factor = direction > 0 ? STEP : 1 / STEP;
+        const targetZoom = Math.min(Math.max(prevZoom * factor, MIN_ZOOM), MAX_ZOOM);
+
+        if (container) {
+          // Anchor zoom at the screen center so the view doesn't drift
+          const width = container.clientWidth;
+          const height = container.clientHeight;
+          const centerX = width / 2;
+          const centerY = height / 2;
+
+          const worldCenterX = viewRef.current.x + centerX / prevZoom;
+          const worldCenterY = viewRef.current.y + centerY / prevZoom;
+
+          const newViewX = worldCenterX - centerX / targetZoom;
+          const newViewY = worldCenterY - centerY / targetZoom;
+          scheduleViewUpdate(newViewX, newViewY);
+        }
+
+        return targetZoom;
       });
     },
-    [],
+    [scheduleViewUpdate],
   );
+  const handleWheel = useCallback(
+    (e) => {
+      e.preventDefault();
+
+      const container = containerRef.current;
+      if (!container) return;
+
+      const rect = container.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const MIN_ZOOM = 0.5;
+      const MAX_ZOOM = 3;
+
+      // Smooth exponential zoom; negative deltaY -> zoom in
+      const zoomFactor = Math.exp(-e.deltaY * 0.001);
+
+      setZoom((prevZoom) => {
+        const targetZoom = Math.min(
+          Math.max(prevZoom * zoomFactor, MIN_ZOOM),
+          MAX_ZOOM,
+        );
+
+        // Anchor the zoom on the mouse position for intuitive behavior
+        const worldX = viewRef.current.x + mouseX / prevZoom;
+        const worldY = viewRef.current.y + mouseY / prevZoom;
+        const newViewX = worldX - mouseX / targetZoom;
+        const newViewY = worldY - mouseY / targetZoom;
+        scheduleViewUpdate(newViewX, newViewY);
+
+        return targetZoom;
+      });
+    },
+    [containerRef, scheduleViewUpdate],
+  );
+
+  // Attach non-passive wheel listener to prevent page scroll while zooming
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, [handleWheel]);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0, viewX: 0, viewY: 0 });
   const dragTimeoutRef = useRef(null);
@@ -658,8 +725,8 @@ function App() {
           <canvas ref={canvasRef} id="game-canvas" />
 
           {scorePopups.map((p) => {
-            const x = p.worldX * CELL_SIZE * zoom - viewX;
-            const y = p.worldY * CELL_SIZE * zoom - viewY;
+            const x = (p.worldX * CELL_SIZE - viewX) * zoom;
+            const y = (p.worldY * CELL_SIZE - viewY) * zoom;
             return (
               <div
                 key={p.id}
