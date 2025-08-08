@@ -4,8 +4,10 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 
@@ -130,4 +132,162 @@ func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
 	s.seedCacheMu.Unlock()
 
 	return seed
+}
+
+// handleHotspot returns the chunk with the highest number of active subscribers (players nearby).
+// Falls back to {X:0, Y:0} when there is no activity yet.
+func (s *Server) handleHotspot(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	s.stateMu.RLock()
+	var (
+		bestChunk ChunkID
+		bestCount int
+	)
+	for cid, set := range s.subs {
+		c := len(set)
+		if c > bestCount {
+			bestCount = c
+			bestChunk = cid
+		}
+	}
+	s.stateMu.RUnlock()
+
+	// Conservative default when no one is around
+	resp := struct {
+		X     int64 `json:"X"`
+		Y     int64 `json:"Y"`
+		Count int   `json:"count"`
+	}{X: bestChunk.X, Y: bestChunk.Y, Count: bestCount}
+
+	// Encode JSON (ignore write errors deliberately)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleLeaderboardHTTP serves a deduplicated, full leaderboard (best score per name), sorted desc.
+func (s *Server) handleLeaderboardHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	type entry struct {
+		Name   string `json:"name"`
+		Score  int32  `json:"score"`
+		FlagID uint32 `json:"flagID"`
+	}
+
+	s.stateMu.RLock()
+	bestByName := make(map[string]entry)
+	for pid, sc := range s.scores {
+		name := s.playerNames[pid]
+		e := entry{Name: name, Score: sc, FlagID: s.playerFlags[pid]}
+		if prev, ok := bestByName[name]; !ok || e.Score > prev.Score {
+			bestByName[name] = e
+		}
+	}
+	// Move to slice and sort
+	out := make([]entry, 0, len(bestByName))
+	for _, e := range bestByName {
+		out = append(out, e)
+	}
+	s.stateMu.RUnlock()
+
+	// Sort descending by score
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+type profileUpdateReq struct {
+	Name   *string `json:"name"`
+	FlagID *uint32 `json:"flagID"`
+}
+
+type profileUpdateResp struct {
+	OK       bool   `json:"ok"`
+	Error    string `json:"error,omitempty"`
+	Name     string `json:"name"`
+	FlagID   uint32 `json:"flagID"`
+	Score    int32  `json:"score"`
+	PlayerID uint32 `json:"playerID"`
+}
+
+// handleProfileUpdate updates the current player's display name and/or flag without
+// changing their identity or resetting the score. Identifies the player via session token.
+func (s *Server) handleProfileUpdate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(profileUpdateResp{OK: false, Error: "method not allowed"})
+		return
+	}
+
+	// Extract token from headers (X-Session-Token or Authorization: Bearer ...)
+	token := r.Header.Get("X-Session-Token")
+	if token == "" {
+		const prefix = "Bearer "
+		auth := r.Header.Get("Authorization")
+		if strings.HasPrefix(auth, prefix) {
+			token = strings.TrimPrefix(auth, prefix)
+		}
+	}
+	if token == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(profileUpdateResp{OK: false, Error: "missing session token"})
+		return
+	}
+
+	var req profileUpdateReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(profileUpdateResp{OK: false, Error: "invalid json"})
+		return
+	}
+
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	pid, ok := s.sessionTokens[token]
+	if !ok {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(profileUpdateResp{OK: false, Error: "invalid session token"})
+		return
+	}
+
+	// Update name if provided
+	if req.Name != nil {
+		newName := strings.TrimSpace(*req.Name)
+		if !isValidUsername(newName) {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(profileUpdateResp{OK: false, Error: "invalid username"})
+			return
+		}
+		current := s.playerNames[pid]
+		if newName != current {
+			if other, exists := s.nameToPlayerID[newName]; exists && other != pid {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(profileUpdateResp{OK: false, Error: "username taken"})
+				return
+			}
+			if current != "" {
+				delete(s.nameToPlayerID, current)
+			}
+			s.nameToPlayerID[newName] = pid
+			s.playerNames[pid] = newName
+			s.lbDirty = true
+		}
+	}
+
+	// Update flag if provided
+	if req.FlagID != nil {
+		s.playerFlags[pid] = *req.FlagID
+		s.lbDirty = true
+	}
+
+	resp := profileUpdateResp{
+		OK:       true,
+		Name:     s.playerNames[pid],
+		FlagID:   s.playerFlags[pid],
+		Score:    s.scores[pid],
+		PlayerID: pid,
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }

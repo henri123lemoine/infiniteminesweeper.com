@@ -106,13 +106,19 @@ const worldToChunk = (worldX, worldY) => {
 };
 
 export const useGameState = () => {
-  const storedName = localStorage.getItem("username") || "";
+  const initialName = (() => {
+    const existing = (localStorage.getItem("username") || "").trim();
+    if (existing) return existing;
+    const generated = `User${String(Math.floor(Math.random() * 100000)).padStart(5, "0")}`;
+    localStorage.setItem("username", generated);
+    return generated;
+  })();
 
   const [ws, setWs] = useState(null);
   const [connected, setConnected] = useState(false);
   const [leaderboard, setLeaderboard] = useState([]);
   const [playerScore, setPlayerScore] = useState(0);
-  const [username, setUsername] = useState(storedName);
+  const [username, setUsername] = useState(initialName);
   const [scorePopups, setScorePopups] = useState([]);
   const [hintPopups, setHintPopups] = useState([]);
   const [tick, setTick] = useState(0);
@@ -405,6 +411,8 @@ export const useGameState = () => {
       let didWelcome = false;
 
       websocket.onopen = () => {
+        // Always include a session token if present; if missing, the server will
+        // assign a unique username and issue a token.
         const sessionToken = localStorage.getItem("session_token") || "";
         websocket.send(encodeMsg({ hello: { sessionToken, name: nameInput, flagID } }));
         setConnected(true);
@@ -663,6 +671,16 @@ export const useGameState = () => {
     [countAdjacentMines, username],
   );
 
+  const disconnect = useCallback(() => {
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    } catch {
+      // ignore
+    }
+  }, [ws]);
+
   return {
     connected,
     playerScore,
@@ -682,6 +700,7 @@ export const useGameState = () => {
     ensureChunkSubscription,
     ensureChunkUnsubscription,
     connectWs,
+    disconnect,
     worldToChunk,
     isMine,
   };
