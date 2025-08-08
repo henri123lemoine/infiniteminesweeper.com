@@ -1,4 +1,4 @@
-# infiniteminesweeper.com
+# [infiniteminesweeper.com](https://infiniteminesweeper.com)
 
 A real-time multiplayer infinite minesweeper game built with Go backend and React frontend. Players explore an unbounded world together, competing on a global leaderboard.
 
