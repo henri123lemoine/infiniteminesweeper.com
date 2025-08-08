@@ -25,6 +25,7 @@ function App() {
     setUsername,
     leaderboard,
     scorePopups,
+    hintPopups,
     tick,
     setTick,
     seedCache,
@@ -157,11 +158,13 @@ function App() {
   // Leaderboard visibility and number formatting
   const [leaderboardVisible, setLeaderboardVisible] = useState(true);
 
-  // Build numeric sprite ID list once at module load (stable ordering)
-  const NUMERIC_IDS = useMemo(
+  // Build numeric sprite ID list for the 'flag' category only
+  const FLAG_IDS = useMemo(
     () =>
       Object.keys(meta.frames)
-        .filter((k) => !Number.isNaN(Number(k)))
+        .filter(
+          (k) => !Number.isNaN(Number(k)) && meta.frames[k]?.category === "flag",
+        )
         .map((k) => Number(k))
         .sort((a, b) => a - b),
     [],
@@ -171,12 +174,14 @@ function App() {
   const [flagID, setFlagID] = useState(() => {
     const raw = localStorage.getItem("flagID");
     const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return 0;
-    // If value is already a known numeric sprite ID, keep it.
-    if (NUMERIC_IDS.includes(parsed)) return parsed;
-    // Legacy case: treat small integer as index into numeric ID list.
-    if (parsed >= 0 && parsed < NUMERIC_IDS.length) return NUMERIC_IDS[parsed];
-    return 0;
+    // Fallback to first available flag if missing/invalid
+    const fallback = FLAG_IDS[0] ?? 0;
+    if (!Number.isFinite(parsed)) return fallback;
+    // If value is a valid flag sprite ID, keep it.
+    if (FLAG_IDS.includes(parsed)) return parsed;
+    // Legacy case: treat small integer as index into flag ID list.
+    if (parsed >= 0 && parsed < FLAG_IDS.length) return FLAG_IDS[parsed];
+    return fallback;
   });
 
   // Ensure we always store numeric IDs (not array indices)
@@ -655,6 +660,9 @@ function App() {
                 width: "80%",
               }}
               placeholder="Your name"
+              maxLength={20}
+              pattern="[A-Za-z0-9_-]{1,20}"
+              title="Use 1-20 characters: letters, numbers, underscores, or hyphens"
             />
             <button
               onClick={() => {
@@ -740,6 +748,30 @@ function App() {
                 }}
               >
                 {p.delta > 0 ? `+${p.delta}` : p.delta}
+              </div>
+            );
+          })}
+
+          {hintPopups.map((h) => {
+            const x = (h.worldX * CELL_SIZE - viewX) * zoom;
+            const y = (h.worldY * CELL_SIZE - viewY) * zoom;
+            return (
+              <div
+                key={h.id}
+                style={{
+                  position: "absolute",
+                  left: x,
+                  top: y - 20,
+                  padding: "2px 6px",
+                  background: "rgba(0,0,0,0.7)",
+                  color: "#fff",
+                  borderRadius: 4,
+                  fontSize: 12,
+                  pointerEvents: "none",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {h.message}
               </div>
             );
           })}

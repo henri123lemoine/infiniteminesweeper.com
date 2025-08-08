@@ -19,15 +19,18 @@ export default function FlagSelector({ value, onChange }) {
     sheetImg.src = sheetUrl;
   }, []);
 
-  // Use only stable numeric keys (authoritative sprite IDs)
-  const numericKeys = useMemo(
-    () => Object.keys(frames).filter((k) => !Number.isNaN(Number(k))),
+  // Use only stable numeric keys for sprites in the 'flag' category
+  const flagKeys = useMemo(
+    () =>
+      Object.keys(frames).filter(
+        (k) => !Number.isNaN(Number(k)) && frames[k]?.category === "flag",
+      ),
     [],
   );
 
   // Sort by cost ascending, then numeric ID
   const sortedKeys = useMemo(() => {
-    return numericKeys
+    return flagKeys
       .slice()
       .sort((a, b) => {
         const ca = frames[a].cost ?? 0;
@@ -35,7 +38,7 @@ export default function FlagSelector({ value, onChange }) {
         if (ca !== cb) return ca - cb;
         return Number(a) - Number(b);
       });
-  }, [numericKeys]);
+  }, [flagKeys]);
 
   if (!ready) return <p>Loading flags…</p>;
 
@@ -93,14 +96,30 @@ export default function FlagSelector({ value, onChange }) {
     <div
       style={{
         display: "flex",
-        flexWrap: "wrap",
-        gap: 8,
+        flexDirection: "column",
         maxWidth: "100%",
         maxHeight: "90%",
-        overflowY: "auto",
       }}
     >
-      {buttons}
+      <div
+        style={{
+          fontWeight: "bold",
+          marginBottom: 8,
+          textAlign: "center",
+        }}
+      >
+        🪙 ∞ coins
+      </div>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          overflowY: "auto",
+        }}
+      >
+        {buttons}
+      </div>
     </div>
   );
 }

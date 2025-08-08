@@ -13,7 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 
-	pb "infiniteminesweeper/backend/gen/proto"
+	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
 func debugLogMessage(msg *pb.Msg, playerID uint32) {
@@ -155,14 +155,25 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			conn.Close()
 			return
 		}
-		playerID = s.nextPlayerID
-		s.nextPlayerID++
-		sessionToken = generateSessionToken()
-		s.sessionTokens[sessionToken] = playerID
-		s.playerNames[playerID] = hello.Name
-		s.playerFlags[playerID] = hello.FlagID
-		s.scores[playerID] = 0 // New players always start with a score of 0
-		log.Printf("New player identity created: ID=%d, Name=%s", playerID, hello.Name)
+
+		// If a player with the same name already exists, reject this new identity.
+		if _, ok := s.nameToPlayerID[hello.Name]; ok {
+			// Username is taken – close the connection without creating a new identity.
+			s.stateMu.Unlock()
+			conn.Close()
+			return
+		} else {
+			// Create a brand new identity
+			playerID = s.nextPlayerID
+			s.nextPlayerID++
+			sessionToken = generateSessionToken()
+			s.sessionTokens[sessionToken] = playerID
+			s.playerNames[playerID] = hello.Name
+			s.nameToPlayerID[hello.Name] = playerID
+			s.playerFlags[playerID] = hello.FlagID
+			s.scores[playerID] = 0 // New players always start with a score of 0
+			log.Printf("New player identity created: ID=%d, Name=%s", playerID, hello.Name)
+		}
 	}
 
 	// Read player state while still under the lock

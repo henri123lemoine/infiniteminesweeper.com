@@ -66,6 +66,7 @@ export default function Minimap({
     canvas.style.height = `${MINIMAP_SIZE}px`;
 
     const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
 
     // centre on viewX / viewY
     const width = container.clientWidth || 0;

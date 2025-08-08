@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	pb "infiniteminesweeper/backend/gen/proto"
+	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
@@ -179,6 +179,8 @@ func startTestServer(t *testing.T) (*Server, string, func()) {
 	t.Helper()
 
 	s := NewServer()
+	// Disable proximity rule for tests to match legacy behavior
+	s.proximityRadius = -1
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWebSocket)
 
@@ -366,10 +368,12 @@ func TestFullStackIntegration(t *testing.T) {
 		t.Fatalf("expected exactly 1 contention winner, got %d", contenders)
 	}
 
-	// Phase 2: each client reveals its own unique safe cell
+	// Phase 2: each client reveals in its own chunk to avoid prior flood-fill overlap
 	successes := 0
 	for i, conn := range conns {
-		reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{ChunkId: &pb.ChunkID{X: 0, Y: 0}, Cell: uint32(i)}}}
+		chunk := &pb.ChunkID{X: int64(1 + i), Y: 0}
+		cell := uint32(0)
+		reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{ChunkId: chunk, Cell: cell}}}
 		if err := conn.WriteMessage(websocket.BinaryMessage, encodeMsg(reveal)); err != nil {
 			t.Fatalf("write unique %d: %v", i, err)
 		}
@@ -380,7 +384,7 @@ func TestFullStackIntegration(t *testing.T) {
 		if ok {
 			successes++
 		}
-		t.Logf("unique[%d] ok=%v", i, ok)
+		t.Logf("unique[%d] chunk=(%d,%d) cell=%d ok=%v", i, chunk.X, chunk.Y, cell, ok)
 	}
 
 	if successes != clients {

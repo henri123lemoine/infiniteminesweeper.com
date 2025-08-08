@@ -1,10 +1,11 @@
 package main
 
 import (
-	pb "infiniteminesweeper/backend/gen/proto"
 	"math"
 	"regexp"
 	"sync"
+
+	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
 // Helper Functions
@@ -139,6 +140,15 @@ func (s *Server) handleReveal(
 			return
 		}
 
+		// Proximity rule: only allow flagging within distance <= 2 of any revealed cell
+		worldX := int(chunkID.X)*ChunkSize + x
+		worldY := int(chunkID.Y)*ChunkSize + y
+		if !s.hasRevealedWithinTwo(worldX, worldY) {
+			s.sendRevealAck(playerID, requestID, false, nil, 0, chunkID, cell)
+			s.stateMu.Unlock()
+			return
+		}
+
 		playerFlagID := s.playerFlags[playerID]
 		if s.isMine(chunkID, cell) {
 			scoreDelta = 10 // correct flag
@@ -147,10 +157,49 @@ func (s *Server) handleReveal(
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_FlaggedCell{FlaggedCell: &pb.FlagPlacement{Cell: cell, FlagID: playerFlagID}}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
 		} else {
-			scoreDelta = -20 // wrong flag
+			// Wrong flag: deduct points, and perform a flood-fill reveal like a normal reveal.
+			scoreDelta = -20 // wrong flag penalty (no positive points even if many cells revealed)
 			s.applyScore(playerID, scoreDelta)
-			s.setCellRevealed(chunkID, cell, playerID, &allRevealedCells)
-			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: &pb.RevealedCells{Cells: []uint32{cell}}}}
+
+			// Re-use standard reveal flood-fill, but we will not add to scoreDelta for revealed cells here
+			q := []struct {
+				CId  ChunkID
+				CIdx uint32
+			}{{chunkID, cell}}
+			visited := make(map[struct {
+				CId  ChunkID
+				CIdx uint32
+			}]struct{})
+
+			for len(q) > 0 {
+				curr := q[0]
+				q = q[1:]
+
+				if _, exists := visited[curr]; exists || s.isCellRevealed(curr.CId, curr.CIdx) || s.isCellFlagged(curr.CId, curr.CIdx) {
+					continue
+				}
+				visited[curr] = struct{}{}
+				s.setCellRevealed(curr.CId, curr.CIdx, playerID, &allRevealedCells)
+
+				if s.countAdjacentMines(curr.CId, curr.CIdx) == 0 {
+					currX, currY := cellIndexToXY(curr.CIdx)
+					for dy := -1; dy <= 1; dy++ {
+						for dx := -1; dx <= 1; dx++ {
+							if dx == 0 && dy == 0 {
+								continue
+							}
+							wX, wY := int(curr.CId.X)*ChunkSize+currX+dx, int(curr.CId.Y)*ChunkSize+currY+dy
+							nCId, nCIdx := worldToChunk(wX, wY)
+							q = append(q, struct {
+								CId  ChunkID
+								CIdx uint32
+							}{nCId, nCIdx})
+						}
+					}
+				}
+			}
+
+			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
 		}
 	} else if isChord {
@@ -246,6 +295,15 @@ func (s *Server) handleReveal(
 			return
 		}
 
+		// Proximity rule: only allow revealing within distance <= 2 of any revealed cell
+		worldX := int(chunkID.X)*ChunkSize + x
+		worldY := int(chunkID.Y)*ChunkSize + y
+		if !s.hasRevealedWithinTwo(worldX, worldY) {
+			s.sendRevealAck(playerID, requestID, false, nil, 0, chunkID, cell)
+			s.stateMu.Unlock()
+			return
+		}
+
 		if s.isMine(chunkID, cell) {
 			scoreDelta = -100
 			s.applyScore(playerID, scoreDelta)
@@ -324,7 +382,12 @@ func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, 
 	}
 	x, y := cellIndexToXY(cell)
 	bitIndex := y*ChunkSize + x
-	s.chunks[chunkID][bitIndex/64] |= (1 << (bitIndex % 64))
+	// only increment if this bit was previously 0
+	mask := uint64(1) << (bitIndex % 64)
+	if (s.chunks[chunkID][bitIndex/64] & mask) == 0 {
+		s.chunks[chunkID][bitIndex/64] |= mask
+		s.totalRevealed++
+	}
 
 	if (*collector)[chunkID] == nil {
 		(*collector)[chunkID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
@@ -380,6 +443,30 @@ func (s *Server) countAdjacentFlags(chunkID ChunkID, cell uint32) int {
 		}
 	}
 	return count
+}
+
+// hasRevealedWithinTwo returns true if any cell within the configured Chebyshev
+// distance of (worldX, worldY) is revealed. If proximity is disabled (radius < 0)
+// or no cells are revealed yet, returns true to allow the first reveal.
+func (s *Server) hasRevealedWithinTwo(worldX, worldY int) bool {
+	// Allow the very first reveal to seed the exploration.
+	if s.totalRevealed == 0 {
+		return true
+	}
+	radius := s.proximityRadius
+	if radius < 0 {
+		return true
+	}
+	for dy := -radius; dy <= radius; dy++ {
+		for dx := -radius; dx <= radius; dx++ {
+			wx, wy := worldX+dx, worldY+dy
+			cid, cidx := worldToChunk(wx, wy)
+			if s.isCellRevealed(cid, cidx) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Broadcast and Response Helpers

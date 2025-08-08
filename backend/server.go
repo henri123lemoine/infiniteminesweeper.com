@@ -21,10 +21,11 @@ type Server struct {
 	stateMu sync.RWMutex
 
 	// World state - just what cells are revealed and by whom
-	chunks map[ChunkID]*ChunkBits          // Which cells are revealed (bitset)
-	flags  map[ChunkID]map[uint32]Flag     // cellIndex -> Flag (with id)
-	scores map[uint32]int32                // playerID -> score
-	subs   map[ChunkID]map[uint32]struct{} // who wants reveals for each chunk
+	chunks        map[ChunkID]*ChunkBits          // Which cells are revealed (bitset)
+	flags         map[ChunkID]map[uint32]Flag     // cellIndex -> Flag (with id)
+	scores        map[uint32]int32                // playerID -> score
+	subs          map[ChunkID]map[uint32]struct{} // who wants reveals for each chunk
+	totalRevealed uint64
 
 	// leaderboard cache
 	lbVersion   uint64
@@ -34,11 +35,13 @@ type Server struct {
 	playerViews map[uint32]PlayerView // last known view position (chunk, cell)
 
 	// Players
-	playersMu     sync.RWMutex
-	players       map[uint32]map[*Player]struct{}
-	playerNames   map[uint32]string
-	nextPlayerID  uint32
-	sessionTokens map[string]uint32 // session_token -> playerID
+	playersMu   sync.RWMutex
+	players     map[uint32]map[*Player]struct{}
+	playerNames map[uint32]string
+	// Fast lookup to reuse identity by name if token is missing/invalid
+	nameToPlayerID map[string]uint32
+	nextPlayerID   uint32
+	sessionTokens  map[string]uint32 // session_token -> playerID
 
 	// Seed cache for performance
 	seedCache   map[ChunkID]uint64
@@ -55,24 +58,31 @@ type Server struct {
 	walMutex   sync.Mutex
 	walSeq     uint64
 
+	// Gameplay rules
+	// Chebyshev distance for proximity-limited actions (reveal/flag).
+	// Negative value disables the restriction (used in tests).
+	proximityRadius int
+
 	upgrader websocket.Upgrader
 }
 
 func NewServer() *Server {
 	return &Server{
-		secret:        []byte("minesweeper-secret-key"),
-		chunks:        make(map[ChunkID]*ChunkBits),
-		flags:         make(map[ChunkID]map[uint32]Flag),
-		scores:        make(map[uint32]int32),
-		subs:          make(map[ChunkID]map[uint32]struct{}),
-		players:       make(map[uint32]map[*Player]struct{}),
-		playerNames:   make(map[uint32]string),
-		playerFlags:   make(map[uint32]uint32),
-		playerViews:   make(map[uint32]PlayerView),
-		sessionTokens: make(map[string]uint32), // Initialize the new map
-		seedCache:     make(map[ChunkID]uint64),
-		nextPlayerID:  1,
-		dataDir:       "data",
+		secret:          []byte("minesweeper-secret-key"),
+		chunks:          make(map[ChunkID]*ChunkBits),
+		flags:           make(map[ChunkID]map[uint32]Flag),
+		scores:          make(map[uint32]int32),
+		subs:            make(map[ChunkID]map[uint32]struct{}),
+		players:         make(map[uint32]map[*Player]struct{}),
+		playerNames:     make(map[uint32]string),
+		nameToPlayerID:  make(map[string]uint32),
+		playerFlags:     make(map[uint32]uint32),
+		playerViews:     make(map[uint32]PlayerView),
+		sessionTokens:   make(map[string]uint32), // Initialize the new map
+		seedCache:       make(map[ChunkID]uint64),
+		nextPlayerID:    1,
+		dataDir:         "data",
+		proximityRadius: 2, // default behavior: must be within distance <= 2 of any revealed cell
 		upgrader: websocket.Upgrader{
 			// Reject cross-site WebSocket requests (prevents CSRF via <iframe>).
 			CheckOrigin: func(r *http.Request) bool {

@@ -195,8 +195,10 @@ func decodeRLE(data []byte) (*ChunkBits, error) {
 	var chunk ChunkBits
 	currentBit := false
 	x, y := 0, 0
-	for _, runLength := range data {
-		for i := byte(0); i < runLength; i++ {
+	// RLE stream is a series of little-endian uint16 run lengths
+	for i := 0; i+1 < len(data); i += 2 {
+		runLength := int(uint16(data[i]) | uint16(data[i+1])<<8)
+		for j := 0; j < runLength; j++ {
 			if y >= ChunkSize {
 				return &chunk, nil
 			}
@@ -529,7 +531,11 @@ func decodeRLEHuffman(data []byte) (*ChunkBits, error) {
 // VERIFICATION TESTS
 
 func TestMain(m *testing.M) {
-	runBenchmarks()
+	// Run heavy analysis/benchmarks only when explicitly enabled.
+	// Enable with: RUN_COMPRESSION_BENCH=1 go test ./...
+	if os.Getenv("RUN_COMPRESSION_BENCH") == "1" {
+		runBenchmarks()
+	}
 	os.Exit(m.Run())
 }
 

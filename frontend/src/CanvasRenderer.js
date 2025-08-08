@@ -273,6 +273,7 @@ export class CanvasRenderer {
     if (!canvas || !container) return;
 
     const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
     const width = container.clientWidth;
     const height = container.clientHeight;
     const dpr = window.devicePixelRatio || 1;
