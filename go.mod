@@ -1,4 +1,4 @@
-module infiniteminesweeper
+module github.com/henri123lemoine/infiniteminesweeper.com
 
 go 1.23.0
 

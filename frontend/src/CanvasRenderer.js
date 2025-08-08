@@ -239,7 +239,10 @@ export class CanvasRenderer {
     // If not revealed, we're done (content will be handled separately for flags)
     if (!isRevealed) return;
 
-    // Draw revealed cell content
+    // Draw revealed cell content. If the cell is flagged, suppress underlying content
+    if (cellData.isFlagged) {
+      return;
+    }
     if (cellData.isMine) {
       // Use the real mine sprite (stable key "mine", ID 162)
       this.drawSprite(ctx, "mine", screenX, screenY, cellSize, cellSize);
@@ -273,6 +276,7 @@ export class CanvasRenderer {
     if (!canvas || !container) return;
 
     const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
     const width = container.clientWidth;
     const height = container.clientHeight;
     const dpr = window.devicePixelRatio || 1;
@@ -295,12 +299,9 @@ export class CanvasRenderer {
 
     // Clear background
     ctx.fillStyle = "#c0c0c0";
-    ctx.fillRect(
-      -viewRef.current.x / zoom,
-      -viewRef.current.y / zoom,
-      width / zoom,
-      height / zoom,
-    );
+    // Always clear the visible viewport in logical (pre-zoom) units
+    // The current transform is only a scale; the visible logical viewport is [0, width/zoom] x [0, height/zoom]
+    ctx.fillRect(0, 0, width / zoom, height / zoom);
 
     // Calculate visible world coordinates
     const startWorldX = Math.floor(viewRef.current.x / CELL_SIZE);
@@ -318,8 +319,20 @@ export class CanvasRenderer {
 
         const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
         const cellKey = `${chunkX},${chunkY},${cell}`;
-        const cellData = revealedCellsRef.current.get(cellKey);
-        const isRevealed = cellData !== undefined;
+        const cellDataRaw = revealedCellsRef.current.get(cellKey) || null;
+        const isRevealedState = cellDataRaw !== null;
+
+        // Inline flag detection for this cell to avoid cross-frame flicker
+        const flagKey = `${worldX},${worldY}`;
+        const flagForCell = flaggedCellsRef.current.get(flagKey);
+        const isFlagged = flagForCell !== undefined;
+
+        const cellData = cellDataRaw
+          ? { ...cellDataRaw, isFlagged: isFlagged || cellDataRaw.isFlagged }
+          : { isMine: false, adjacentMines: 0, isFlagged };
+
+        // Visually treat flagged cells as UNREVEALED for base tile shading
+        const isRevealedForRender = isRevealedState && !isFlagged;
 
         // Render the cell
         this.renderCell(
@@ -328,33 +341,15 @@ export class CanvasRenderer {
           screenY,
           CELL_SIZE,
           cellData,
-          isRevealed,
+          isRevealedForRender,
           getNumberColor,
         );
+
+        // Draw flag for this cell (on top) if present
+        if (isFlagged) {
+          this.drawSprite(ctx, flagForCell, screenX, screenY, CELL_SIZE, CELL_SIZE);
+        }
       }
     }
-
-    // Render flags on top of unrevealed cells
-    flaggedCellsRef.current.forEach((flagID, flagKey) => {
-      const [worldX, worldY] = flagKey.split(",").map(Number);
-      const screenX = worldX * CELL_SIZE - viewRef.current.x;
-      const screenY = worldY * CELL_SIZE - viewRef.current.y;
-
-      // Skip if not visible
-      if (
-        screenX + CELL_SIZE < 0 ||
-        screenX > width / zoom ||
-        screenY + CELL_SIZE < 0 ||
-        screenY > height / zoom
-      )
-        return;
-
-      // Don't draw flag if cell is revealed
-      const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
-      const cellKey = `${chunkX},${chunkY},${cell}`;
-      if (revealedCellsRef.current.has(cellKey)) return;
-
-      this.drawSprite(ctx, flagID, screenX, screenY, CELL_SIZE, CELL_SIZE);
-    });
   }
 }

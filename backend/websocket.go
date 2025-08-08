@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -13,7 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 
-	pb "infiniteminesweeper/backend/gen/proto"
+	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
 func debugLogMessage(msg *pb.Msg, playerID uint32) {
@@ -149,20 +150,64 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		isNewPlayer = true
 	}
 
+	// Handle identity: create new or update existing (name/flag)
 	if isNewPlayer {
-		if !isValidUsername(hello.Name) {
-			s.stateMu.Unlock()
-			conn.Close()
-			return
+		// If name is missing/invalid, auto-assign a unique default.
+		chosenName := hello.Name
+		if !isValidUsername(chosenName) {
+			// Use nextPlayerID and current time to craft a likely-unique default, then ensure uniqueness.
+			for {
+				candidate := fmt.Sprintf("User%05d", s.nextPlayerID)
+				if _, ok := s.nameToPlayerID[candidate]; !ok {
+					chosenName = candidate
+					break
+				}
+				candidate = fmt.Sprintf("User%05d", time.Now().UnixNano()%100000)
+				if _, ok := s.nameToPlayerID[candidate]; !ok {
+					chosenName = candidate
+					break
+				}
+			}
+		} else {
+			// Valid name provided by client: reject if taken by someone else.
+			if _, ok := s.nameToPlayerID[chosenName]; ok {
+				s.stateMu.Unlock()
+				conn.Close()
+				return
+			}
 		}
+
+		// Create a brand new identity
 		playerID = s.nextPlayerID
 		s.nextPlayerID++
 		sessionToken = generateSessionToken()
 		s.sessionTokens[sessionToken] = playerID
-		s.playerNames[playerID] = hello.Name
+		s.playerNames[playerID] = chosenName
+		s.nameToPlayerID[chosenName] = playerID
 		s.playerFlags[playerID] = hello.FlagID
 		s.scores[playerID] = 0 // New players always start with a score of 0
-		log.Printf("New player identity created: ID=%d, Name=%s", playerID, hello.Name)
+		log.Printf("New player identity created: ID=%d, Name=%s", playerID, chosenName)
+	} else {
+		// Existing player via valid session token. Allow updating name/flag if provided.
+		if hello.Name != "" && isValidUsername(hello.Name) {
+			currentName := s.playerNames[playerID]
+			newName := hello.Name
+			if newName != currentName {
+				if other, exists := s.nameToPlayerID[newName]; !exists || other == playerID {
+					if currentName != "" {
+						delete(s.nameToPlayerID, currentName)
+					}
+					s.nameToPlayerID[newName] = playerID
+					s.playerNames[playerID] = newName
+					s.lbDirty = true
+				}
+			}
+		}
+		// Update flag (allow zero) if different
+		if s.playerFlags[playerID] != hello.FlagID {
+			s.playerFlags[playerID] = hello.FlagID
+			s.lbDirty = true
+		}
 	}
 
 	// Read player state while still under the lock
@@ -331,6 +376,17 @@ func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
 	var bits ChunkBits
 	if chunkExists {
 		bits = *chunk
+	}
+
+	// Treat flags as revealed for transmission (compression-friendly):
+	// overlay flag positions into the reveals bitset we send.
+	for cell := range flagsMap {
+		// cell is 0..4095; map to (x,y) and set bit in row y at column x
+		x := int(cell % ChunkSize)
+		y := int(cell / ChunkSize)
+		if y >= 0 && y < ChunkSize && x >= 0 && x < ChunkSize {
+			bits[y] |= (1 << uint(x))
+		}
 	}
 
 	// Group flags by their flagID (appearance)

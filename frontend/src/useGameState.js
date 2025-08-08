@@ -22,7 +22,6 @@ export const CHUNK = 64;
 const MINE_COUNT = 20;
 
 function encodeMsg(msg) {
-  // unwrap legacy `{ payload:{ … } }` objects
   if (msg && msg.payload && Object.keys(msg).length === 1) {
     msg = msg.payload;
   }
@@ -54,10 +53,10 @@ function decodeMsg(data) {
   // Convert to plain JS so we can easily introspect keys
   const decodedPlain = PB.Msg.toObject(PB.Msg.decode(bytes), {
     longs: String,
-    defaults: false,
+    // Include default values so scalar fields like score=0 are preserved
+    defaults: true,
   });
 
-  // Un-wrap `{ payload:{ … } }` envelope (older builds)
   const msg =
     decodedPlain.payload && Object.keys(decodedPlain).length === 1
       ? decodedPlain.payload
@@ -107,14 +106,22 @@ const worldToChunk = (worldX, worldY) => {
 };
 
 export const useGameState = () => {
-  const storedName = localStorage.getItem("username") || "";
+  const initialName = (() => {
+    const existing = (localStorage.getItem("username") || "").trim();
+    if (existing) return existing;
+    const generated = `User${String(Math.floor(Math.random() * 100000)).padStart(5, "0")}`;
+    localStorage.setItem("username", generated);
+    return generated;
+  })();
 
   const [ws, setWs] = useState(null);
   const [connected, setConnected] = useState(false);
   const [leaderboard, setLeaderboard] = useState([]);
   const [playerScore, setPlayerScore] = useState(0);
-  const [username, setUsername] = useState(storedName);
+  const [userRank, setUserRank] = useState(0);
+  const [username, setUsername] = useState(initialName);
   const [scorePopups, setScorePopups] = useState([]);
+  const [hintPopups, setHintPopups] = useState([]);
   const [tick, setTick] = useState(0);
 
   // Game state refs
@@ -233,6 +240,8 @@ export const useGameState = () => {
       for (let dx = -1; dx <= 1; dx++) {
         if (dx === 0 && dy === 0) continue;
         const wx = worldX + dx, wy = worldY + dy;
+        // Ignore flagged neighbors when counting revealed mines to avoid double counting
+        if (flaggedCellsRef.current.has(`${wx},${wy}`)) continue;
         const { chunkX: cx, chunkY: cy, cell: c } = worldToChunk(wx, wy);
         const key = `${cx},${cy},${c}`;
         const data = revealedCellsRef.current.get(key);
@@ -287,6 +296,47 @@ export const useGameState = () => {
     [ws, connected],
   );
 
+  // Return true if all chunks intersecting a Chebyshev radius (default 2) are known (we have their seed)
+  const isRadiusFullyKnown = useCallback((worldX, worldY, radius = 2) => {
+    const seenChunks = new Set();
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const { chunkX: cx, chunkY: cy } = worldToChunk(worldX + dx, worldY + dy);
+        seenChunks.add(`${cx},${cy}`);
+      }
+    }
+    for (const key of seenChunks) {
+      if (!seedCache.current.has(key)) return false;
+    }
+    return true;
+  }, [seedCache]);
+
+  // Proximity rule: block only if we KNOW there are no revealed cells within Chebyshev distance <= 2
+  // of the target. If the neighborhood isn't fully known, allow and send anyway.
+  const isWithinTwoOfRevealed = useCallback((worldX, worldY) => {
+    // allow first actions when we have no reveals at all
+    if (revealedCellsRef.current.size === 0) return true;
+    // if any neighbor within 2 is revealed, allow
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const { chunkX: cx, chunkY: cy, cell } = worldToChunk(worldX + dx, worldY + dy);
+        if (revealedCellsRef.current.has(`${cx},${cy},${cell}`)) return true;
+      }
+    }
+    // if we don't fully know the radius, allow (send anyway)
+    if (!isRadiusFullyKnown(worldX, worldY, 2)) return true;
+    // fully known and nothing revealed nearby => block
+    return false;
+  }, [isRadiusFullyKnown]);
+
+  const pushHintPopup = useCallback((worldX, worldY, message) => {
+    const id = Math.random().toString(36).slice(2);
+    setHintPopups((p) => [...p, { id, worldX, worldY, message }]);
+    setTimeout(() => {
+      setHintPopups((p) => p.filter((h) => h.id !== id));
+    }, 1500);
+  }, []);
+
   const handleCellClick = useCallback(
     (worldX, worldY, isRightClick = false, isChord = false) => {
       if (!ws || !connected) return;
@@ -300,6 +350,12 @@ export const useGameState = () => {
       if (isChord && !revealedCell) return;
       if (!isChord && revealedCell) return;
       if (flaggedCellsRef.current.has(flagKey)) return;
+
+      // Enforce two-cell proximity for non-chord actions
+      if (!isChord && !isWithinTwoOfRevealed(worldX, worldY)) {
+        pushHintPopup(worldX, worldY, "Stay near the island — reveal within 2 cells of explored area");
+        return;
+      }
 
       const requestId = Date.now().toString();
       const optimisticChanges = new Map();
@@ -317,9 +373,16 @@ export const useGameState = () => {
 
       if (isRightClick) {
         const myFlagId = playerFlagsRef.current.get(username);
-        if (myFlagId !== undefined) {
+        const seed = seedCache.current.get(chunkKey);
+        // Always send flag placement requests to the server
+        didLocalMutation = true;
+        // If we know the seed and this is NOT a mine, suppress optimistic flag but still send the request.
+        if (seed && !isMine(seed, cell)) {
+          // Don't set optimistic flag for non-mines
+        } else if (myFlagId !== undefined) {
+          // Only optimistic-flag when unknown or when it is actually a mine
           flaggedCellsRef.current.set(flagKey, myFlagId);
-          recordChange(chunkKey, {type: 'flag', cell});
+          recordChange(chunkKey, { type: 'flag', cell });
         }
       } else if (isChord) {
         // Only chord if flags == adjacentMines
@@ -410,8 +473,11 @@ export const useGameState = () => {
       const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
       const websocket = new WebSocket(wsUrl);
       websocket.binaryType = "arraybuffer";
+      let didWelcome = false;
 
       websocket.onopen = () => {
+        // Always include a session token if present; if missing, the server will
+        // assign a unique username and issue a token.
         const sessionToken = localStorage.getItem("session_token") || "";
         websocket.send(encodeMsg({ hello: { sessionToken, name: nameInput, flagID } }));
         setConnected(true);
@@ -426,6 +492,11 @@ export const useGameState = () => {
         revealedCellsRef.current.clear();
         flaggedCellsRef.current.clear();
         playerFlagsRef.current.clear();
+        // If server rejected the handshake (e.g., invalid or taken username),
+        // reset username so the join dialog is shown again.
+        if (!didWelcome) {
+          setUsername("");
+        }
       };
 
       websocket.onmessage = (event) => {
@@ -434,13 +505,14 @@ export const useGameState = () => {
         const data = msg[type];
 
         if (type === "welcome") {
+          didWelcome = true;
           localStorage.setItem("session_token", data.sessionToken);
           localStorage.setItem("username", data.name || "");
-          localStorage.setItem("score", String(data.score));
+          localStorage.setItem("score", String(data.score ?? 0));
           localStorage.setItem("flagID", String(data.flagID));
           playerFlagsRef.current.set(data.name, data.flagID);
           setUsername(data.name || "");
-          setPlayerScore(data.score);
+          setPlayerScore(data.score ?? 0);
         } else if (type === "chunkSync") {
           applyChunkSync(data);
           setTick(t => t + 1);
@@ -462,7 +534,7 @@ export const useGameState = () => {
             return;
           }
           const requestId = String(reqRaw);
-          const { ok, scoreUpdate } = data;
+          const { ok, scoreUpdate, userRank } = data;
 
           const optimisticAction = optimisticActions.current.get(requestId);
           if (!optimisticAction) return;
@@ -524,19 +596,22 @@ export const useGameState = () => {
                 });
               }
             } else if (outcomeType === "flaggedCell") {
-              const cell = outcome; // single uint32
-              const lx = cell % CHUNK;
-              const ly = Math.floor(cell / CHUNK);
+              const cellIdx = (outcome && typeof outcome === "object" && Number.isFinite(outcome.cell)) ? outcome.cell : outcome;
+              const lx = cellIdx % CHUNK;
+              const ly = Math.floor(cellIdx / CHUNK);
               const worldX = X * CHUNK + lx;
               const worldY = Y * CHUNK + ly;
-              flaggedCellsRef.current.set(
-                `${worldX},${worldY}`,
-                playerFlagsRef.current.get(username)
-              );
+              flaggedCellsRef.current.set(`${worldX},${worldY}`, playerFlagsRef.current.get(username));
+              // Also mark the cell as revealed (content suppressed) for continuity/compression-aware logic
+              const cellKey = `${primaryChunkKey},${cellIdx}`;
+              revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: 0, isFlagged: true });
             }
 
             // update score + popup
             setPlayerScore(scoreUpdate.score);
+            if (userRank) {
+              setUserRank(userRank);
+            }
             if (scoreUpdate.delta !== 0) {
               const cell = scoreUpdate.cell;
               const lx = cell % CHUNK;
@@ -578,31 +653,52 @@ export const useGameState = () => {
                 const cells = Array.isArray(updateData.cells) ? updateData.cells : [];
                 for (const cell of cells) {
                     const cellKey = `${chunkKey},${cell}`;
-                    // Remove any optimistic flag before revealing
                     const lX = cell % CHUNK, lY = Math.floor(cell / CHUNK);
-                    flaggedCellsRef.current.delete(
-                        `${X * CHUNK + lX},${Y * CHUNK + lY}`
-                    );
+                    const worldKey = `${X * CHUNK + lX},${Y * CHUNK + lY}`;
 
                     const seed = seedCache.current.get(chunkKey);
                     const isMineVal = seed ? isMine(seed, cell) : false;
                     const adjacent = isMineVal
                         ? 0
                         : countAdjacentMines(X, Y, cell);
-                    revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent });
+
+                    // Only clear a flag if this cell is NOT a mine. If it's a mine, keep (or later set) the flag.
+                    if (!isMineVal) {
+                        flaggedCellsRef.current.delete(worldKey);
+                    }
+
+                    // Mark revealed; if it's currently flagged, carry that through for rendering suppression
+                    const isFlagged = flaggedCellsRef.current.has(worldKey);
+                    revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent, isFlagged });
                 }
             } else if (updateType === "flaggedCell") {
                 const lX = updateData.cell % CHUNK, lY = Math.floor(updateData.cell / CHUNK);
                 const wX = X * CHUNK + lX, wY = Y * CHUNK + lY;
                 flaggedCellsRef.current.set(`${wX},${wY}`, updateData.flagID ?? 0);
+                // Also mark as revealed (content suppressed)
+                const cellKey = `${chunkKey},${updateData.cell}`;
+                revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: 0, isFlagged: true });
             }
 
             setTick(t => t+1);
         } else if (type === "leaderboard") {
             const entries = Array.isArray(data.entries) ? data.entries : [];
-            setLeaderboard(entries.length ? entries.sort((a, b) => b.score - a.score) : []);
+            // De-duplicate by name on the client defensively; keep the highest score
+            const byName = new Map();
+            for (const e of entries) {
+              const prev = byName.get(e.name);
+              if (!prev || (e.score ?? 0) > (prev.score ?? 0)) byName.set(e.name, e);
+            }
+            // Use stable sorting to match server-side behavior
+            const uniqueEntries = Array.from(byName.values()).sort((a, b) => {
+                if (a.score !== b.score) {
+                    return b.score - a.score;
+                }
+                return a.name.localeCompare(b.name);
+            });
+            setLeaderboard(uniqueEntries);
             playerFlagsRef.current.clear();
-            for (const entry of entries) {
+            for (const entry of uniqueEntries) {
                 playerFlagsRef.current.set(entry.name, entry.flagID);
             }
         }
@@ -613,13 +709,25 @@ export const useGameState = () => {
     [countAdjacentMines, username],
   );
 
+  const disconnect = useCallback(() => {
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    } catch {
+      // ignore
+    }
+  }, [ws]);
+
   return {
     connected,
     playerScore,
+    userRank,
     username,
     setUsername,
     leaderboard,
     scorePopups,
+    hintPopups,
     tick,
     setTick,
     seedCache,
@@ -631,6 +739,7 @@ export const useGameState = () => {
     ensureChunkSubscription,
     ensureChunkUnsubscription,
     connectWs,
+    disconnect,
     worldToChunk,
     isMine,
   };

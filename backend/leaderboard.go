@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
-	pb "infiniteminesweeper/backend/gen/proto"
 	"sort"
 	"strconv"
 	"time"
+
+	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
 // Leaderboard helpers
@@ -28,21 +29,66 @@ func formatScore(n int32) string {
 	}
 }
 
+// Assumes caller holds s.stateMu (read lock)
+func (s *Server) getUserRankUnsafe(playerScore int32) uint32 {
+	// Collect all entries and sort them the same way as the leaderboard
+	entries := make([]lbEntry, 0, len(s.scores))
+	bestByName := make(map[string]lbEntry)
+
+	for pid, sc := range s.scores {
+		name := s.playerNames[pid]
+		e := lbEntry{PlayerID: pid, Name: name, Score: sc, FlagID: s.playerFlags[pid]}
+		if prev, ok := bestByName[name]; !ok || e.Score > prev.Score {
+			bestByName[name] = e
+		}
+	}
+
+	for _, e := range bestByName {
+		entries = append(entries, e)
+	}
+
+	// Sort by score (descending), then by name (ascending) for stability
+	// This matches the leaderboard sorting exactly
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Score != entries[j].Score {
+			return entries[i].Score > entries[j].Score
+		}
+		return entries[i].Name < entries[j].Name
+	})
+
+	// Find rank (1-based) - handle ties correctly
+	for i, entry := range entries {
+		if entry.Score == playerScore {
+			return uint32(i + 1)
+		}
+	}
+
+	// If not found, return 0 (shouldn't happen in practice)
+	return 0
+}
+
 // Assumes caller holds s.stateMu (write lock)
 func (s *Server) buildLeaderboardUnsafe() {
 	// Collect & sort
 	entries := make([]lbEntry, 0, len(s.scores))
+	// Deduplicate by name at the source to avoid duplicates caused by identity glitches
+	bestByName := make(map[string]lbEntry)
 	for pid, sc := range s.scores {
-		entries = append(entries, lbEntry{
-			PlayerID: pid,
-			Name:     s.playerNames[pid],
-			Score:    sc,
-			FlagID:   s.playerFlags[pid],
-		})
+		name := s.playerNames[pid]
+		e := lbEntry{PlayerID: pid, Name: name, Score: sc, FlagID: s.playerFlags[pid]}
+		if prev, ok := bestByName[name]; !ok || e.Score > prev.Score {
+			bestByName[name] = e
+		}
 	}
-	// Sort by the raw score
+	for _, e := range bestByName {
+		entries = append(entries, e)
+	}
+	// Sort by score (descending), then by name (ascending) for stability
 	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Score > entries[j].Score
+		if entries[i].Score != entries[j].Score {
+			return entries[i].Score > entries[j].Score
+		}
+		return entries[i].Name < entries[j].Name
 	})
 	if len(entries) > 10 {
 		entries = entries[:10]

@@ -23,7 +23,7 @@ body {
 
 .board-container {
   flex: 1;
-  background: white;
+  background: #c0c0c0;
   border-radius: 0;
   overflow: hidden;
   position: relative;
@@ -35,11 +35,11 @@ body {
   height: 100%;
   position: relative;
   image-rendering: pixelated;
-  cursor: grab;
+  cursor: default;
 }
 
 .canvas-container.dragging {
-  cursor: grabbing;
+  cursor: default;
 }
 
 /* Disable text selection and context menus on mobile */
@@ -57,6 +57,7 @@ body {
   width: 100%;
   height: 100%;
   background: #c0c0c0;
+  image-rendering: pixelated;
 }
 
 .coordinates-debug {
@@ -91,18 +92,23 @@ body {
   top: 10px;
   right: 10px;
   background: white;
-  padding: 10px;
+  padding: 15px;
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  min-width: 150px;
-  max-height: 200px;
-  overflow-y: auto;
+  width: 220px;
   z-index: 10;
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  overflow: hidden;
+  height: auto;
+  max-height: 90vh;
 }
 
 .leaderboard h3 {
-  margin-top: 0;
+  margin: 0 0 12px 0;
+  text-align: center;
+  font-size: 18px;
+  font-weight: bold;
+  color: #333;
 }
 
 .connection-status {
@@ -140,6 +146,21 @@ body {
   border: 1px solid #000;
 }
 
+.player-score {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-weight: bold;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  z-index: 19; /* below login modal (zIndex: 20) */
+  pointer-events: none;
+}
+
 .score-popup {
   position: absolute;
   color: gold;
@@ -159,6 +180,34 @@ body {
   }
 }
 
+/* Help & Scoring dropdown */
+.help-dropdown {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+}
+
+.help-button {
+  background: #1976d2;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.help-content {
+  margin-top: 8px;
+  background: white;
+  padding: 12px;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  max-width: 320px;
+  font-size: 14px;
+}
+
 @media (max-width: 768px) {
   .coordinates-debug {
     font-size: 10px;
@@ -167,8 +216,13 @@ body {
   .leaderboard {
     top: 5px;
     right: 5px;
-    padding: 5px;
+    padding: 10px;
     font-size: 12px;
-    min-width: 120px;
+    width: 180px;
+    height: 350px;
+  }
+  .leaderboard h3 {
+    font-size: 20px;
+    margin-bottom: 10px;
   }
 }

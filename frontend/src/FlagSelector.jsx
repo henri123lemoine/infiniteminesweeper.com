@@ -19,21 +19,28 @@ export default function FlagSelector({ value, onChange }) {
     sheetImg.src = sheetUrl;
   }, []);
 
-  // Keys in original order (backend numeric IDs)
-  const originalKeys = useMemo(() => Object.keys(frames), []);
+  // Use only stable numeric keys for sprites in the 'flag' category
+  const flagKeys = useMemo(
+    () =>
+      Object.keys(frames).filter(
+        (k) => !Number.isNaN(Number(k)) && frames[k]?.category === "flag",
+      ),
+    [],
+  );
 
-  // Sort by cost ascending, then name
+  // Sort by cost ascending, then numeric ID
   const sortedKeys = useMemo(() => {
-    return originalKeys
+    return flagKeys
       .slice()
       .sort((a, b) => {
         const ca = frames[a].cost ?? 0;
         const cb = frames[b].cost ?? 0;
-        return ca - cb || a.localeCompare(b);
+        if (ca !== cb) return ca - cb;
+        return Number(a) - Number(b);
       });
-  }, [originalKeys]);
+  }, [flagKeys]);
 
-  if (!ready) return <p>Loading flags…</p>;
+  if (!ready) return <p>Loading flags...</p>;
 
   // Build buttons — insert a flex‑row break whenever cost increases
   const buttons = [];
@@ -47,11 +54,11 @@ export default function FlagSelector({ value, onChange }) {
     }
     lastCost = cost;
 
-    const unsortedIdx = originalKeys.indexOf(id); // numeric flag ID
+    const idNum = Number(id); // stable numeric flag ID
     buttons.push(
       <button
         key={id}
-        onClick={() => onChange(unsortedIdx)}
+        onClick={() => onChange(idNum)}
         style={{
           width: 60,
           height: 76,
@@ -61,7 +68,7 @@ export default function FlagSelector({ value, onChange }) {
           alignItems: "center",
           justifyContent: "center",
           border:
-            value === unsortedIdx
+            value === idNum
               ? "2px solid #4CAF50"
               : "1px solid rgba(0,0,0,.2)",
           borderRadius: 6,
@@ -89,14 +96,30 @@ export default function FlagSelector({ value, onChange }) {
     <div
       style={{
         display: "flex",
-        flexWrap: "wrap",
-        gap: 8,
+        flexDirection: "column",
         maxWidth: "100%",
         maxHeight: "90%",
-        overflowY: "auto",
       }}
     >
-      {buttons}
+      <div
+        style={{
+          fontWeight: "bold",
+          marginBottom: 8,
+          textAlign: "center",
+        }}
+      >
+        🪙 ∞ coins
+      </div>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          overflowY: "auto",
+        }}
+      >
+        {buttons}
+      </div>
     </div>
   );
 }

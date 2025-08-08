@@ -55,6 +55,8 @@ type snapshotData struct {
 	PlayerFlags  map[uint32]uint32
 	PlayerViews  map[uint32]PlayerView
 	NextPlayerID uint32
+	// Persist session tokens so identities survive restarts
+	SessionTokens map[string]uint32
 }
 
 func (s *Server) initAWS() error {
@@ -360,13 +362,14 @@ func (s *Server) initPersistence() {
 func (s *Server) saveSnapshotToS3() error {
 	s.stateMu.RLock()
 	data := snapshotData{
-		Chunks:       s.chunks,
-		Flags:        s.flags,
-		Scores:       s.scores,
-		PlayerNames:  s.playerNames,
-		PlayerFlags:  s.playerFlags,
-		PlayerViews:  s.playerViews,
-		NextPlayerID: s.nextPlayerID,
+		Chunks:        s.chunks,
+		Flags:         s.flags,
+		Scores:        s.scores,
+		PlayerNames:   s.playerNames,
+		PlayerFlags:   s.playerFlags,
+		PlayerViews:   s.playerViews,
+		NextPlayerID:  s.nextPlayerID,
+		SessionTokens: s.sessionTokens,
 	}
 	s.stateMu.RUnlock()
 
@@ -407,13 +410,14 @@ func (s *Server) saveSnapshotToDisk() error {
 
 	s.stateMu.RLock()
 	data := snapshotData{
-		Chunks:       s.chunks,
-		Flags:        s.flags,
-		Scores:       s.scores,
-		PlayerNames:  s.playerNames,
-		PlayerFlags:  s.playerFlags,
-		PlayerViews:  s.playerViews,
-		NextPlayerID: s.nextPlayerID,
+		Chunks:        s.chunks,
+		Flags:         s.flags,
+		Scores:        s.scores,
+		PlayerNames:   s.playerNames,
+		PlayerFlags:   s.playerFlags,
+		PlayerViews:   s.playerViews,
+		NextPlayerID:  s.nextPlayerID,
+		SessionTokens: s.sessionTokens,
 	}
 	s.stateMu.RUnlock()
 
@@ -494,6 +498,19 @@ func (s *Server) loadSnapshotFromS3() error {
 	if data.NextPlayerID != 0 {
 		s.nextPlayerID = data.NextPlayerID
 	}
+	if data.SessionTokens != nil {
+		s.sessionTokens = data.SessionTokens
+	} else if s.sessionTokens == nil {
+		s.sessionTokens = make(map[string]uint32)
+	}
+	// Rebuild fast name lookup index
+	idx := make(map[string]uint32, len(s.playerNames))
+	for pid, name := range s.playerNames {
+		if name != "" {
+			idx[name] = pid
+		}
+	}
+	s.nameToPlayerID = idx
 	s.lbDirty = true // force rebuild of leaderboard on first tick
 	s.stateMu.Unlock()
 	return nil
@@ -501,6 +518,7 @@ func (s *Server) loadSnapshotFromS3() error {
 
 func (s *Server) loadSnapshotFromDisk() error {
 	path := filepath.Join(s.dataDir, snapshotFileName)
+	fmt.Println("Loading snapshot from disk:", path)
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -545,6 +563,19 @@ func (s *Server) loadSnapshotFromDisk() error {
 	if data.NextPlayerID != 0 {
 		s.nextPlayerID = data.NextPlayerID
 	}
+	if data.SessionTokens != nil {
+		s.sessionTokens = data.SessionTokens
+	} else if s.sessionTokens == nil {
+		s.sessionTokens = make(map[string]uint32)
+	}
+	// Rebuild fast name lookup index
+	idx := make(map[string]uint32, len(s.playerNames))
+	for pid, name := range s.playerNames {
+		if name != "" {
+			idx[name] = pid
+		}
+	}
+	s.nameToPlayerID = idx
 	s.lbDirty = true
 	numChunks := len(s.chunks)
 	s.stateMu.Unlock()
