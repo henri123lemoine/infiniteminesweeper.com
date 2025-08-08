@@ -13,7 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 
-	pb "infiniteminesweeper/backend/gen/proto"
+	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
 func debugLogMessage(msg *pb.Msg, playerID uint32) {

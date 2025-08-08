@@ -1,10 +1,11 @@
 package main
 
 import (
-	pb "infiniteminesweeper/backend/gen/proto"
 	"math"
 	"regexp"
 	"sync"
+
+	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
 // Helper Functions

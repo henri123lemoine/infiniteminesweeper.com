@@ -1,13 +1,14 @@
 package main
 
 import (
-	pb "infiniteminesweeper/backend/gen/proto"
 	"math/rand"
 	"runtime"
 	"sort"
 	"sync"
 	"testing"
 	"time"
+
+	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
 func init() {

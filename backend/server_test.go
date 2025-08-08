@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	pb "infiniteminesweeper/backend/gen/proto"
+	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"

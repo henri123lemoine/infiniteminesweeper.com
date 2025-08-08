@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
-	pb "infiniteminesweeper/backend/gen/proto"
 	"sort"
 	"strconv"
 	"time"
+
+	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
 // Leaderboard helpers

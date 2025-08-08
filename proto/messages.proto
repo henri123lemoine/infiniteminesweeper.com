@@ -1,6 +1,6 @@
 syntax = "proto3";
 package ms;
-option go_package = "infiniteminesweeper/proto";
+option go_package = "github.com/henri123lemoine/infiniteminesweeper.com/proto";
 
 // ---- Core Data Structures ----
 
