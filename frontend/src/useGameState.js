@@ -149,6 +149,68 @@ export const useGameState = () => {
     return count;
   }, []);
 
+  const applyChunkSync = useCallback(
+    (data) => {
+      const { chunkId, seed, reveals, flagGroups: fgRaw } = data;
+      const { X, Y } = normalizeChunkId(chunkId);
+      const chunkKey = `${X},${Y}`;
+      const seedBigInt = new DataView(
+        seed.buffer,
+        seed.byteOffset,
+        8
+      ).getBigUint64(0, true);
+      seedCache.current.set(chunkKey, seedBigInt);
+
+      const flagGroups = Array.isArray(fgRaw) ? fgRaw : [];
+      for (const group of flagGroups) {
+        const { flagID, cells } = group;
+        let cellList = [];
+        if (cells && typeof cells === "object") {
+          if (Array.isArray(cells.cells)) {
+            cellList = cells.cells;
+          } else if (Array.isArray(cells)) {
+            cellList = cells;
+          }
+        }
+        for (const cell of cellList) {
+          const localX = cell % CHUNK;
+          const localY = Math.floor(cell / CHUNK);
+          const flagWorldX = X * CHUNK + localX;
+          const flagWorldY = Y * CHUNK + localY;
+          flaggedCellsRef.current.set(
+            `${flagWorldX},${flagWorldY}`,
+            flagID
+          );
+        }
+      }
+
+      const view = new DataView(
+        reveals.buffer,
+        reveals.byteOffset,
+        reveals.byteLength
+      );
+      for (let i = 0; i < CHUNK * CHUNK; i++) {
+        const wordIndex = Math.floor(i / CHUNK);
+        const bitIndex = i % CHUNK;
+        if (
+          (view.getBigUint64(wordIndex * 8, true) &
+            (1n << BigInt(bitIndex))) !== 0n
+        ) {
+          const cellKey = `${X},${Y},${i}`;
+          const isMineVal = isMine(seedBigInt, i);
+          const adjacent = isMineVal
+            ? 0
+            : countAdjacentMines(X, Y, i);
+          revealedCellsRef.current.set(cellKey, {
+            isMine: isMineVal,
+            adjacentMines: adjacent,
+          });
+        }
+      }
+    },
+    [countAdjacentMines]
+  );
+
   // Count flags around a (world-coord) cell
   const countAdjacentFlags = useCallback((worldX, worldY) => {
     let c = 0;
@@ -380,43 +442,16 @@ export const useGameState = () => {
           setUsername(data.name || "");
           setPlayerScore(data.score);
         } else if (type === "chunkSync") {
-          const { chunkId, seed, reveals, flagGroups: fgRaw } = data;
-          const { X, Y } = normalizeChunkId(chunkId);
-          const chunkKey = `${X},${Y}`;
-          const seedBigInt = new DataView(seed.buffer, seed.byteOffset, 8).getBigUint64(0, true);
-          seedCache.current.set(chunkKey, seedBigInt);
-
-          // `flagGroups` might be `undefined` when the chunk has no flags
-          const flagGroups = Array.isArray(fgRaw) ? fgRaw : [];
-          for (const group of flagGroups) {
-            const { flagID, cells } = group;
-            let cellList = [];
-            if (cells && typeof cells === "object") {
-              if (Array.isArray(cells.cells)) {
-                cellList = cells.cells;
-              } else if (Array.isArray(cells)) {
-                cellList = cells;
-              }
-            }
-            for (const cell of cellList) {
-              const localX = cell % CHUNK;
-              const localY = Math.floor(cell / CHUNK);
-              const flagWorldX = X * CHUNK + localX;
-              const flagWorldY = Y * CHUNK + localY;
-              flaggedCellsRef.current.set(`${flagWorldX},${flagWorldY}`, flagID);
-            }
-          }
-
-          const view = new DataView(reveals.buffer, reveals.byteOffset, reveals.byteLength);
-          for (let i = 0; i < CHUNK * CHUNK; i++) {
-            const wordIndex = Math.floor(i / CHUNK);
-            const bitIndex = i % CHUNK;
-            if ((view.getBigUint64(wordIndex * 8, true) & (1n << BigInt(bitIndex))) !== 0n) {
-              const cellKey = `${X},${Y},${i}`;
-              const isMineVal = isMine(seedBigInt, i);
-              const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, i);
-              revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent });
-            }
+          applyChunkSync(data);
+          setTick(t => t + 1);
+        } else if (type === "chunkRegionSync") {
+          const regionBytes = pako.ungzip(data.chunks);
+          const region = PB.ChunkRegion.toObject(
+            PB.ChunkRegion.decode(regionBytes),
+            { defaults: false }
+          );
+          for (const cs of region.chunks || []) {
+            applyChunkSync(cs);
           }
           setTick(t => t + 1);
         } else if (type === "revealAck") {

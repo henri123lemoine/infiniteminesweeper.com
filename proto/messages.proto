@@ -90,6 +90,22 @@ message ChunkSync {
   repeated FlagGroup flagGroups = 4;
 }
 
+// A batch of chunk syncs describing a rectangular region of the world.
+message ChunkRegion {
+  repeated ChunkSync chunks = 1;
+}
+
+// Sends multiple chunk states in a single compressed payload.
+message ChunkRegionSync {
+  // Top-left chunk coordinate covered by this region.
+  ChunkID origin = 1;
+  // Dimensions in chunk units.
+  uint32 width = 2;
+  uint32 height = 3;
+  // Gzip-compressed `ChunkRegion` message.
+  bytes chunks = 4;
+}
+
 // The server's authoritative response to a client's Reveal command.
 message RevealAck {
   uint64 request_id = 1; // Mirrors the ID from the original Reveal request.
@@ -149,5 +165,6 @@ message Msg {
     RevealAck revealAck = 8;
     ChunkUpdateBroadcast chunkUpdateBroadcast = 9;
     Leaderboard leaderboard = 10;
+    ChunkRegionSync chunkRegionSync = 11;
   }
 }

@@ -364,7 +364,100 @@ func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
 
 	// Unlock the state mutex *before* sending data to avoid deadlocks.
 	s.stateMu.Unlock()
-	s.sendToPlayer(playerID, mustProto(cs))
+        s.sendToPlayer(playerID, mustProto(cs))
+}
+
+// sendChunkRegionSync gathers the state of multiple chunks and transmits them
+// in a single compressed message. The provided chunkIDs should describe a
+// rectangular region.
+func (s *Server) sendChunkRegionSync(playerID uint32, chunkIDs []ChunkID) {
+        if len(chunkIDs) == 0 {
+                return
+        }
+
+        s.stateMu.Lock()
+
+        chunks := make([]*pb.ChunkSync, 0, len(chunkIDs))
+        minX, maxX := chunkIDs[0].X, chunkIDs[0].X
+        minY, maxY := chunkIDs[0].Y, chunkIDs[0].Y
+
+        for _, chunkID := range chunkIDs {
+                if chunkID.X < minX {
+                        minX = chunkID.X
+                }
+                if chunkID.X > maxX {
+                        maxX = chunkID.X
+                }
+                if chunkID.Y < minY {
+                        minY = chunkID.Y
+                }
+                if chunkID.Y > maxY {
+                        maxY = chunkID.Y
+                }
+
+                chunk, chunkExists := s.chunks[chunkID]
+                flagsMap := s.flags[chunkID]
+                seed64 := s.generateChunkSeed(chunkID)
+                var seedBytes [8]byte
+                binary.LittleEndian.PutUint64(seedBytes[:], seed64)
+
+                var bits ChunkBits
+                if chunkExists {
+                        bits = *chunk
+                }
+
+                groups := make(map[uint32]*pb.RevealedCells)
+                for cell, fl := range flagsMap {
+                        if groups[fl.FlagID] == nil {
+                                groups[fl.FlagID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
+                        }
+                        groups[fl.FlagID].Cells = append(groups[fl.FlagID].Cells, cell)
+                }
+
+                flagGroups := make([]*pb.FlagGroup, 0, len(groups))
+                for flagID, cells := range groups {
+                        flagGroups = append(flagGroups, &pb.FlagGroup{
+                                FlagID: flagID,
+                                Cells:  cells,
+                        })
+                }
+
+                revealsBytes := make([]byte, len(bits)*8)
+                for i, word := range bits {
+                        binary.LittleEndian.PutUint64(revealsBytes[i*8:], word)
+                }
+
+                chunks = append(chunks, &pb.ChunkSync{
+                        ChunkId:    &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
+                        Seed:       seedBytes[:],
+                        Reveals:    revealsBytes,
+                        FlagGroups: flagGroups,
+                })
+        }
+
+        s.stateMu.Unlock()
+
+        region := &pb.ChunkRegion{Chunks: chunks}
+        raw, err := proto.Marshal(region)
+        if err != nil {
+                return
+        }
+
+        var buf bytes.Buffer
+        gz := gzip.NewWriter(&buf)
+        if _, err := gz.Write(raw); err != nil {
+                return
+        }
+        gz.Close()
+
+        msg := &pb.Msg{Payload: &pb.Msg_ChunkRegionSync{ChunkRegionSync: &pb.ChunkRegionSync{
+                Origin: &pb.ChunkID{X: minX, Y: minY},
+                Width:  uint32(maxX - minX + 1),
+                Height: uint32(maxY - minY + 1),
+                Chunks: buf.Bytes(),
+        }}}
+
+        s.sendToPlayer(playerID, mustProto(msg))
 }
 
 func (s *Server) unsubscribeFromChunk(playerID uint32, chunkID ChunkID) {
