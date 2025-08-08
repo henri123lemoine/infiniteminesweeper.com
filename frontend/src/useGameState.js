@@ -172,6 +172,8 @@ export const useGameState = () => {
       for (let dx = -1; dx <= 1; dx++) {
         if (dx === 0 && dy === 0) continue;
         const wx = worldX + dx, wy = worldY + dy;
+        // Ignore flagged neighbors when counting revealed mines to avoid double counting
+        if (flaggedCellsRef.current.has(`${wx},${wy}`)) continue;
         const { chunkX: cx, chunkY: cy, cell: c } = worldToChunk(wx, wy);
         const key = `${cx},${cy},${c}`;
         const data = revealedCellsRef.current.get(key);
@@ -473,9 +475,18 @@ export const useGameState = () => {
             const bitIndex = i % CHUNK;
             if ((view.getBigUint64(wordIndex * 8, true) & (1n << BigInt(bitIndex))) !== 0n) {
               const cellKey = `${X},${Y},${i}`;
-              const isMineVal = isMine(seedBigInt, i);
-              const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, i);
-              revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent });
+              // If this cell is flagged, mark as revealed but suppress content
+              const localX = i % CHUNK;
+              const localY = Math.floor(i / CHUNK);
+              const worldX = X * CHUNK + localX;
+              const worldY = Y * CHUNK + localY;
+              if (flaggedCellsRef.current.has(`${worldX},${worldY}`)) {
+                revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: 0, isFlagged: true });
+              } else {
+                const isMineVal = isMine(seedBigInt, i);
+                const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, i);
+                revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent });
+              }
             }
           }
           setTick(t => t + 1);
@@ -549,15 +560,15 @@ export const useGameState = () => {
                 });
               }
             } else if (outcomeType === "flaggedCell") {
-              const cell = outcome; // single uint32
-              const lx = cell % CHUNK;
-              const ly = Math.floor(cell / CHUNK);
+              const cellIdx = (outcome && typeof outcome === "object" && Number.isFinite(outcome.cell)) ? outcome.cell : outcome;
+              const lx = cellIdx % CHUNK;
+              const ly = Math.floor(cellIdx / CHUNK);
               const worldX = X * CHUNK + lx;
               const worldY = Y * CHUNK + ly;
-              flaggedCellsRef.current.set(
-                `${worldX},${worldY}`,
-                playerFlagsRef.current.get(username)
-              );
+              flaggedCellsRef.current.set(`${worldX},${worldY}`, playerFlagsRef.current.get(username));
+              // Also mark the cell as revealed (content suppressed) for continuity/compression-aware logic
+              const cellKey = `${primaryChunkKey},${cellIdx}`;
+              revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: 0, isFlagged: true });
             }
 
             // update score + popup
@@ -603,23 +614,31 @@ export const useGameState = () => {
                 const cells = Array.isArray(updateData.cells) ? updateData.cells : [];
                 for (const cell of cells) {
                     const cellKey = `${chunkKey},${cell}`;
-                    // Remove any optimistic flag before revealing
                     const lX = cell % CHUNK, lY = Math.floor(cell / CHUNK);
-                    flaggedCellsRef.current.delete(
-                        `${X * CHUNK + lX},${Y * CHUNK + lY}`
-                    );
+                    const worldKey = `${X * CHUNK + lX},${Y * CHUNK + lY}`;
 
                     const seed = seedCache.current.get(chunkKey);
                     const isMineVal = seed ? isMine(seed, cell) : false;
                     const adjacent = isMineVal
                         ? 0
                         : countAdjacentMines(X, Y, cell);
-                    revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent });
+
+                    // Only clear a flag if this cell is NOT a mine. If it's a mine, keep (or later set) the flag.
+                    if (!isMineVal) {
+                        flaggedCellsRef.current.delete(worldKey);
+                    }
+
+                    // Mark revealed; if it's currently flagged, carry that through for rendering suppression
+                    const isFlagged = flaggedCellsRef.current.has(worldKey);
+                    revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent, isFlagged });
                 }
             } else if (updateType === "flaggedCell") {
                 const lX = updateData.cell % CHUNK, lY = Math.floor(updateData.cell / CHUNK);
                 const wX = X * CHUNK + lX, wY = Y * CHUNK + lY;
                 flaggedCellsRef.current.set(`${wX},${wY}`, updateData.flagID ?? 0);
+                // Also mark as revealed (content suppressed)
+                const cellKey = `${chunkKey},${updateData.cell}`;
+                revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: 0, isFlagged: true });
             }
 
             setTick(t => t+1);
