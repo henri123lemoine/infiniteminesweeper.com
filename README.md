@@ -1,5 +1,7 @@
 # [infiniteminesweeper.com](https://infiniteminesweeper.com)
 
+![Deploy to Fly workflow](https://github.com/henri123lemoine/infiniteminesweeper.com/actions/workflows/fly-deploy.yml/badge.svg?branch=main)
+
 A real-time multiplayer infinite minesweeper game built with Go backend and React frontend. Players explore an unbounded world together, competing on a global leaderboard.
 
 Can be played at [infiniteminesweeper.com](https://infiniteminesweeper.com).
