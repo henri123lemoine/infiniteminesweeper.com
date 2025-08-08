@@ -147,10 +147,49 @@ func (s *Server) handleReveal(
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_FlaggedCell{FlaggedCell: &pb.FlagPlacement{Cell: cell, FlagID: playerFlagID}}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
 		} else {
-			scoreDelta = -20 // wrong flag
+			// Wrong flag: deduct points, and perform a flood-fill reveal like a normal reveal.
+			scoreDelta = -20 // wrong flag penalty (no positive points even if many cells revealed)
 			s.applyScore(playerID, scoreDelta)
-			s.setCellRevealed(chunkID, cell, playerID, &allRevealedCells)
-			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: &pb.RevealedCells{Cells: []uint32{cell}}}}
+
+			// Re-use standard reveal flood-fill, but we will not add to scoreDelta for revealed cells here
+			q := []struct {
+				CId  ChunkID
+				CIdx uint32
+			}{{chunkID, cell}}
+			visited := make(map[struct {
+				CId  ChunkID
+				CIdx uint32
+			}]struct{})
+
+			for len(q) > 0 {
+				curr := q[0]
+				q = q[1:]
+
+				if _, exists := visited[curr]; exists || s.isCellRevealed(curr.CId, curr.CIdx) || s.isCellFlagged(curr.CId, curr.CIdx) {
+					continue
+				}
+				visited[curr] = struct{}{}
+				s.setCellRevealed(curr.CId, curr.CIdx, playerID, &allRevealedCells)
+
+				if s.countAdjacentMines(curr.CId, curr.CIdx) == 0 {
+					currX, currY := cellIndexToXY(curr.CIdx)
+					for dy := -1; dy <= 1; dy++ {
+						for dx := -1; dx <= 1; dx++ {
+							if dx == 0 && dy == 0 {
+								continue
+							}
+							wX, wY := int(curr.CId.X)*ChunkSize+currX+dx, int(curr.CId.Y)*ChunkSize+currY+dy
+							nCId, nCIdx := worldToChunk(wX, wY)
+							q = append(q, struct {
+								CId  ChunkID
+								CIdx uint32
+							}{nCId, nCIdx})
+						}
+					}
+				}
+			}
+
+			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
 		}
 	} else if isChord {

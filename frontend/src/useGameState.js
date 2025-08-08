@@ -255,9 +255,14 @@ export const useGameState = () => {
 
       if (isRightClick) {
         const myFlagId = playerFlagsRef.current.get(username);
-        if (myFlagId !== undefined) {
+        const seed = seedCache.current.get(chunkKey);
+        // If we know the seed and this is NOT a mine, suppress optimistic flag but still send the request.
+        if (seed && !isMine(seed, cell)) {
+          didLocalMutation = true; // force sending to server without local mutation
+        } else if (myFlagId !== undefined) {
+          // Only optimistic-flag when unknown or when it is actually a mine
           flaggedCellsRef.current.set(flagKey, myFlagId);
-          recordChange(chunkKey, {type: 'flag', cell});
+          recordChange(chunkKey, { type: 'flag', cell });
         }
       } else if (isChord) {
         // Only chord if flags == adjacentMines
