@@ -501,6 +501,7 @@ func (s *Server) loadSnapshotFromS3() error {
 
 func (s *Server) loadSnapshotFromDisk() error {
 	path := filepath.Join(s.dataDir, snapshotFileName)
+	fmt.Println("Loading snapshot from disk:", path)
 	f, err := os.Open(path)
 	if err != nil {
 		return err

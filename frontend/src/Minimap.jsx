@@ -1,8 +1,6 @@
 import meta from "./assets/spritesheet.json";
 import React, { useRef, useState, useEffect, useCallback } from "react";
 
-const FRAME_KEYS = Object.keys(meta.frames);
-
 export default function Minimap({
   CHUNK,
   CELL_SIZE,
@@ -34,6 +32,25 @@ export default function Minimap({
     }, 100);
 
     return () => clearInterval(interval);
+  }, []);
+
+  // Resolve a minimap color from a stable numeric flag ID using spritesheet metadata
+  const getFlagHex = useCallback((flagID) => {
+    const frame = meta.frames[String(flagID)];
+    if (!frame) return "#909090";
+
+    // Normalize some colors for better minimap legibility
+    const colorName = frame.colorName;
+    const hex = frame.hex || "#909090";
+
+    // Make white/light-gray variants fully white on the minimap
+    if (colorName === "Light Gray") return "#FFFFFF";
+
+    // Make very dark variants slightly lighter than bombs for contrast
+    const isVeryDark = /^#([0-1][0-9a-f]{1}){3}$/i.test(hex) || /^#0{6}$/i.test(hex);
+    if (colorName === "Dark Gray" || isVeryDark) return "#101010";
+
+    return hex;
   }, []);
 
   /** full repaint */
@@ -78,30 +95,33 @@ export default function Minimap({
         let color = "#909090";
         const flagID = flaggedCellsRef.current.get(flagKey);
         if (flagID !== undefined) {
-          const idx = flagID % FRAME_KEYS.length;
-          const spriteKey = FRAME_KEYS[idx];
-          color = meta.frames[spriteKey].hex;
+          color = getFlagHex(flagID);
         } else if (revealedCellsRef.current.has(cellKey)) {
           const cell = revealedCellsRef.current.get(cellKey);
-          if (cell.isMine) color = "#333333";
+          if (cell.isMine) color = "#000000"; // bombs slightly darker than black flags
           else {
             const n = cell.adjacentMines;
+            // Very muted tints to avoid over-saturation (keep near-grey)
             color =
               n === 0
                 ? "#e0e0e0"
                 : n === 1
-                  ? "#d0d0ff"
+                  ? "#e9ecff" // soft blue
                   : n === 2
-                    ? "#d0ffd0"
+                    ? "#e9ffea" // soft green
                     : n === 3
-                      ? "#ffd0d0"
+                      ? "#ffe9ea" // soft red
                       : n === 4
-                        ? "#d0d0d0"
+                        ? "#ececff" // soft navy
                         : n === 5
-                          ? "#f0d0d0"
+                          ? "#fff0ea" // soft maroon
                           : n === 6
-                            ? "#d0f0f0"
-                            : "#c0c0c0";
+                            ? "#d4fff2" // slightly less muted cyan
+                            : n === 7
+                              ? "#f0e4ff" // visible soft purple
+                              : n === 8
+                                ? "#ffe8b3" // visible soft amber
+                                : "#e4e4e4"; // others
           }
         } else if (seed && isMine(seed, cellIndex)) {
           color = "#909090";
@@ -138,6 +158,7 @@ export default function Minimap({
     flaggedCellsRef,
     worldToChunk,
     isMine,
+    getFlagHex,
   ]);
 
   // repaint on window resize

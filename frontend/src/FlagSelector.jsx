@@ -19,19 +19,23 @@ export default function FlagSelector({ value, onChange }) {
     sheetImg.src = sheetUrl;
   }, []);
 
-  // Keys in original order (backend numeric IDs)
-  const originalKeys = useMemo(() => Object.keys(frames), []);
+  // Use only stable numeric keys (authoritative sprite IDs)
+  const numericKeys = useMemo(
+    () => Object.keys(frames).filter((k) => !Number.isNaN(Number(k))),
+    [],
+  );
 
-  // Sort by cost ascending, then name
+  // Sort by cost ascending, then numeric ID
   const sortedKeys = useMemo(() => {
-    return originalKeys
+    return numericKeys
       .slice()
       .sort((a, b) => {
         const ca = frames[a].cost ?? 0;
         const cb = frames[b].cost ?? 0;
-        return ca - cb || a.localeCompare(b);
+        if (ca !== cb) return ca - cb;
+        return Number(a) - Number(b);
       });
-  }, [originalKeys]);
+  }, [numericKeys]);
 
   if (!ready) return <p>Loading flags…</p>;
 
@@ -47,11 +51,11 @@ export default function FlagSelector({ value, onChange }) {
     }
     lastCost = cost;
 
-    const unsortedIdx = originalKeys.indexOf(id); // numeric flag ID
+    const idNum = Number(id); // stable numeric flag ID
     buttons.push(
       <button
         key={id}
-        onClick={() => onChange(unsortedIdx)}
+        onClick={() => onChange(idNum)}
         style={{
           width: 60,
           height: 76,
@@ -61,7 +65,7 @@ export default function FlagSelector({ value, onChange }) {
           alignItems: "center",
           justifyContent: "center",
           border:
-            value === unsortedIdx
+            value === idNum
               ? "2px solid #4CAF50"
               : "1px solid rgba(0,0,0,.2)",
           borderRadius: 6,

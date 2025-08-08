@@ -9,6 +9,7 @@ import Minimap from "./Minimap.jsx";
 import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
+import meta from "./assets/spritesheet.json";
 
 if (__DEV__) console.log("dev mode!");
 else console.log("production mode!");
@@ -89,10 +90,34 @@ function App() {
   // Leaderboard visibility and number formatting
   const [leaderboardVisible, setLeaderboardVisible] = useState(true);
 
-  // Player flag state
-  const [flagID, setFlagID] = useState(
-    Number(localStorage.getItem("flagID") ?? 0),
+  // Build numeric sprite ID list once at module load (stable ordering)
+  const NUMERIC_IDS = useMemo(
+    () =>
+      Object.keys(meta.frames)
+        .filter((k) => !Number.isNaN(Number(k)))
+        .map((k) => Number(k))
+        .sort((a, b) => a - b),
+    [],
   );
+
+  // Player flag state (migrate legacy index-based value → stable numeric ID)
+  const [flagID, setFlagID] = useState(() => {
+    const raw = localStorage.getItem("flagID");
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return 0;
+    // If value is already a known numeric sprite ID, keep it.
+    if (NUMERIC_IDS.includes(parsed)) return parsed;
+    // Legacy case: treat small integer as index into numeric ID list.
+    if (parsed >= 0 && parsed < NUMERIC_IDS.length) return NUMERIC_IDS[parsed];
+    return 0;
+  });
+
+  // Ensure we always store numeric IDs (not array indices)
+  useEffect(() => {
+    if (!Number.isFinite(flagID)) return;
+    const stored = Number(localStorage.getItem("flagID"));
+    if (stored !== flagID) localStorage.setItem("flagID", String(flagID));
+  }, [flagID]);
 
   // Score popup color function
   /*
