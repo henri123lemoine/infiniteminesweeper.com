@@ -139,6 +139,15 @@ func (s *Server) handleReveal(
 			return
 		}
 
+		// Proximity rule: only allow flagging within distance <= 2 of any revealed cell
+		worldX := int(chunkID.X)*ChunkSize + x
+		worldY := int(chunkID.Y)*ChunkSize + y
+		if !s.hasRevealedWithinTwo(worldX, worldY) {
+			s.sendRevealAck(playerID, requestID, false, nil, 0, chunkID, cell)
+			s.stateMu.Unlock()
+			return
+		}
+
 		playerFlagID := s.playerFlags[playerID]
 		if s.isMine(chunkID, cell) {
 			scoreDelta = 10 // correct flag
@@ -285,6 +294,15 @@ func (s *Server) handleReveal(
 			return
 		}
 
+		// Proximity rule: only allow revealing within distance <= 2 of any revealed cell
+		worldX := int(chunkID.X)*ChunkSize + x
+		worldY := int(chunkID.Y)*ChunkSize + y
+		if !s.hasRevealedWithinTwo(worldX, worldY) {
+			s.sendRevealAck(playerID, requestID, false, nil, 0, chunkID, cell)
+			s.stateMu.Unlock()
+			return
+		}
+
 		if s.isMine(chunkID, cell) {
 			scoreDelta = -100
 			s.applyScore(playerID, scoreDelta)
@@ -363,7 +381,12 @@ func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, 
 	}
 	x, y := cellIndexToXY(cell)
 	bitIndex := y*ChunkSize + x
-	s.chunks[chunkID][bitIndex/64] |= (1 << (bitIndex % 64))
+	// only increment if this bit was previously 0
+	mask := uint64(1) << (bitIndex % 64)
+	if (s.chunks[chunkID][bitIndex/64] & mask) == 0 {
+		s.chunks[chunkID][bitIndex/64] |= mask
+		s.totalRevealed++
+	}
 
 	if (*collector)[chunkID] == nil {
 		(*collector)[chunkID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
@@ -419,6 +442,25 @@ func (s *Server) countAdjacentFlags(chunkID ChunkID, cell uint32) int {
 		}
 	}
 	return count
+}
+
+// hasRevealedWithinTwo returns true if any cell within Chebyshev distance 2 of (worldX, worldY) is revealed.
+// If no cells are revealed anywhere yet, returns true to allow the first reveal.
+func (s *Server) hasRevealedWithinTwo(worldX, worldY int) bool {
+	// Allow the very first reveal to seed the exploration.
+	if s.totalRevealed == 0 {
+		return true
+	}
+	for dy := -2; dy <= 2; dy++ {
+		for dx := -2; dx <= 2; dx++ {
+			wx, wy := worldX+dx, worldY+dy
+			cid, cidx := worldToChunk(wx, wy)
+			if s.isCellRevealed(cid, cidx) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Broadcast and Response Helpers

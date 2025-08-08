@@ -21,10 +21,11 @@ type Server struct {
 	stateMu sync.RWMutex
 
 	// World state - just what cells are revealed and by whom
-	chunks map[ChunkID]*ChunkBits          // Which cells are revealed (bitset)
-	flags  map[ChunkID]map[uint32]Flag     // cellIndex -> Flag (with id)
-	scores map[uint32]int32                // playerID -> score
-	subs   map[ChunkID]map[uint32]struct{} // who wants reveals for each chunk
+	chunks        map[ChunkID]*ChunkBits          // Which cells are revealed (bitset)
+	flags         map[ChunkID]map[uint32]Flag     // cellIndex -> Flag (with id)
+	scores        map[uint32]int32                // playerID -> score
+	subs          map[ChunkID]map[uint32]struct{} // who wants reveals for each chunk
+	totalRevealed uint64
 
 	// leaderboard cache
 	lbVersion   uint64

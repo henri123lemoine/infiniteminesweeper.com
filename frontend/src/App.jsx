@@ -25,6 +25,7 @@ function App() {
     setUsername,
     leaderboard,
     scorePopups,
+    hintPopups,
     tick,
     setTick,
     seedCache,
@@ -744,6 +745,30 @@ function App() {
                 }}
               >
                 {p.delta > 0 ? `+${p.delta}` : p.delta}
+              </div>
+            );
+          })}
+
+          {hintPopups.map((h) => {
+            const x = (h.worldX * CELL_SIZE - viewX) * zoom;
+            const y = (h.worldY * CELL_SIZE - viewY) * zoom;
+            return (
+              <div
+                key={h.id}
+                style={{
+                  position: "absolute",
+                  left: x,
+                  top: y - 20,
+                  padding: "2px 6px",
+                  background: "rgba(0,0,0,0.7)",
+                  color: "#fff",
+                  borderRadius: 4,
+                  fontSize: 12,
+                  pointerEvents: "none",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {h.message}
               </div>
             );
           })}

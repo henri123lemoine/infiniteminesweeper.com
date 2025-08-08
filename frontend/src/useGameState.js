@@ -115,6 +115,7 @@ export const useGameState = () => {
   const [playerScore, setPlayerScore] = useState(0);
   const [username, setUsername] = useState(storedName);
   const [scorePopups, setScorePopups] = useState([]);
+  const [hintPopups, setHintPopups] = useState([]);
   const [tick, setTick] = useState(0);
 
   // Game state refs
@@ -225,6 +226,47 @@ export const useGameState = () => {
     [ws, connected],
   );
 
+  // Return true if all chunks intersecting a Chebyshev radius (default 2) are known (we have their seed)
+  const isRadiusFullyKnown = useCallback((worldX, worldY, radius = 2) => {
+    const seenChunks = new Set();
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const { chunkX: cx, chunkY: cy } = worldToChunk(worldX + dx, worldY + dy);
+        seenChunks.add(`${cx},${cy}`);
+      }
+    }
+    for (const key of seenChunks) {
+      if (!seedCache.current.has(key)) return false;
+    }
+    return true;
+  }, [seedCache]);
+
+  // Proximity rule: block only if we KNOW there are no revealed cells within Chebyshev distance <= 2
+  // of the target. If the neighborhood isn't fully known, allow and send anyway.
+  const isWithinTwoOfRevealed = useCallback((worldX, worldY) => {
+    // allow first actions when we have no reveals at all
+    if (revealedCellsRef.current.size === 0) return true;
+    // if any neighbor within 2 is revealed, allow
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const { chunkX: cx, chunkY: cy, cell } = worldToChunk(worldX + dx, worldY + dy);
+        if (revealedCellsRef.current.has(`${cx},${cy},${cell}`)) return true;
+      }
+    }
+    // if we don't fully know the radius, allow (send anyway)
+    if (!isRadiusFullyKnown(worldX, worldY, 2)) return true;
+    // fully known and nothing revealed nearby => block
+    return false;
+  }, [isRadiusFullyKnown]);
+
+  const pushHintPopup = useCallback((worldX, worldY, message) => {
+    const id = Math.random().toString(36).slice(2);
+    setHintPopups((p) => [...p, { id, worldX, worldY, message }]);
+    setTimeout(() => {
+      setHintPopups((p) => p.filter((h) => h.id !== id));
+    }, 1500);
+  }, []);
+
   const handleCellClick = useCallback(
     (worldX, worldY, isRightClick = false, isChord = false) => {
       if (!ws || !connected) return;
@@ -238,6 +280,12 @@ export const useGameState = () => {
       if (isChord && !revealedCell) return;
       if (!isChord && revealedCell) return;
       if (flaggedCellsRef.current.has(flagKey)) return;
+
+      // Enforce two-cell proximity for non-chord actions
+      if (!isChord && !isWithinTwoOfRevealed(worldX, worldY)) {
+        pushHintPopup(worldX, worldY, "Stay near the island — reveal within 2 cells of explored area");
+        return;
+      }
 
       const requestId = Date.now().toString();
       const optimisticChanges = new Map();
@@ -597,6 +645,7 @@ export const useGameState = () => {
     setUsername,
     leaderboard,
     scorePopups,
+    hintPopups,
     tick,
     setTick,
     seedCache,
