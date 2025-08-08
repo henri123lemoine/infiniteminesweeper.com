@@ -840,59 +840,51 @@ function App() {
         <div
           style={{
             display: "flex",
-            justifyContent: "space-between",
             alignItems: "center",
           }}
         >
           <h3 style={{ margin: 0 }}>Leaderboard</h3>
-          <button onClick={toggleLeaderboard}>
-            {leaderboardVisible ? "Hide" : "Show"}
-          </button>
         </div>
-        {leaderboardVisible && (
-          <>
-            {topPlayers.length > 0 ? (
-              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                {topPlayers.map((p) => (
-                  <li
-                    key={p.name}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: 2,
+        {topPlayers.length > 0 ? (
+          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+            {topPlayers.map((p) => (
+              <li
+                key={p.name}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: 2,
+                }}
+              >
+                <span style={{ display: "flex", alignItems: "center" }}>
+                  <canvas
+                    width="15"
+                    height="15"
+                    ref={(c) => {
+                      if (!c) return;
+                      const ctx = c.getContext("2d");
+                      rendererRef.current
+                        .drawSprite(
+                          ctx,
+                          playerFlagsRef.current.get(p.name) ?? 0,
+                          0,
+                          0,
+                          15,
+                          15,
+                        )
+                        .catch(console.error);
                     }}
-                  >
-                    <span style={{ display: "flex", alignItems: "center" }}>
-                      <canvas
-                        width="15"
-                        height="15"
-                        ref={(c) => {
-                          if (!c) return;
-                          const ctx = c.getContext("2d");
-                          rendererRef.current
-                            .drawSprite(
-                              ctx,
-                              playerFlagsRef.current.get(p.name) ?? 0,
-                              0,
-                              0,
-                              15,
-                              15,
-                            )
-                            .catch(console.error);
-                        }}
-                        style={{ marginRight: 6, verticalAlign: "middle" }}
-                      />
-                      {p.name}
-                    </span>
-                    <span style={{ fontWeight: "bold" }}>{formatScore(p.score)}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>No players yet</p>
-            )}
-          </>
+                    style={{ marginRight: 6, verticalAlign: "middle" }}
+                  />
+                  {p.name}
+                </span>
+                <span style={{ fontWeight: "bold" }}>{formatScore(p.score)}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No players yet</p>
         )}
       </div>
       <div className="zoom-controls">
