@@ -157,6 +157,7 @@ function App() {
 
   // Leaderboard visibility and number formatting
   const [leaderboardVisible, setLeaderboardVisible] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   // Build numeric sprite ID list for the 'flag' category only
   const FLAG_IDS = useMemo(
@@ -714,6 +715,34 @@ function App() {
             {connected ? "Connected" : "Disconnected"}
           </div>
         </div>
+      </div>
+
+      {/* Help & Scoring dropdown */}
+      <div className="help-dropdown">
+        <button className="help-button" onClick={() => setHelpOpen((v) => !v)}>
+          {helpOpen ? "Close" : "Help & Scoring"}
+        </button>
+        {helpOpen && (
+          <div className="help-content">
+            <h3 style={{ marginTop: 0 }}>Scoring</h3>
+            <ul style={{ paddingLeft: 18, marginTop: 8 }}>
+              <li>Reveal a hidden cell: +1</li>
+              <li>Place a flag on a mine: +10</li>
+              <li>Wrong flag: -20</li>
+              <li>Hit a mine: -100 (ouch!)</li>
+              <li>Your total score never goes below 0</li>
+            </ul>
+            <h4 style={{ marginBottom: 6 }}>Learn Minesweeper</h4>
+            <a
+              href="https://www.youtube.com/watch?v=ytKOmS8vJng"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontWeight: 600 }}
+            >
+              Watch on YouTube
+            </a>
+          </div>
+        )}
       </div>
 
       <div className="board-container">

@@ -160,6 +160,34 @@ body {
   }
 }
 
+/* Help & Scoring dropdown */
+.help-dropdown {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+}
+
+.help-button {
+  background: #1976d2;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.help-content {
+  margin-top: 8px;
+  background: white;
+  padding: 12px;
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  max-width: 320px;
+  font-size: 14px;
+}
+
 @media (max-width: 768px) {
   .coordinates-debug {
     font-size: 10px;
