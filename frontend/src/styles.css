@@ -23,7 +23,7 @@ body {
 
 .board-container {
   flex: 1;
-  background: white;
+  background: #c0c0c0;
   border-radius: 0;
   overflow: hidden;
   position: relative;
@@ -139,6 +139,21 @@ body {
   margin-right: 4px;
   vertical-align: middle;
   border: 1px solid #000;
+}
+
+.player-score {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-weight: bold;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  z-index: 19; /* below login modal (zIndex: 20) */
+  pointer-events: none;
 }
 
 .score-popup {
