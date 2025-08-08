@@ -40,7 +40,7 @@ export default function FlagSelector({ value, onChange }) {
       });
   }, [flagKeys]);
 
-  if (!ready) return <p>Loading flags…</p>;
+  if (!ready) return <p>Loading flags...</p>;
 
   // Build buttons — insert a flex‑row break whenever cost increases
   const buttons = [];

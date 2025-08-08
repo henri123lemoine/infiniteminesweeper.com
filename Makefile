@@ -9,6 +9,8 @@ NVM_ENV        = . ~/.nvm/nvm.sh && nvm use --silent
 
 FRONTEND_SRCS  := $(shell find frontend/src -type f)
 ENVFILE_PATH   := $(wildcard $(ENVFILE))
+SNAPFREE       ?= 0
+SNAPSHOT_FILE  ?= data/snapshot.gob.gz
 
 .PHONY: help proto deps frontend-build go-build go-run docker-build docker-run deploy clean
 
@@ -52,7 +54,7 @@ deps:
 
 # front-end bundle
 frontend-build: spritesheet $(FRONTEND_SRCS) frontend/vite.config.mjs $(ENVFILE_PATH) | proto deps
-	@echo "Building front-end (Vite) for $(MODE)…"
+	@echo "Building front-end (Vite) for $(MODE)"
 	cd frontend && $(NVM_ENV) && npm run build:$(MODE)
 
 # back-end binary
@@ -61,7 +63,11 @@ go-build: proto frontend-build
 	go build -o backend/dist/backend ./backend
 
 go-run: go-build
-	@echo "Running backend (MODE=$(MODE))…"
+	@if [ "$(SNAPFREE)" = "1" ]; then \
+		echo "Removing snapshot $(SNAPSHOT_FILE)"; \
+		rm -f "$(SNAPSHOT_FILE)"; \
+	fi
+	@echo "Running backend (MODE=$(MODE))"
 	MODE=$(MODE) backend/dist/backend
 
 # docker image/run

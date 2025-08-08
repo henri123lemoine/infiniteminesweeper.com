@@ -22,7 +22,6 @@ export const CHUNK = 64;
 const MINE_COUNT = 20;
 
 function encodeMsg(msg) {
-  // unwrap legacy `{ payload:{ … } }` objects
   if (msg && msg.payload && Object.keys(msg).length === 1) {
     msg = msg.payload;
   }
@@ -58,7 +57,6 @@ function decodeMsg(data) {
     defaults: true,
   });
 
-  // Un-wrap `{ payload:{ … } }` envelope (older builds)
   const msg =
     decodedPlain.payload && Object.keys(decodedPlain).length === 1
       ? decodedPlain.payload
