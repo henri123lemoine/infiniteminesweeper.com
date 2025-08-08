@@ -344,6 +344,17 @@ func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
 		bits = *chunk
 	}
 
+	// Treat flags as revealed for transmission (compression-friendly):
+	// overlay flag positions into the reveals bitset we send.
+	for cell := range flagsMap {
+		// cell is 0..4095; map to (x,y) and set bit in row y at column x
+		x := int(cell % ChunkSize)
+		y := int(cell / ChunkSize)
+		if y >= 0 && y < ChunkSize && x >= 0 && x < ChunkSize {
+			bits[y] |= (1 << uint(x))
+		}
+	}
+
 	// Group flags by their flagID (appearance)
 	groups := make(map[uint32]*pb.RevealedCells)
 	for cell, fl := range flagsMap {
