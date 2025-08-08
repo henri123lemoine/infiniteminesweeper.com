@@ -192,26 +192,28 @@ func encodeRLE(chunk *ChunkBits) []byte {
 }
 
 func decodeRLE(data []byte) (*ChunkBits, error) {
-	var chunk ChunkBits
-	currentBit := false
-	x, y := 0, 0
-	for _, runLength := range data {
-		for i := byte(0); i < runLength; i++ {
-			if y >= ChunkSize {
-				return &chunk, nil
-			}
-			if currentBit {
-				chunk.set(x, y)
-			}
-			x++
-			if x >= ChunkSize {
-				x = 0
-				y++
-			}
-		}
-		currentBit = !currentBit
-	}
-	return &chunk, nil
+    var chunk ChunkBits
+    currentBit := false
+    x, y := 0, 0
+    // RLE stream is a series of little-endian uint16 run lengths
+    for i := 0; i+1 < len(data); i += 2 {
+        runLength := int(uint16(data[i]) | uint16(data[i+1])<<8)
+        for j := 0; j < runLength; j++ {
+            if y >= ChunkSize {
+                return &chunk, nil
+            }
+            if currentBit {
+                chunk.set(x, y)
+            }
+            x++
+            if x >= ChunkSize {
+                x = 0
+                y++
+            }
+        }
+        currentBit = !currentBit
+    }
+    return &chunk, nil
 }
 
 func encodeGzip(chunk *ChunkBits) ([]byte, error) {
