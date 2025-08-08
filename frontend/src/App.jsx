@@ -859,23 +859,30 @@ function App() {
               >
                 <span style={{ display: "flex", alignItems: "center" }}>
                   <canvas
-                    width="15"
-                    height="15"
                     ref={(c) => {
                       if (!c) return;
                       const ctx = c.getContext("2d");
+                      const cssSize = 32; // CSS pixels
+                      const dpr = window.devicePixelRatio || 1;
+                      c.width = Math.round(cssSize * dpr);
+                      c.height = Math.round(cssSize * dpr);
+                      c.style.width = `${cssSize}px`;
+                      c.style.height = `${cssSize}px`;
+                      ctx.imageSmoothingEnabled = false;
+                      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
                       rendererRef.current
                         .drawSprite(
                           ctx,
                           playerFlagsRef.current.get(p.name) ?? 0,
                           0,
                           0,
-                          15,
-                          15,
+                          cssSize,
+                          cssSize,
                         )
                         .catch(console.error);
                     }}
-                    style={{ marginRight: 6, verticalAlign: "middle" }}
+                    key={`flag-${p.name}-${playerFlagsRef.current.get(p.name) ?? 0}`}
+                    style={{ marginRight: 6, verticalAlign: "middle", imageRendering: "pixelated" }}
                   />
                   {p.name}
                 </span>
