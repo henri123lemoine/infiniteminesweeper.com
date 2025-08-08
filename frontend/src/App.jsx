@@ -17,12 +17,19 @@ else console.log("production mode!");
 function App() {
   const storedName = localStorage.getItem("username") || "";
   const [nameInput, setNameInput] = useState(storedName);
+  const [hotspotInfo, setHotspotInfo] = useState(null);
+  const [activeTab, setActiveTab] = useState("play"); // play | leaderboard | advancements
+  const [fullLeaderboard, setFullLeaderboard] = useState(null);
+  const [lbLoading, setLbLoading] = useState(false);
+  const [joinError, setJoinError] = useState("");
 
   const {
     connected,
     playerScore,
+    userRank,
     username,
     setUsername,
+    disconnect,
     leaderboard,
     scorePopups,
     hintPopups,
@@ -52,6 +59,8 @@ function App() {
   const [viewY, setViewY] = useState(storedViewY);
   const viewRef = useRef({ x: storedViewX, y: storedViewY });
   const rafRef = useRef(null);
+  const guestCleanupRef = useRef(null);
+  const userMovedRef = useRef(false);
 
   const commitViewRef = useCallback(() => {
     setViewX(viewRef.current.x);
@@ -74,6 +83,7 @@ function App() {
   const [zoom, setZoom] = useState(1);
   const handleZoom = useCallback(
     (delta) => {
+      userMovedRef.current = true;
       const container = containerRef.current;
       const MIN_ZOOM = 0.5;
       const MAX_ZOOM = 3;
@@ -107,6 +117,7 @@ function App() {
   const handleWheel = useCallback(
     (e) => {
       e.preventDefault();
+      userMovedRef.current = true;
 
       const container = containerRef.current;
       if (!container) return;
@@ -364,6 +375,7 @@ function App() {
       }
 
       if (e.button !== 0) return;
+      userMovedRef.current = true;
 
       setDragStart({
         x: e.clientX,
@@ -397,6 +409,7 @@ function App() {
       }
 
       if (isDragging) {
+        userMovedRef.current = true;
         const deltaX = (e.clientX - dragStart.x) / zoom;
         const deltaY = (e.clientY - dragStart.y) / zoom;
 
@@ -453,6 +466,7 @@ function App() {
       if (e.touches.length === 1) {
         const touch = e.touches[0];
         e.preventDefault(); // Prevent text selection
+        userMovedRef.current = true;
         setDragStart({
           x: touch.clientX,
           y: touch.clientY,
@@ -495,6 +509,7 @@ function App() {
         }
 
         if (isDragging) {
+          userMovedRef.current = true;
           const deltaX = (touch.clientX - dragStart.x) / zoom;
           const deltaY = (touch.clientY - dragStart.y) / zoom;
 
@@ -594,6 +609,37 @@ function App() {
     }
   }, [render, tick, viewX, viewY, zoom]);
 
+  // Center camera helper
+  const centerCameraOnWorld = useCallback((worldX, worldY) => {
+    const container = containerRef.current;
+    if (!container) return;
+    const centerX = container.clientWidth / 2;
+    const centerY = container.clientHeight / 2;
+    const newViewX = worldX * CELL_SIZE - centerX / zoom;
+    const newViewY = worldY * CELL_SIZE - centerY / zoom;
+    scheduleViewUpdate(newViewX, newViewY);
+  }, [CELL_SIZE, zoom, scheduleViewUpdate]);
+
+  // Fetch hotspot to showcase activity on landing
+  useEffect(() => {
+    let canceled = false;
+    fetch("/hotspot")
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (canceled || !data) return;
+        setHotspotInfo(data);
+        // Only auto-center if the user hasn't moved the camera yet
+        if (userMovedRef.current) return;
+        const chunkWorldX = data.X * CHUNK + CHUNK / 2;
+        const chunkWorldY = data.Y * CHUNK + CHUNK / 2;
+        requestAnimationFrame(() => centerCameraOnWorld(chunkWorldX, chunkWorldY));
+      })
+      .catch(() => {});
+    return () => {
+      canceled = true;
+    };
+  }, [centerCameraOnWorld]);
+
   // Handle window resize
   useEffect(() => {
     const handleResize = () => {
@@ -625,6 +671,31 @@ function App() {
 
   return (
     <div className="game-container">
+      {/* Home button to reopen overlay */}
+      <button
+        onClick={() => {
+          // Disconnect any existing real session and go back to spectate landing
+          try { disconnect(); } catch {}
+          // Clear stored username to trigger overlay
+          localStorage.removeItem("username");
+          setUsername("");
+        }}
+        style={{
+          position: "fixed",
+          top: 52, // below the score chip
+          left: "50%",
+          transform: "translateX(-50%)",
+          zIndex: 21,
+          background: "#fff",
+          border: "1px solid #ccc",
+          borderRadius: 6,
+          padding: "6px 10px",
+          cursor: "pointer",
+          boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+        }}
+      >
+        Home
+      </button>
       {!username && (
         <div
           style={{
@@ -643,63 +714,188 @@ function App() {
               padding: 20,
               borderRadius: 8,
               textAlign: "center",
-              maxWidth: 720,
+              maxWidth: 860,
               width: "90vw",
               height: "90vh",
               overflow: "auto",
             }}
           >
-            <h3>Enter username</h3>
-            <input
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              style={{
-                padding: 8,
-                marginBottom: 10,
-                borderRadius: 4,
-                border: "1px solid #ccc",
-                width: "80%",
-              }}
-              placeholder="Your name"
-              maxLength={20}
-              pattern="[A-Za-z0-9_-]{1,20}"
-              title="Use 1-20 characters: letters, numbers, underscores, or hyphens"
-            />
-            <button
-              onClick={() => {
-                const trimmedName = nameInput.trim();
-                if (trimmedName) {
-                  setUsername(trimmedName);
-                } else {
-                  // Generate a default username with 5 random digits
-                  const randomDigits = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
-                  setUsername(`User${randomDigits}`);
-                }
-              }}
-              style={{
-                padding: "10px 20px",
-                backgroundColor: "#4CAF50",
-                color: "white",
-                border: "none",
-                borderRadius: 4,
-                cursor: "pointer",
-                fontSize: 16,
-              }}
-            >
-              Join Game
-            </button>
-            <div style={{ margin: "15px 0" }}>
-              <div style={{ marginBottom: "10px", fontWeight: "bold" }}>
-                Choose your flag:
-              </div>
-              <FlagSelector
-                value={flagID}
-                onChange={(id) => {
-                  setFlagID(id);
-                  localStorage.setItem("flagID", id);
-                }}
-              />
+            <h1 style={{ marginTop: 0 }}>Infinite Minesweeper</h1>
+            <p style={{ margin: "8px 0 16px", color: "#555" }}>
+              Discover an endless world together. You are currently spectating live explorers.
+              {hotspotInfo && hotspotInfo.count > 0 && (
+                <>
+                  {" "}There are <b>{hotspotInfo.count}</b> players near the hotspot.
+                </>
+              )}
+            </p>
+
+            {/* Tabs */}
+            <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 16 }}>
+              {[
+                { k: "play", label: "Play" },
+                { k: "leaderboard", label: "Leaderboard" },
+                { k: "advancements", label: "Advancements" },
+              ].map((t) => (
+                <button
+                  key={t.k}
+                  onClick={() => {
+                    setActiveTab(t.k);
+                    if (t.k === "leaderboard" && fullLeaderboard == null && !lbLoading) {
+                      setLbLoading(true);
+                      fetch("/leaderboard")
+                        .then((r) => (r.ok ? r.json() : []))
+                        .then((rows) => setFullLeaderboard(Array.isArray(rows) ? rows : []))
+                        .catch(() => setFullLeaderboard([]))
+                        .finally(() => setLbLoading(false));
+                    }
+                  }}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 6,
+                    border: activeTab === t.k ? "2px solid #1976d2" : "1px solid #ccc",
+                    background: activeTab === t.k ? "#e3f2fd" : "#fafafa",
+                    cursor: "pointer",
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
             </div>
+
+            {activeTab === "play" && (
+              <>
+                <h3>Choose a name to join</h3>
+                <input
+                  value={nameInput}
+                  onChange={(e) => setNameInput(e.target.value)}
+                  style={{
+                    padding: 8,
+                    marginBottom: 10,
+                    borderRadius: 4,
+                    border: "1px solid #ccc",
+                    width: "80%",
+                  }}
+                  placeholder="Your name"
+                  maxLength={20}
+                  pattern="[A-Za-z0-9_-]{1,20}"
+                  title="Use 1-20 characters: letters, numbers, underscores, or hyphens"
+                />
+                <button
+                  onClick={() => {
+                    const trimmedName = nameInput.trim();
+                    const chosen =
+                      trimmedName || `User${Math.floor(Math.random() * 100000).toString().padStart(5, "0")}`;
+                    const token = localStorage.getItem("session_token");
+                    // If we already have a session, persist rename server-side first
+                    if (token) {
+                      fetch("/profile/update", {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                          "X-Session-Token": token,
+                        },
+                        body: JSON.stringify({ name: chosen }),
+                      })
+                        .then((r) => r.ok ? r.json() : Promise.reject(r))
+                        .then(() => {
+                          localStorage.setItem("username", chosen);
+                          setUsername(chosen);
+                        })
+                        .catch(() => {
+                          setUsername(chosen); // Fallback: will reconnect and get rejected/accepted
+                        });
+                      return;
+                    }
+                    // Close guest connection before joining
+                    if (guestCleanupRef.current) {
+                      try { guestCleanupRef.current(); } catch {}
+                      guestCleanupRef.current = null;
+                    }
+                    setUsername(chosen);
+                  }}
+                  style={{
+                    padding: "10px 20px",
+                    backgroundColor: "#4CAF50",
+                    color: "white",
+                    border: "none",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                    fontSize: 16,
+                  }}
+                >
+                  Join Game
+                </button>
+                <div style={{ margin: "15px 0" }}>
+                  <div style={{ marginBottom: "10px", fontWeight: "bold" }}>Choose your flag:</div>
+                  <FlagSelector
+                    value={flagID}
+                    onChange={async (id) => {
+                      setFlagID(id);
+                      localStorage.setItem("flagID", id);
+                      const token = localStorage.getItem("session_token");
+                      if (token) {
+                        try {
+                          await fetch("/profile/update", {
+                            method: "POST",
+                            headers: {
+                              "Content-Type": "application/json",
+                              "X-Session-Token": token,
+                            },
+                            body: JSON.stringify({ flagID: id }),
+                          });
+                        } catch {}
+                      }
+                    }}
+                  />
+                </div>
+                {joinError && (
+                  <div style={{ color: "#c00", marginTop: 8 }}>{joinError}</div>
+                )}
+                <div style={{ fontSize: 12, color: "#777" }}>You can pan and zoom to explore even before joining.</div>
+              </>
+            )}
+
+            {activeTab === "leaderboard" && (
+              <div style={{ textAlign: "left", maxWidth: 720, margin: "0 auto" }}>
+                {lbLoading && <p>Loading leaderboard…</p>}
+                {!lbLoading && fullLeaderboard && fullLeaderboard.length === 0 && <p>No players yet.</p>}
+                {!lbLoading && Array.isArray(fullLeaderboard) && fullLeaderboard.length > 0 && (
+                  <ol>
+                    {fullLeaderboard.slice(0, 200).map((row) => (
+                      <li key={row.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <canvas
+                          ref={(c) => {
+                            if (!c) return;
+                            const ctx = c.getContext("2d");
+                            const cssSize = 20;
+                            const dpr = window.devicePixelRatio || 1;
+                            c.width = Math.round(cssSize * dpr);
+                            c.height = Math.round(cssSize * dpr);
+                            c.style.width = `${cssSize}px`;
+                            c.style.height = `${cssSize}px`;
+                            ctx.imageSmoothingEnabled = false;
+                            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                            rendererRef.current
+                              .drawSprite(ctx, row.flagID ?? 0, 0, 0, cssSize, cssSize)
+                              .catch(console.error);
+                          }}
+                          style={{ imageRendering: "pixelated" }}
+                        />
+                        <span style={{ flex: 1 }}>{row.name}</span>
+                        <b>{formatScore(row.score ?? 0)}</b>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            )}
+
+            {activeTab === "advancements" && (
+              <div style={{ color: "#666" }}>
+                Coming soon: personal milestones, streaks, and discoveries.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -762,8 +958,10 @@ function App() {
           <canvas ref={canvasRef} id="game-canvas" />
 
           {scorePopups.map((p) => {
-            const x = (p.worldX * CELL_SIZE - viewX) * zoom;
-            const y = (p.worldY * CELL_SIZE - viewY) * zoom;
+            const vx = viewRef.current.x;
+            const vy = viewRef.current.y;
+            const x = (p.worldX * CELL_SIZE - vx) * zoom;
+            const y = (p.worldY * CELL_SIZE - vy) * zoom;
             return (
               <div
                 key={p.id}
@@ -782,8 +980,10 @@ function App() {
           })}
 
           {hintPopups.map((h) => {
-            const x = (h.worldX * CELL_SIZE - viewX) * zoom;
-            const y = (h.worldY * CELL_SIZE - viewY) * zoom;
+            const vx = viewRef.current.x;
+            const vy = viewRef.current.y;
+            const x = (h.worldX * CELL_SIZE - vx) * zoom;
+            const y = (h.worldY * CELL_SIZE - vy) * zoom;
             return (
               <div
                 key={h.id}
@@ -847,7 +1047,7 @@ function App() {
         </div>
         {topPlayers.length > 0 ? (
           <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-            {topPlayers.map((p) => (
+            {topPlayers.map((p, index) => (
               <li
                 key={p.name}
                 style={{
@@ -862,7 +1062,7 @@ function App() {
                     ref={(c) => {
                       if (!c) return;
                       const ctx = c.getContext("2d");
-                      const cssSize = 32; // CSS pixels
+                      const cssSize = 25; // CSS pixels
                       const dpr = window.devicePixelRatio || 1;
                       c.width = Math.round(cssSize * dpr);
                       c.height = Math.round(cssSize * dpr);
@@ -886,9 +1086,23 @@ function App() {
                   />
                   {p.name}
                 </span>
-                    <span style={{ fontWeight: "bold" }}>{formatScore(p.score ?? 0)}</span>
+                <span style={{ fontWeight: "bold" }}>{formatScore(p.score ?? 0)}</span>
               </li>
             ))}
+            {userRank > 10 && (
+              <>
+                <li style={{
+                  borderTop: "1px solid #ccc",
+                  marginTop: 4,
+                  paddingTop: 4,
+                  marginBottom: 2
+                }}>
+                  <span style={{ fontSize: "12px", color: "#666" }}>
+                    You: #{userRank} ({formatScore(playerScore)})
+                  </span>
+                </li>
+              </>
+            )}
           </ul>
         ) : (
           <p>No players yet</p>

@@ -22,7 +22,6 @@ export const CHUNK = 64;
 const MINE_COUNT = 20;
 
 function encodeMsg(msg) {
-  // unwrap legacy `{ payload:{ … } }` objects
   if (msg && msg.payload && Object.keys(msg).length === 1) {
     msg = msg.payload;
   }
@@ -58,7 +57,6 @@ function decodeMsg(data) {
     defaults: true,
   });
 
-  // Un-wrap `{ payload:{ … } }` envelope (older builds)
   const msg =
     decodedPlain.payload && Object.keys(decodedPlain).length === 1
       ? decodedPlain.payload
@@ -108,13 +106,20 @@ const worldToChunk = (worldX, worldY) => {
 };
 
 export const useGameState = () => {
-  const storedName = localStorage.getItem("username") || "";
+  const initialName = (() => {
+    const existing = (localStorage.getItem("username") || "").trim();
+    if (existing) return existing;
+    const generated = `User${String(Math.floor(Math.random() * 100000)).padStart(5, "0")}`;
+    localStorage.setItem("username", generated);
+    return generated;
+  })();
 
   const [ws, setWs] = useState(null);
   const [connected, setConnected] = useState(false);
   const [leaderboard, setLeaderboard] = useState([]);
   const [playerScore, setPlayerScore] = useState(0);
-  const [username, setUsername] = useState(storedName);
+  const [userRank, setUserRank] = useState(0);
+  const [username, setUsername] = useState(initialName);
   const [scorePopups, setScorePopups] = useState([]);
   const [hintPopups, setHintPopups] = useState([]);
   const [tick, setTick] = useState(0);
@@ -307,9 +312,11 @@ export const useGameState = () => {
       if (isRightClick) {
         const myFlagId = playerFlagsRef.current.get(username);
         const seed = seedCache.current.get(chunkKey);
+        // Always send flag placement requests to the server
+        didLocalMutation = true;
         // If we know the seed and this is NOT a mine, suppress optimistic flag but still send the request.
         if (seed && !isMine(seed, cell)) {
-          didLocalMutation = true; // force sending to server without local mutation
+          // Don't set optimistic flag for non-mines
         } else if (myFlagId !== undefined) {
           // Only optimistic-flag when unknown or when it is actually a mine
           flaggedCellsRef.current.set(flagKey, myFlagId);
@@ -407,6 +414,8 @@ export const useGameState = () => {
       let didWelcome = false;
 
       websocket.onopen = () => {
+        // Always include a session token if present; if missing, the server will
+        // assign a unique username and issue a token.
         const sessionToken = localStorage.getItem("session_token") || "";
         websocket.send(encodeMsg({ hello: { sessionToken, name: nameInput, flagID } }));
         setConnected(true);
@@ -499,7 +508,7 @@ export const useGameState = () => {
             return;
           }
           const requestId = String(reqRaw);
-          const { ok, scoreUpdate } = data;
+          const { ok, scoreUpdate, userRank } = data;
 
           const optimisticAction = optimisticActions.current.get(requestId);
           if (!optimisticAction) return;
@@ -574,6 +583,9 @@ export const useGameState = () => {
 
             // update score + popup
             setPlayerScore(scoreUpdate.score);
+            if (userRank) {
+              setUserRank(userRank);
+            }
             if (scoreUpdate.delta !== 0) {
               const cell = scoreUpdate.cell;
               const lx = cell % CHUNK;
@@ -651,7 +663,13 @@ export const useGameState = () => {
               const prev = byName.get(e.name);
               if (!prev || (e.score ?? 0) > (prev.score ?? 0)) byName.set(e.name, e);
             }
-            const uniqueEntries = Array.from(byName.values()).sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+            // Use stable sorting to match server-side behavior
+            const uniqueEntries = Array.from(byName.values()).sort((a, b) => {
+                if (a.score !== b.score) {
+                    return b.score - a.score;
+                }
+                return a.name.localeCompare(b.name);
+            });
             setLeaderboard(uniqueEntries);
             playerFlagsRef.current.clear();
             for (const entry of uniqueEntries) {
@@ -665,9 +683,20 @@ export const useGameState = () => {
     [countAdjacentMines, username],
   );
 
+  const disconnect = useCallback(() => {
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    } catch {
+      // ignore
+    }
+  }, [ws]);
+
   return {
     connected,
     playerScore,
+    userRank,
     username,
     setUsername,
     leaderboard,
@@ -684,6 +713,7 @@ export const useGameState = () => {
     ensureChunkSubscription,
     ensureChunkUnsubscription,
     connectWs,
+    disconnect,
     worldToChunk,
     isMine,
   };

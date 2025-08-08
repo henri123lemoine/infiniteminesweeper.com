@@ -299,12 +299,9 @@ export class CanvasRenderer {
 
     // Clear background
     ctx.fillStyle = "#c0c0c0";
-    ctx.fillRect(
-      -viewRef.current.x / zoom,
-      -viewRef.current.y / zoom,
-      width / zoom,
-      height / zoom,
-    );
+    // Always clear the visible viewport in logical (pre-zoom) units
+    // The current transform is only a scale; the visible logical viewport is [0, width/zoom] x [0, height/zoom]
+    ctx.fillRect(0, 0, width / zoom, height / zoom);
 
     // Calculate visible world coordinates
     const startWorldX = Math.floor(viewRef.current.x / CELL_SIZE);
