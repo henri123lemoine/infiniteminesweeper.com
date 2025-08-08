@@ -35,11 +35,11 @@ body {
   height: 100%;
   position: relative;
   image-rendering: pixelated;
-  cursor: grab;
+  cursor: default;
 }
 
 .canvas-container.dragging {
-  cursor: grabbing;
+  cursor: default;
 }
 
 /* Disable text selection and context menus on mobile */
