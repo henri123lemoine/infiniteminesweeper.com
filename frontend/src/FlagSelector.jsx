@@ -93,14 +93,30 @@ export default function FlagSelector({ value, onChange }) {
     <div
       style={{
         display: "flex",
-        flexWrap: "wrap",
-        gap: 8,
+        flexDirection: "column",
         maxWidth: "100%",
         maxHeight: "90%",
-        overflowY: "auto",
       }}
     >
-      {buttons}
+      <div
+        style={{
+          fontWeight: "bold",
+          marginBottom: 8,
+          textAlign: "center",
+        }}
+      >
+        🪙 ∞ coins
+      </div>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          overflowY: "auto",
+        }}
+      >
+        {buttons}
+      </div>
     </div>
   );
 }
