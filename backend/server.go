@@ -28,7 +28,13 @@ type Server struct {
 	scores map[uint32]int32                // playerID -> score
 	subs   map[ChunkID]map[uint32]struct{} // who wants reveals for each chunk
 	// Reverse index of per-player subscriptions for fast diffing of view updates
-	playerSubs    map[uint32]map[ChunkID]struct{}
+	playerSubs map[uint32]map[ChunkID]struct{}
+	// Recency tracking for per-player subscriptions (for LRU eviction)
+	playerSubLastSeen map[uint32]map[ChunkID]uint64
+	// Monotonic counter for last-seen timestamps
+	subTick uint64
+	// Max number of chunks to keep subscribed per player (soft cap via LRU)
+	maxPlayerSubs int
 	totalRevealed uint64
 
 	// leaderboard cache
@@ -72,22 +78,25 @@ type Server struct {
 
 func NewServer() *Server {
 	return &Server{
-		secret:          []byte("minesweeper-secret-key"),
-		chunks:          make(map[ChunkID]*ChunkBits),
-		flags:           make(map[ChunkID]map[uint32]Flag),
-		scores:          make(map[uint32]int32),
-		subs:            make(map[ChunkID]map[uint32]struct{}),
-		playerSubs:      make(map[uint32]map[ChunkID]struct{}),
-		players:         make(map[uint32]map[*Player]struct{}),
-		playerNames:     make(map[uint32]string),
-		nameToPlayerID:  make(map[string]uint32),
-		playerFlags:     make(map[uint32]uint32),
-		playerViews:     make(map[uint32]PlayerView),
-		sessionTokens:   make(map[string]uint32), // Initialize the new map
-		seedCache:       make(map[ChunkID]uint64),
-		nextPlayerID:    1,
-		dataDir:         "data",
-		proximityRadius: 2, // default behavior: must be within distance <= 2 of any revealed cell
+		secret:            []byte("minesweeper-secret-key"),
+		chunks:            make(map[ChunkID]*ChunkBits),
+		flags:             make(map[ChunkID]map[uint32]Flag),
+		scores:            make(map[uint32]int32),
+		subs:              make(map[ChunkID]map[uint32]struct{}),
+		playerSubs:        make(map[uint32]map[ChunkID]struct{}),
+		playerSubLastSeen: make(map[uint32]map[ChunkID]uint64),
+		subTick:           0,
+		maxPlayerSubs:     70,
+		players:           make(map[uint32]map[*Player]struct{}),
+		playerNames:       make(map[uint32]string),
+		nameToPlayerID:    make(map[string]uint32),
+		playerFlags:       make(map[uint32]uint32),
+		playerViews:       make(map[uint32]PlayerView),
+		sessionTokens:     make(map[string]uint32), // Initialize the new map
+		seedCache:         make(map[ChunkID]uint64),
+		nextPlayerID:      1,
+		dataDir:           "data",
+		proximityRadius:   2, // default behavior: must be within distance <= 2 of any revealed cell
 		upgrader: websocket.Upgrader{
 			// Reject cross-site WebSocket requests (prevents CSRF via <iframe>).
 			CheckOrigin: func(r *http.Request) bool {

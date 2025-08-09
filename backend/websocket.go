@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -380,7 +381,7 @@ func (s *Server) readPump(player *Player) {
 			endX := startX + int64(chunksWide) - 1
 			endY := startY + int64(chunksHigh) - 1
 
-			// Build new desired set; compute diff against previous per-player subs
+			// Build new desired set (viewport)
 			newSet := make(map[ChunkID]struct{}, chunksWide*chunksHigh)
 			for cy := startY; cy <= endY; cy++ {
 				for cx := startX; cx <= endX; cx++ {
@@ -389,54 +390,89 @@ func (s *Server) readPump(player *Player) {
 			}
 
 			s.stateMu.Lock()
+			// Ensure per-player maps exist
 			current := s.playerSubs[player.ID]
 			if current == nil {
 				current = make(map[ChunkID]struct{})
 				s.playerSubs[player.ID] = current
 			}
+			lastSeen := s.playerSubLastSeen[player.ID]
+			if lastSeen == nil {
+				lastSeen = make(map[ChunkID]uint64)
+				s.playerSubLastSeen[player.ID] = lastSeen
+			}
 
-			// Compute adds and drops
+			// Determine which chunks are new (not already subscribed)
 			adds := make([]ChunkID, 0)
-			drops := make([]ChunkID, 0)
 			for cid := range newSet {
 				if _, ok := current[cid]; !ok {
+					// Subscribe to this chunk
+					if s.subs[cid] == nil {
+						s.subs[cid] = make(map[uint32]struct{})
+					}
+					s.subs[cid][player.ID] = struct{}{}
+					current[cid] = struct{}{}
 					adds = append(adds, cid)
 				}
-			}
-			for cid := range current {
-				if _, ok := newSet[cid]; !ok {
-					drops = append(drops, cid)
-				}
+				// Update recency for everything in view
+				s.subTick++
+				lastSeen[cid] = s.subTick
 			}
 
-			// Apply subs/dels
-			for _, cid := range adds {
-				if s.subs[cid] == nil {
-					s.subs[cid] = make(map[uint32]struct{})
+			// Enforce LRU capacity by evicting least-recent from outside the viewport first
+			over := len(current) - s.maxPlayerSubs
+			if over > 0 {
+				// Collect candidates not in the current view
+				type pair struct {
+					id ChunkID
+					t  uint64
 				}
-				s.subs[cid][player.ID] = struct{}{}
-				current[cid] = struct{}{}
-			}
-			for _, cid := range drops {
-				if subs, ok := s.subs[cid]; ok {
-					delete(subs, player.ID)
-					if len(subs) == 0 {
-						delete(s.subs, cid)
+				candidates := make([]pair, 0)
+				for cid := range current {
+					if _, inView := newSet[cid]; inView {
+						continue
+					}
+					candidates = append(candidates, pair{id: cid, t: lastSeen[cid]})
+				}
+				// Sort by oldest first
+				sort.Slice(candidates, func(i, j int) bool { return candidates[i].t < candidates[j].t })
+				// Evict from candidates first
+				for i := 0; i < len(candidates) && over > 0; i++ {
+					cid := candidates[i].id
+					if subs, ok := s.subs[cid]; ok {
+						delete(subs, player.ID)
+						if len(subs) == 0 {
+							delete(s.subs, cid)
+						}
+					}
+					delete(current, cid)
+					delete(lastSeen, cid)
+					over--
+				}
+				// If still over capacity (rare), evict oldest including in-view
+				if over > 0 {
+					any := make([]pair, 0, len(current))
+					for cid := range current {
+						any = append(any, pair{id: cid, t: lastSeen[cid]})
+					}
+					sort.Slice(any, func(i, j int) bool { return any[i].t < any[j].t })
+					for i := 0; i < len(any) && over > 0; i++ {
+						cid := any[i].id
+						if subs, ok := s.subs[cid]; ok {
+							delete(subs, player.ID)
+							if len(subs) == 0 {
+								delete(s.subs, cid)
+							}
+						}
+						delete(current, cid)
+						delete(lastSeen, cid)
+						over--
 					}
 				}
-				delete(current, cid)
 			}
 
-			// Prepare region chunks to send:
-			// - if this is the first time we see this player, send the full rect
-			// - otherwise only send newly added chunks
+			// Only send newly added chunks; existing subs are not resent
 			chunkIDs := adds
-			if len(current) == 0 { // first view update for this player
-				chunkIDs = make([]ChunkID, 0, len(newSet))
-				for cid := range newSet {
-					chunkIDs = append(chunkIDs, cid)
-				}
-			}
 			s.stateMu.Unlock()
 
 			if len(chunkIDs) > 0 {
@@ -479,6 +515,46 @@ func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
 		s.subs[chunkID] = make(map[uint32]struct{})
 	}
 	s.subs[chunkID][playerID] = struct{}{}
+
+	// Maintain reverse index and recency for LRU
+	if s.playerSubs[playerID] == nil {
+		s.playerSubs[playerID] = make(map[ChunkID]struct{})
+	}
+	if s.playerSubLastSeen[playerID] == nil {
+		s.playerSubLastSeen[playerID] = make(map[ChunkID]uint64)
+	}
+	s.playerSubs[playerID][chunkID] = struct{}{}
+	s.subTick++
+	s.playerSubLastSeen[playerID][chunkID] = s.subTick
+
+	// Enforce capacity with LRU eviction (oldest first)
+	if len(s.playerSubs[playerID]) > s.maxPlayerSubs {
+		type pair struct {
+			id ChunkID
+			t  uint64
+		}
+		items := make([]pair, 0, len(s.playerSubs[playerID]))
+		for cid := range s.playerSubs[playerID] {
+			items = append(items, pair{id: cid, t: s.playerSubLastSeen[playerID][cid]})
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].t < items[j].t })
+		over := len(s.playerSubs[playerID]) - s.maxPlayerSubs
+		for i := 0; i < len(items) && over > 0; i++ {
+			ev := items[i].id
+			if ev == chunkID { // avoid evicting the one we just added if possible
+				continue
+			}
+			if subs, ok := s.subs[ev]; ok {
+				delete(subs, playerID)
+				if len(subs) == 0 {
+					delete(s.subs, ev)
+				}
+			}
+			delete(s.playerSubs[playerID], ev)
+			delete(s.playerSubLastSeen[playerID], ev)
+			over--
+		}
+	}
 
 	chunk, chunkExists := s.chunks[chunkID]
 	flagsMap := s.flags[chunkID]
@@ -530,12 +606,6 @@ func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
 		Reveals:    revealsBytes,
 		FlagGroups: flagGroups,
 	}}}
-
-	// Track reverse index for per-player subscriptions as well
-	if s.playerSubs[playerID] == nil {
-		s.playerSubs[playerID] = make(map[ChunkID]struct{})
-	}
-	s.playerSubs[playerID][chunkID] = struct{}{}
 
 	// Unlock the state mutex *before* sending data to avoid deadlocks.
 	s.stateMu.Unlock()
@@ -640,6 +710,12 @@ func (s *Server) unsubscribeFromChunk(playerID uint32, chunkID ChunkID) {
 	}
 	if m, ok := s.playerSubs[playerID]; ok {
 		delete(m, chunkID)
+		if last, ok2 := s.playerSubLastSeen[playerID]; ok2 {
+			delete(last, chunkID)
+			if len(last) == 0 {
+				delete(s.playerSubLastSeen, playerID)
+			}
+		}
 		if len(m) == 0 {
 			delete(s.playerSubs, playerID)
 		}
@@ -677,6 +753,7 @@ func (s *Server) removePlayer(p *Player) {
 	}
 	// Clear reverse index for this player so next connection starts fresh
 	delete(s.playerSubs, p.ID)
+	delete(s.playerSubLastSeen, p.ID)
 	s.stateMu.Unlock()
 
 	log.Printf("Player %d disconnected", p.ID)
