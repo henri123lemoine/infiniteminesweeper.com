@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -35,6 +36,10 @@ func debugLogMessage(msg *pb.Msg, playerID uint32) {
 	case *pb.Msg_Unsubscribe:
 		log.Printf("[DEBUG] Player %d -> Unsubscribe: ChunkId=(%d,%d)",
 			playerID, payload.Unsubscribe.ChunkId.X, payload.Unsubscribe.ChunkId.Y)
+	case *pb.Msg_ViewUpdate:
+		log.Printf("[DEBUG] Player %d -> ViewUpdate: ChunkId=(%d,%d), Cell=%d, SizeCells=(%d x %d)",
+			playerID, payload.ViewUpdate.ChunkId.X, payload.ViewUpdate.ChunkId.Y, payload.ViewUpdate.Cell, payload.ViewUpdate.WidthCells, payload.ViewUpdate.HeightCells)
+
 	default:
 		log.Printf("[DEBUG] Player %d -> Unknown message type: %T", playerID, payload)
 	}
@@ -332,6 +337,150 @@ func (s *Server) readPump(player *Player) {
 				continue
 			}
 			s.unsubscribeFromChunk(player.ID, ChunkID{X: m.ChunkId.X, Y: m.ChunkId.Y})
+
+		case *pb.Msg_ViewUpdate:
+			vu := t.ViewUpdate
+			if vu.ChunkId == nil {
+				continue
+			}
+			// Record player's view
+			view := PlayerView{Chunk: ChunkID{X: vu.ChunkId.X, Y: vu.ChunkId.Y}, Cell: vu.Cell}
+			s.stateMu.Lock()
+			s.playerViews[player.ID] = view
+			s.stateMu.Unlock()
+
+			// Determine a proportional region around the viewport.
+			// Convert width/height in world cells to chunk dimensions and add a small margin.
+			widthCells := int(vu.WidthCells)
+			heightCells := int(vu.HeightCells)
+			if widthCells <= 0 || heightCells <= 0 {
+				// Fallback: default to 3x3 chunks around the center if client didn't send dims
+				widthCells, heightCells = ChunkSize*3, ChunkSize*3
+			}
+			chunksWide := (widthCells + ChunkSize - 1) / ChunkSize
+			chunksHigh := (heightCells + ChunkSize - 1) / ChunkSize
+			// Aim to cover at least the viewport, plus one chunk margin around for smoother panning
+			chunksWide += 2
+			chunksHigh += 2
+
+			// Center of the view in world coords
+			cellX := int(vu.Cell % uint32(ChunkSize))
+			cellY := int(vu.Cell / uint32(ChunkSize))
+			centerWorldX := int(vu.ChunkId.X)*ChunkSize + cellX
+			centerWorldY := int(vu.ChunkId.Y)*ChunkSize + cellY
+
+			// Convert center to chunk coords
+			centerChunkX := int64(centerWorldX / ChunkSize)
+			centerChunkY := int64(centerWorldY / ChunkSize)
+
+			// Compute rectangle of chunk IDs
+			halfW := chunksWide / 2
+			halfH := chunksHigh / 2
+			startX := centerChunkX - int64(halfW)
+			startY := centerChunkY - int64(halfH)
+			endX := startX + int64(chunksWide) - 1
+			endY := startY + int64(chunksHigh) - 1
+
+			// Build new desired set (viewport)
+			newSet := make(map[ChunkID]struct{}, chunksWide*chunksHigh)
+			for cy := startY; cy <= endY; cy++ {
+				for cx := startX; cx <= endX; cx++ {
+					newSet[ChunkID{X: cx, Y: cy}] = struct{}{}
+				}
+			}
+
+			s.stateMu.Lock()
+			// Ensure per-player maps exist
+			current := s.playerSubs[player.ID]
+			if current == nil {
+				current = make(map[ChunkID]struct{})
+				s.playerSubs[player.ID] = current
+			}
+			lastSeen := s.playerSubLastSeen[player.ID]
+			if lastSeen == nil {
+				lastSeen = make(map[ChunkID]uint64)
+				s.playerSubLastSeen[player.ID] = lastSeen
+			}
+
+			// Determine which chunks are new (not already subscribed)
+			adds := make([]ChunkID, 0)
+			for cid := range newSet {
+				if _, ok := current[cid]; !ok {
+					// Subscribe to this chunk
+					if s.subs[cid] == nil {
+						s.subs[cid] = make(map[uint32]struct{})
+					}
+					s.subs[cid][player.ID] = struct{}{}
+					current[cid] = struct{}{}
+					adds = append(adds, cid)
+				}
+				// Update recency for everything in view
+				s.subTick++
+				lastSeen[cid] = s.subTick
+			}
+
+			// Enforce LRU capacity by evicting least-recent from outside the viewport first
+			over := len(current) - s.maxPlayerSubs
+			if over > 0 {
+				// Collect candidates not in the current view
+				type pair struct {
+					id ChunkID
+					t  uint64
+				}
+				candidates := make([]pair, 0)
+				for cid := range current {
+					if _, inView := newSet[cid]; inView {
+						continue
+					}
+					candidates = append(candidates, pair{id: cid, t: lastSeen[cid]})
+				}
+				// Sort by oldest first
+				sort.Slice(candidates, func(i, j int) bool { return candidates[i].t < candidates[j].t })
+				// Evict from candidates first
+				for i := 0; i < len(candidates) && over > 0; i++ {
+					cid := candidates[i].id
+					if subs, ok := s.subs[cid]; ok {
+						delete(subs, player.ID)
+						if len(subs) == 0 {
+							delete(s.subs, cid)
+						}
+					}
+					delete(current, cid)
+					delete(lastSeen, cid)
+					over--
+				}
+				// If still over capacity (rare), evict oldest including in-view
+				if over > 0 {
+					any := make([]pair, 0, len(current))
+					for cid := range current {
+						any = append(any, pair{id: cid, t: lastSeen[cid]})
+					}
+					sort.Slice(any, func(i, j int) bool { return any[i].t < any[j].t })
+					for i := 0; i < len(any) && over > 0; i++ {
+						cid := any[i].id
+						if subs, ok := s.subs[cid]; ok {
+							delete(subs, player.ID)
+							if len(subs) == 0 {
+								delete(s.subs, cid)
+							}
+						}
+						delete(current, cid)
+						delete(lastSeen, cid)
+						over--
+					}
+				}
+			}
+
+			// Only send newly added chunks; existing subs are not resent
+			chunkIDs := adds
+			s.stateMu.Unlock()
+
+			if len(chunkIDs) > 0 {
+				if os.Getenv("MODE") == "development" {
+					log.Printf("[DEBUG] Player %d <- ChunkRegionSync add %d chunks (rect %dx%d)", player.ID, len(chunkIDs), chunksWide, chunksHigh)
+				}
+				s.sendChunkRegionSync(player.ID, chunkIDs)
+			}
 		}
 	}
 }
@@ -366,6 +515,46 @@ func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
 		s.subs[chunkID] = make(map[uint32]struct{})
 	}
 	s.subs[chunkID][playerID] = struct{}{}
+
+	// Maintain reverse index and recency for LRU
+	if s.playerSubs[playerID] == nil {
+		s.playerSubs[playerID] = make(map[ChunkID]struct{})
+	}
+	if s.playerSubLastSeen[playerID] == nil {
+		s.playerSubLastSeen[playerID] = make(map[ChunkID]uint64)
+	}
+	s.playerSubs[playerID][chunkID] = struct{}{}
+	s.subTick++
+	s.playerSubLastSeen[playerID][chunkID] = s.subTick
+
+	// Enforce capacity with LRU eviction (oldest first)
+	if len(s.playerSubs[playerID]) > s.maxPlayerSubs {
+		type pair struct {
+			id ChunkID
+			t  uint64
+		}
+		items := make([]pair, 0, len(s.playerSubs[playerID]))
+		for cid := range s.playerSubs[playerID] {
+			items = append(items, pair{id: cid, t: s.playerSubLastSeen[playerID][cid]})
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].t < items[j].t })
+		over := len(s.playerSubs[playerID]) - s.maxPlayerSubs
+		for i := 0; i < len(items) && over > 0; i++ {
+			ev := items[i].id
+			if ev == chunkID { // avoid evicting the one we just added if possible
+				continue
+			}
+			if subs, ok := s.subs[ev]; ok {
+				delete(subs, playerID)
+				if len(subs) == 0 {
+					delete(s.subs, ev)
+				}
+			}
+			delete(s.playerSubs[playerID], ev)
+			delete(s.playerSubLastSeen[playerID], ev)
+			over--
+		}
+	}
 
 	chunk, chunkExists := s.chunks[chunkID]
 	flagsMap := s.flags[chunkID]
@@ -423,6 +612,92 @@ func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
 	s.sendToPlayer(playerID, mustProto(cs))
 }
 
+// sendChunkRegionSync gathers the state of multiple chunks and transmits them
+// in a single compressed message. The provided chunkIDs should describe a
+// rectangular region.
+func (s *Server) sendChunkRegionSync(playerID uint32, chunkIDs []ChunkID) {
+	if len(chunkIDs) == 0 {
+		return
+	}
+
+	s.stateMu.Lock()
+
+	chunks := make([]*pb.ChunkSync, 0, len(chunkIDs))
+	minX, maxX := chunkIDs[0].X, chunkIDs[0].X
+	minY, maxY := chunkIDs[0].Y, chunkIDs[0].Y
+
+	for _, chunkID := range chunkIDs {
+		if chunkID.X < minX {
+			minX = chunkID.X
+		}
+		if chunkID.X > maxX {
+			maxX = chunkID.X
+		}
+		if chunkID.Y < minY {
+			minY = chunkID.Y
+		}
+		if chunkID.Y > maxY {
+			maxY = chunkID.Y
+		}
+
+		chunk, chunkExists := s.chunks[chunkID]
+		flagsMap := s.flags[chunkID]
+		seed64 := s.generateChunkSeed(chunkID)
+		var seedBytes [8]byte
+		binary.LittleEndian.PutUint64(seedBytes[:], seed64)
+
+		var bits ChunkBits
+		if chunkExists {
+			bits = *chunk
+		}
+
+		groups := make(map[uint32]*pb.RevealedCells)
+		for cell, fl := range flagsMap {
+			if groups[fl.FlagID] == nil {
+				groups[fl.FlagID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
+			}
+			groups[fl.FlagID].Cells = append(groups[fl.FlagID].Cells, cell)
+		}
+
+		flagGroups := make([]*pb.FlagGroup, 0, len(groups))
+		for flagID, cells := range groups {
+			flagGroups = append(flagGroups, &pb.FlagGroup{
+				FlagID: flagID,
+				Cells:  cells,
+			})
+		}
+
+		revealsBytes := make([]byte, len(bits)*8)
+		for i, word := range bits {
+			binary.LittleEndian.PutUint64(revealsBytes[i*8:], word)
+		}
+
+		chunks = append(chunks, &pb.ChunkSync{
+			ChunkId:    &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
+			Seed:       seedBytes[:],
+			Reveals:    revealsBytes,
+			FlagGroups: flagGroups,
+		})
+	}
+
+	s.stateMu.Unlock()
+
+	region := &pb.ChunkRegion{Chunks: chunks}
+	raw, err := proto.Marshal(region)
+	if err != nil {
+		return
+	}
+
+	msg := &pb.Msg{Payload: &pb.Msg_ChunkRegionSync{ChunkRegionSync: &pb.ChunkRegionSync{
+		Origin: &pb.ChunkID{X: minX, Y: minY},
+		Width:  uint32(maxX - minX + 1),
+		Height: uint32(maxY - minY + 1),
+		Chunks: raw,
+	}}}
+
+	s.sendToPlayer(playerID, mustProto(msg))
+}
+
 func (s *Server) unsubscribeFromChunk(playerID uint32, chunkID ChunkID) {
 	s.stateMu.Lock()
 	if subs, ok := s.subs[chunkID]; ok {
@@ -431,6 +706,18 @@ func (s *Server) unsubscribeFromChunk(playerID uint32, chunkID ChunkID) {
 			if len(subs) == 0 {
 				delete(s.subs, chunkID)
 			}
+		}
+	}
+	if m, ok := s.playerSubs[playerID]; ok {
+		delete(m, chunkID)
+		if last, ok2 := s.playerSubLastSeen[playerID]; ok2 {
+			delete(last, chunkID)
+			if len(last) == 0 {
+				delete(s.playerSubLastSeen, playerID)
+			}
+		}
+		if len(m) == 0 {
+			delete(s.playerSubs, playerID)
 		}
 	}
 	s.stateMu.Unlock()
@@ -464,6 +751,9 @@ func (s *Server) removePlayer(p *Player) {
 			}
 		}
 	}
+	// Clear reverse index for this player so next connection starts fresh
+	delete(s.playerSubs, p.ID)
+	delete(s.playerSubLastSeen, p.ID)
 	s.stateMu.Unlock()
 
 	log.Printf("Player %d disconnected", p.ID)

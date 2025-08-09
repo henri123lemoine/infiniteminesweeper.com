@@ -62,6 +62,10 @@ message Reveal {
 message ViewUpdate {
   ChunkID chunkId = 1;
   uint32 cell = 2;
+  // Dimensions of the visible area in world cells (not pixels), so the server
+  // can scale the region proportionally to the user's viewport.
+  uint32 widthCells = 3;
+  uint32 heightCells = 4;
 }
 
 // ---- Server -> Client Messages ----
@@ -88,6 +92,22 @@ message ChunkSync {
   bytes seed = 2; // The deterministic seed for mine generation.
   bytes reveals = 3; // Gzip-compressed bitmap of revealed cells.
   repeated FlagGroup flagGroups = 4;
+}
+
+// A batch of chunk syncs describing a rectangular region of the world.
+message ChunkRegion {
+  repeated ChunkSync chunks = 1;
+}
+
+// Sends multiple chunk states in a single compressed payload.
+message ChunkRegionSync {
+  // Top-left chunk coordinate covered by this region.
+  ChunkID origin = 1;
+  // Dimensions in chunk units.
+  uint32 width = 2;
+  uint32 height = 3;
+  // Raw serialized `ChunkRegion` message (no internal gzip; outer Msg is gzipped).
+  bytes chunks = 4;
 }
 
 // The server's authoritative response to a client's Reveal command.
@@ -152,5 +172,6 @@ message Msg {
     RevealAck revealAck = 8;
     ChunkUpdateBroadcast chunkUpdateBroadcast = 9;
     Leaderboard leaderboard = 10;
+    ChunkRegionSync chunkRegionSync = 11;
   }
 }

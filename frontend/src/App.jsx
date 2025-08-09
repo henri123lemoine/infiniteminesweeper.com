@@ -46,6 +46,7 @@ function App() {
     connectWs,
     worldToChunk,
     isMine,
+    sendViewUpdateRef,
   } = useGameState();
 
   const canvasRef = useRef(null);
@@ -316,51 +317,26 @@ function App() {
     });
   }, [tick, zoom, getNumberColor, worldToChunk, flagID]);
 
-  // Subscribe to visible chunks
-  const subscribeToVisibleChunks = useCallback(() => {
+  // Instead of per-chunk subscribes, send a viewUpdate proportional to viewport
+  const sendViewportUpdate = useCallback(() => {
     if (!connected) return;
+    requestAnimationFrame(() => {
+      const container = containerRef.current;
+      const width = container?.clientWidth || window.innerWidth || 0;
+      const height = container?.clientHeight || window.innerHeight || 0;
 
-    const container = containerRef.current;
-    if (!container) return;
+      const worldWidthCells = Math.ceil(width / zoom / CELL_SIZE);
+      const worldHeightCells = Math.ceil(height / zoom / CELL_SIZE);
 
-    const width = container.clientWidth;
-    const height = container.clientHeight;
-    const startWorldX = Math.floor(viewRef.current.x / CELL_SIZE);
-    const startWorldY = Math.floor(viewRef.current.y / CELL_SIZE);
-    const endWorldX = Math.ceil((viewRef.current.x + width / zoom) / CELL_SIZE);
-    const endWorldY = Math.ceil(
-      (viewRef.current.y + height / zoom) / CELL_SIZE,
-    );
+      const centerWorldX = Math.floor((viewRef.current.x + (width / zoom) / 2) / CELL_SIZE);
+      const centerWorldY = Math.floor((viewRef.current.y + (height / zoom) / 2) / CELL_SIZE);
+      const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
 
-    const startChunkX = Math.floor(startWorldX / CHUNK) - 1;
-    const startChunkY = Math.floor(startWorldY / CHUNK) - 1;
-    const endChunkX = Math.ceil(endWorldX / CHUNK) + 1;
-    const endChunkY = Math.ceil(endWorldY / CHUNK) + 1;
-
-    const visibleNow = new Set();
-
-    for (let chunkY = startChunkY; chunkY <= endChunkY; chunkY++) {
-      for (let chunkX = startChunkX; chunkX <= endChunkX; chunkX++) {
-        const key = `${chunkX},${chunkY}`;
-        visibleNow.add(key);
-        ensureChunkSubscription(chunkX, chunkY);
-      }
-    }
-
-    // Un‑subscribe chunks that scrolled off (>1 ring outside viewport)
-    subscribedChunks.current.forEach((key) => {
-      if (!visibleNow.has(key)) {
-        const [cx, cy] = key.split(",").map(Number);
-        ensureChunkUnsubscription(cx, cy);
+      if (typeof sendViewUpdateRef?.current === 'function') {
+        sendViewUpdateRef.current(chunkX, chunkY, cell, worldWidthCells, worldHeightCells);
       }
     });
-  }, [
-    connected,
-    zoom,
-    ensureChunkSubscription,
-    ensureChunkUnsubscription,
-    CELL_SIZE,
-  ]);
+  }, [connected, zoom, CELL_SIZE, worldToChunk]);
 
   // Mouse event handlers
   const handleMouseDown = useCallback(
@@ -572,10 +548,21 @@ function App() {
     return cleanup;
   }, [username, flagID, connectWs]);
 
-  // Subscribe to visible chunks when view changes
+  // Send view-based updates when view changes
   useEffect(() => {
-    subscribeToVisibleChunks();
-  }, [subscribeToVisibleChunks, viewX, viewY]);
+    sendViewportUpdate();
+  }, [sendViewportUpdate, viewX, viewY]);
+
+  // Also send once on connect/zoom change and on resize
+  useEffect(() => {
+    if (connected) sendViewportUpdate();
+  }, [connected, sendViewportUpdate, zoom]);
+
+  useEffect(() => {
+    const onResize = () => sendViewportUpdate();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [sendViewportUpdate]);
 
   // Sync viewRef to sessionStorage
   useEffect(() => {

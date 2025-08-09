@@ -19,6 +19,9 @@ type Flag struct {
 type PlayerView struct {
 	Chunk ChunkID
 	Cell  uint32
+	// Last region dimensions in chunks used for subscription window
+	RectWChunks int
+	RectHChunks int
 }
 
 type Player struct {
@@ -33,9 +36,6 @@ type Player struct {
 
 	// Leaderboard version already sent (protected by mailbox now)
 	LastLBVersion uint64
-
-	// Suspicion metrics (for admin dashboards, nothing enforced server‑side)
-	SusRevealOverflow int // # of extra reveals processed beyond MaxRevealsPerMin
 
 	// Scoring
 	Score int32
