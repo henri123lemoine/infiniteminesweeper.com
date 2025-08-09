@@ -37,9 +37,6 @@ type Player struct {
 	// Leaderboard version already sent (protected by mailbox now)
 	LastLBVersion uint64
 
-	// Suspicion metrics (for admin dashboards, nothing enforced server‑side)
-	SusRevealOverflow int // # of extra reveals processed beyond MaxRevealsPerMin
-
 	// Scoring
 	Score int32
 

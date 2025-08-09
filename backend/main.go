@@ -14,10 +14,9 @@ import (
 var content embed.FS
 
 const (
-	ChunkSize        = 64
-	SendBufSize      = 4096  // outbound msgs kept per player before back‑pressure
-	MineCount        = 20    // mines per 100 cells (20% chance)
-	MaxRevealsPerMin = 10000 // relaxed flood‑fill budget
+	ChunkSize   = 64
+	SendBufSize = 4096 // outbound msgs kept per player before back‑pressure
+	MineCount   = 20   // mines per 100 cells (20% chance)
 )
 
 func main() {
