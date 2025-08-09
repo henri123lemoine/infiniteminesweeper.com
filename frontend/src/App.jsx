@@ -564,13 +564,6 @@ function App() {
     return () => window.removeEventListener("resize", onResize);
   }, [sendViewportUpdate]);
 
-  // Low-frequency keepalive of viewUpdate while connected (backstop)
-  useEffect(() => {
-    if (!connected) return;
-    const id = setInterval(() => sendViewportUpdate(), 1000);
-    return () => clearInterval(id);
-  }, [connected, sendViewportUpdate]);
-
   // Sync viewRef to sessionStorage
   useEffect(() => {
     viewRef.current.x = viewX;

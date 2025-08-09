@@ -427,8 +427,16 @@ func (s *Server) readPump(player *Player) {
 				delete(current, cid)
 			}
 
-			// Prepare region chunks to send only for newly added (or if first time)
+			// Prepare region chunks to send:
+			// - if this is the first time we see this player, send the full rect
+			// - otherwise only send newly added chunks
 			chunkIDs := adds
+			if len(current) == 0 { // first view update for this player
+				chunkIDs = make([]ChunkID, 0, len(newSet))
+				for cid := range newSet {
+					chunkIDs = append(chunkIDs, cid)
+				}
+			}
 			s.stateMu.Unlock()
 
 			if len(chunkIDs) > 0 {
@@ -610,18 +618,11 @@ func (s *Server) sendChunkRegionSync(playerID uint32, chunkIDs []ChunkID) {
 		return
 	}
 
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	if _, err := gz.Write(raw); err != nil {
-		return
-	}
-	gz.Close()
-
 	msg := &pb.Msg{Payload: &pb.Msg_ChunkRegionSync{ChunkRegionSync: &pb.ChunkRegionSync{
 		Origin: &pb.ChunkID{X: minX, Y: minY},
 		Width:  uint32(maxX - minX + 1),
 		Height: uint32(maxY - minY + 1),
-		Chunks: buf.Bytes(),
+		Chunks: raw,
 	}}}
 
 	s.sendToPlayer(playerID, mustProto(msg))
@@ -674,6 +675,8 @@ func (s *Server) removePlayer(p *Player) {
 			}
 		}
 	}
+	// Clear reverse index for this player so next connection starts fresh
+	delete(s.playerSubs, p.ID)
 	s.stateMu.Unlock()
 
 	log.Printf("Player %d disconnected", p.ID)

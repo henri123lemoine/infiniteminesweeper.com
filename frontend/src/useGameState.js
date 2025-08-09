@@ -119,7 +119,7 @@ export const useGameState = () => {
   const wsRef = useRef(null);
   const connectedRef = useRef(false);
   const lastViewSentRef = useRef({ startX: null, startY: null, w: 0, h: 0, at: 0 });
-  const MIN_VIEW_SEND_INTERVAL_MS = 180;
+  const MIN_VIEW_SEND_INTERVAL_MS = 220;
   const [leaderboard, setLeaderboard] = useState([]);
   const [playerScore, setPlayerScore] = useState(0);
   const [userRank, setUserRank] = useState(0);
@@ -600,9 +600,8 @@ export const useGameState = () => {
           applyChunkSync(data);
           setTick(t => t + 1);
         } else if (type === "chunkRegionSync") {
-          const regionBytes = pako.ungzip(data.chunks);
           const region = PB.ChunkRegion.toObject(
-            PB.ChunkRegion.decode(regionBytes),
+            PB.ChunkRegion.decode(data.chunks),
             { defaults: false }
           );
           for (const cs of region.chunks || []) {

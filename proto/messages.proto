@@ -106,7 +106,7 @@ message ChunkRegionSync {
   // Dimensions in chunk units.
   uint32 width = 2;
   uint32 height = 3;
-  // Gzip-compressed `ChunkRegion` message.
+  // Raw serialized `ChunkRegion` message (no internal gzip; outer Msg is gzipped).
   bytes chunks = 4;
 }
 
