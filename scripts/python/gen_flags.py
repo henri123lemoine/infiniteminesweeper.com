@@ -1,17 +1,9 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = "~=3.12"
-# dependencies = [
-#   "bs4",
-#   "requests",
-# ]
-# ///
-
 import os
+import subprocess
 import sys
+
 import requests
 from bs4 import BeautifulSoup
-import subprocess
 
 # Base URL of the PixelFlags page
 BASE_URL = "https://r74n.com/pixelflags/"
@@ -37,14 +29,14 @@ def fetch_html(url):
 
 
 def parse_all_flags(html):
-    soup = BeautifulSoup(html, 'html.parser')
-    content = soup.find('div', class_='content')
+    soup = BeautifulSoup(html, "html.parser")
+    content = soup.find("div", class_="content")
     if not content:
         print("ERROR: Couldn't find content div")
         sys.exit(1)
 
-    imgs = content.find_all('img')
-    srcs = [img['src'] for img in imgs if img.get('src')]
+    imgs = content.find_all("img")
+    srcs = [img["src"] for img in imgs if img.get("src")]
     # Deduplicate while preserving order
     seen = set()
     unique = []
@@ -58,7 +50,7 @@ def parse_all_flags(html):
 def download_image(src, download_dir):
     full_url = requests.compat.urljoin(BASE_URL, src)
     # Prefix category to filename to avoid collisions
-    parts = src.split('/')
+    parts = src.split("/")
     if len(parts) >= 2:
         category = parts[-2]
         filename = parts[-1]
@@ -71,7 +63,7 @@ def download_image(src, download_dir):
         print(f"Downloading {full_url} → {local_path}")
         r = requests.get(full_url)
         r.raise_for_status()
-        with open(local_path, 'wb') as f:
+        with open(local_path, "wb") as f:
             f.write(r.content)
     return local_path
 
@@ -98,5 +90,5 @@ def main():
     print("All flags processed!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

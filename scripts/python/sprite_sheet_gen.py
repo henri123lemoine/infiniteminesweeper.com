@@ -1,14 +1,3 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = "~=3.12"
-# dependencies = [
-#   "pillow",
-#   "pathlib",
-#   "pyyaml",
-#   "numpy",
-# ]
-# ///
-
 """Generate a spritesheet (PNG + JSON) from a folder of source images
 and a YAML description file with stable IDs and category-based defaults.
 
@@ -25,7 +14,7 @@ import math
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Any
 
 import numpy as np
 import yaml
@@ -70,18 +59,22 @@ CATEGORY_DEFAULTS = {
 
 ### Utility functions
 
+
 def hex_to_rgb(hex_colour: str) -> tuple[float, float, float]:
     r = int(hex_colour[1:3], 16) / 255.0
     g = int(hex_colour[3:5], 16) / 255.0
     b = int(hex_colour[5:7], 16) / 255.0
     return r, g, b
 
+
 def hex_to_hsv(hex_colour: str) -> tuple[float, float, float]:
     return colorsys.rgb_to_hsv(*hex_to_rgb(hex_colour))
+
 
 def slug(name: str) -> str:
     """File-system-friendly id (lower-snake-case)."""
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
 
 def draw_3d_cell(width: int, height: int) -> Image.Image:
     """Draws a 3D-style unrevealed cell background, similar to CanvasRenderer.js."""
@@ -112,6 +105,7 @@ def draw_3d_cell(width: int, height: int) -> Image.Image:
 
     return img
 
+
 ### Pre-compute palette hues
 palette_hsv: dict[str, tuple[float, float, float]] = {
     n: (h * 360, s, v)
@@ -119,6 +113,7 @@ palette_hsv: dict[str, tuple[float, float, float]] = {
 }
 
 ### Colour-shift routine (handles greyscale specially)
+
 
 def colour_variants(
     img: Image.Image, *, base_hue_range=(0, 20)
@@ -175,17 +170,22 @@ def colour_variants(
         variants.append((Image.fromarray(out_arr), colour_name))
     return variants
 
+
 ### YAML helpers
+
 
 def load_config(path: str):
     with open(path, "r") as fh:
         return yaml.safe_load(fh)
 
+
 ### helpers for a safe hex value on every sprite
+
 
 def rgb_to_hex(rgb: tuple[float, float, float]) -> str:
     r, g, b = (int(round(c * 255)) for c in rgb)
     return f"#{r:02X}{g:02X}{b:02X}"
+
 
 def average_visible_rgb(img: Image.Image) -> tuple[float, float, float]:
     """Mean RGB (0-1) of all non-transparent pixels."""
@@ -197,15 +197,22 @@ def average_visible_rgb(img: Image.Image) -> tuple[float, float, float]:
     mean = rgb[alpha].mean(axis=0)
     return tuple(mean)
 
-def get_sprite_defaults(category: str) -> Dict[str, Any]:
-    """Get default settings for a sprite category."""
-    return CATEGORY_DEFAULTS.get(category, {
-        "generate_colors": False,
-        "unlocked": True,
-        "cost": 0,
-    })
 
-def resolve_sprite_config(base_name: str, sprite_config: Dict[str, Any]) -> Dict[str, Any]:
+def get_sprite_defaults(category: str) -> dict[str, Any]:
+    """Get default settings for a sprite category."""
+    return CATEGORY_DEFAULTS.get(
+        category,
+        {
+            "generate_colors": False,
+            "unlocked": True,
+            "cost": 0,
+        },
+    )
+
+
+def resolve_sprite_config(
+    base_name: str, sprite_config: dict[str, Any]
+) -> dict[str, Any]:
     """Resolve final sprite configuration with category-based defaults."""
     category = sprite_config.get("category", "unknown")
 
@@ -220,10 +227,18 @@ def resolve_sprite_config(base_name: str, sprite_config: Dict[str, Any]) -> Dict
 
     return final_config
 
+
 class SpriteRecord:
     """Represents a single sprite variant with stable ID."""
-    def __init__(self, sprite_id: int, base_name: str, color_name: str,
-                 image: Image.Image, config: Dict[str, Any]):
+
+    def __init__(
+        self,
+        sprite_id: int,
+        base_name: str,
+        color_name: str,
+        image: Image.Image,
+        config: dict[str, Any],
+    ):
         self.sprite_id = sprite_id
         self.base_name = base_name
         self.color_name = color_name
@@ -234,36 +249,44 @@ class SpriteRecord:
     def display_name(self) -> str:
         """Human-readable name for this sprite variant."""
         base_name = self.config.get("name", self.base_name)
-        if self.color_name == "Original" or not self.config.get("generate_colors", False):
+        if self.color_name == "Original" or not self.config.get(
+            "generate_colors", False
+        ):
             return base_name
         return f"{self.color_name} {base_name}"
 
+
 ### ID Management System
+
 
 class IDManager:
     """Manages stable sprite IDs across spritesheet generations."""
 
     def __init__(self, id_file: str = "sprite_ids.yaml"):
         self.id_file = id_file
-        self.id_map: Dict[str, int] = {}
+        self.id_map: dict[str, int] = {}
         self.next_id = 1
         self.load_ids()
 
     def load_ids(self):
         """Load existing ID mappings."""
         if Path(self.id_file).exists():
-            with open(self.id_file, 'r') as f:
+            with open(self.id_file, "r") as f:
                 data = yaml.safe_load(f) or {}
-                self.id_map = data.get('mappings', {})
-                self.next_id = data.get('next_id', 1)
+                self.id_map = data.get("mappings", {})
+                self.next_id = data.get("next_id", 1)
 
     def save_ids(self):
         """Save ID mappings to file."""
-        with open(self.id_file, 'w') as f:
-            yaml.dump({
-                'mappings': self.id_map,
-                'next_id': self.next_id,
-            }, f, default_flow_style=False)
+        with open(self.id_file, "w") as f:
+            yaml.dump(
+                {
+                    "mappings": self.id_map,
+                    "next_id": self.next_id,
+                },
+                f,
+                default_flow_style=False,
+            )
 
     def get_or_create_id(self, sprite_key: str) -> int:
         """Get existing ID or create new one for sprite variant."""
@@ -276,21 +299,24 @@ class IDManager:
         self.next_id += 1
         return new_id
 
-    def make_sprite_key(self, base_name: str, color_name: str,
-                       generate_colors: bool) -> str:
+    def make_sprite_key(
+        self, base_name: str, color_name: str, generate_colors: bool
+    ) -> str:
         """Create a stable key for a sprite variant."""
         if not generate_colors or color_name == "Original":
             return base_name
         return f"{base_name}_{slug(color_name)}"
 
+
 ### Sprite-sheet packing
+
 
 def make_sheet(
     input_dir: Path,
     cfg_path: str = "sprites.yaml",
     out_png: str = "spritesheet.png",
     out_json: str = "spritesheet.json",
-    id_file: str = "sprite_ids.yaml"
+    id_file: str = "sprite_ids.yaml",
 ):
     cfg = load_config(cfg_path)
     sprite_cfgs: dict = cfg.get("sprites", {})
@@ -306,7 +332,7 @@ def make_sheet(
     # Sort images by name for consistent ordering
     images.sort(key=lambda p: p.name)
 
-    records: List[SpriteRecord] = []
+    records: list[SpriteRecord] = []
 
     for img_path in images:
         base_name = img_path.stem
@@ -327,13 +353,15 @@ def make_sheet(
                 )
                 sprite_id = id_manager.get_or_create_id(sprite_key)
 
-                records.append(SpriteRecord(
-                    sprite_id=sprite_id,
-                    base_name=base_name,
-                    color_name=color_name,
-                    image=var_img,
-                    config=final_config
-                ))
+                records.append(
+                    SpriteRecord(
+                        sprite_id=sprite_id,
+                        base_name=base_name,
+                        color_name=color_name,
+                        image=var_img,
+                        config=final_config,
+                    )
+                )
 
     # Sort records by ID for consistent spritesheet layout
     records.sort(key=lambda r: r.sprite_id)
@@ -377,7 +405,12 @@ def make_sheet(
         # Create frame metadata
         frame_data = {
             "id": record.sprite_id,  # Stable uint32 ID
-            "frame": {"x": ox, "y": oy, "w": record.image.width, "h": record.image.height},
+            "frame": {
+                "x": ox,
+                "y": oy,
+                "w": record.image.width,
+                "h": record.image.height,
+            },
             "rotated": False,
             "trimmed": False,
             "spriteSourceSize": {
@@ -391,8 +424,8 @@ def make_sheet(
             "colorName": record.color_name,
             "displayName": record.display_name,
             "hex": (
-                palette.get(record.color_name) or
-                rgb_to_hex(average_visible_rgb(record.image))
+                palette.get(record.color_name)
+                or rgb_to_hex(average_visible_rgb(record.image))
             ),
         }
 
@@ -404,8 +437,9 @@ def make_sheet(
 
         # Also store by legacy key if different
         legacy_key = id_manager.make_sprite_key(
-            record.base_name, record.color_name,
-            record.config.get("generate_colors", False)
+            record.base_name,
+            record.color_name,
+            record.config.get("generate_colors", False),
         )
         if legacy_key != str(record.sprite_id):
             meta["frames"][legacy_key] = frame_data
@@ -423,9 +457,12 @@ def make_sheet(
     print(f"✅ ID mappings saved to {id_file}")
     print(f"✅ Categories: {', '.join(CATEGORY_DEFAULTS.keys())}")
 
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: sprite_sheet_gen.py <folder> [cfg] [out.png] [out.json] [id_file]")
+        print(
+            "Usage: sprite_sheet_gen.py <folder> [cfg] [out.png] [out.json] [id_file]"
+        )
         sys.exit(1)
 
     inp = Path(sys.argv[1])

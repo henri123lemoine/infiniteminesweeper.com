@@ -1,15 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = "~=3.12"
-# dependencies = [
-#   "pillow",
-# ]
-# ///
-
-#!/usr/bin/env python3
 """
-pixel_resize.py
-
 A tiny command-line tool to resize pixel-art images (e.g. flags) with no blur,
 using nearest-neighbor sampling.
 
@@ -19,7 +8,9 @@ Dependencies:
 
 import argparse
 import sys
+
 from PIL import Image
+
 
 def resize_image(input_path: str, output_path: str, width: int, height: int) -> None:
     """
@@ -45,28 +36,26 @@ def resize_image(input_path: str, output_path: str, width: int, height: int) -> 
         print(f"Error: cannot save output file {output_path}: {e}", file=sys.stderr)
         sys.exit(1)
 
+
 def parse_args():
     p = argparse.ArgumentParser(
         description="Resize pixel-art images with nearest-neighbor (no blur)."
     )
     p.add_argument(
-        "--input", "-i", required=True,
-        help="Path to source PNG (e.g. 32×18 flag)."
+        "--input", "-i", required=True, help="Path to source PNG (e.g. 32×18 flag)."
     )
     p.add_argument(
-        "--output", "-o", required=True,
-        help="Path for resized PNG (e.g. 27×16 flag)."
+        "--output", "-o", required=True, help="Path for resized PNG (e.g. 27×16 flag)."
     )
     p.add_argument(
-        "--width", "-w", type=int, required=True,
-        help="Target width in pixels."
+        "--width", "-w", type=int, required=True, help="Target width in pixels."
     )
     # Use -H instead of -h to avoid conflict with argparse's help flag
     p.add_argument(
-        "--height", "-H", type=int, required=True,
-        help="Target height in pixels."
+        "--height", "-H", type=int, required=True, help="Target height in pixels."
     )
     return p.parse_args()
+
 
 if __name__ == "__main__":
     args = parse_args()
