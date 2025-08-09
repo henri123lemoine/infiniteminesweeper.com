@@ -542,6 +542,56 @@ function App() {
     ],
   );
 
+  // Keyboard panning with Arrow keys (and optional WASD)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Ignore if typing into inputs or contentEditable elements
+      const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+      if (e.target && e.target.isContentEditable) return;
+
+      let dxCells = 0;
+      let dyCells = 0;
+      // Base step in cells; hold Shift for a larger step
+      const base = 8;
+      const step = e.shiftKey ? base * 4 : base;
+      switch (e.key) {
+        case "ArrowLeft":
+        case "a":
+        case "A":
+          dxCells = -step;
+          break;
+        case "ArrowRight":
+        case "d":
+        case "D":
+          dxCells = step;
+          break;
+        case "ArrowUp":
+        case "w":
+        case "W":
+          dyCells = -step;
+          break;
+        case "ArrowDown":
+        case "s":
+        case "S":
+          dyCells = step;
+          break;
+        default:
+          return; // not a navigation key we care about
+      }
+
+      e.preventDefault(); // prevent page scroll
+      userMovedRef.current = true;
+      const dxPx = dxCells * CELL_SIZE;
+      const dyPx = dyCells * CELL_SIZE;
+      // ArrowRight increases viewX to move camera right; ArrowDown increases viewY
+      scheduleViewUpdate(viewRef.current.x + dxPx, viewRef.current.y + dyPx);
+    };
+
+    window.addEventListener("keydown", handleKeyDown, { passive: false });
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [CELL_SIZE, scheduleViewUpdate]);
+
   useEffect(() => {
     if (!username) return;
     const cleanup = connectWs(username, Number(flagID));
