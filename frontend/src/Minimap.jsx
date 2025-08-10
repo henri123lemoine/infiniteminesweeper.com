@@ -14,7 +14,6 @@ export default function Minimap({
   revealedCellsRef,
   flaggedCellsRef,
   worldToChunk,
-  isMine,
   densityCache,
 }) {
   const miniRef = useRef(null);
@@ -160,7 +159,6 @@ export default function Minimap({
     revealedCellsRef,
     flaggedCellsRef,
     worldToChunk,
-    isMine,
     getFlagHex,
   ]);
 

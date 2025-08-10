@@ -23,7 +23,6 @@ function App() {
   const [lbLoading, setLbLoading] = useState(false);
   const lbLoadingRef = useRef(false);
   const [lbFollowMe, setLbFollowMe] = useState(true);
-  const lbContainerRef = useRef(null);
   const myLbRowRef = useRef(null);
   const [joinError, setJoinError] = useState("");
 
@@ -41,17 +40,13 @@ function App() {
     tick,
     setTick,
     seedCache,
-    subscribedChunks,
     revealedCellsRef,
     flaggedCellsRef,
     playerFlagsRef,
     chunkVersionRef,
     handleCellClick,
-    ensureChunkSubscription,
-    ensureChunkUnsubscription,
     connectWs,
     worldToChunk,
-    isMine,
     densityCache,
     sendViewUpdateRef,
   } = useGameState();
@@ -182,30 +177,10 @@ function App() {
   }, [flagID]);
 
   // Score popup color function
-  /*
-  const getScoreColor = useCallback((delta) => {
-    if (delta > 0) {
-      // Green for positive scores, more intense for higher values
-      const intensity = Math.min(Math.abs(delta) / 20, 1); // Scale 0-1 based on delta
-      const green = Math.floor(100 + intensity * 155); // 100-255 range
-      return `rgb(0, ${green}, 0)`;
-    } else if (delta < 0) {
-      // Red for negative scores, more intense for larger losses
-      const intensity = Math.min(Math.abs(delta) / 100, 1); // Scale 0-1 based on delta (bombs are -100)
-      const red = Math.floor(150 + intensity * 105); // 150-255 range
-      return `rgb(${red}, 0, 0)`;
-    }
-    return "#666"; // Gray for zero delta (shouldn't happen)
-  }, []);
-  */
   const getScoreColor = useCallback((delta) => {
     if (delta > 0) return "#fff";
     if (delta < 0) return "#f00";
     return "#666"; // shouldn't happen
-  }, []);
-
-  const toggleLeaderboard = useCallback(() => {
-    setLeaderboardVisible((v) => !v);
   }, []);
 
   // Centralized home leaderboard fetcher (stable; guarded by ref to avoid re-runs)
@@ -1029,7 +1004,7 @@ function App() {
                 {lbLoading && fullLeaderboard == null && <p>Loading leaderboard…</p>}
                 {!lbLoading && fullLeaderboard && fullLeaderboard.length === 0 && <p>No players yet.</p>}
                 {!lbLoading && Array.isArray(fullLeaderboard) && fullLeaderboard.length > 0 && (
-                  <ol ref={lbContainerRef} style={{ maxHeight: "60vh", overflow: "auto", paddingRight: 8 }}>
+                  <ol style={{ maxHeight: "60vh", overflow: "auto", paddingRight: 8 }}>
                     {fullLeaderboard.map((row) => {
                       const myName = (localStorage.getItem("username") || username || "").trim();
                       const isMe = myName && row.name === myName;
@@ -1090,16 +1065,6 @@ function App() {
 
       {/* Player Score Display */}
       <div className="player-score">Score: {playerScore ?? 0}</div>
-
-      <div className="header">
-        <div className="status">
-          <div
-            className={`connection-status ${connected ? "connected" : "disconnected"}`}
-          >
-            {connected ? "Connected" : "Disconnected"}
-          </div>
-        </div>
-      </div>
 
       {/* Help & Scoring dropdown */}
       <div className="help-dropdown">
@@ -1221,7 +1186,6 @@ function App() {
         seedCache={seedCache}
         revealedCellsRef={revealedCellsRef}
         flaggedCellsRef={flaggedCellsRef}
-        isMine={isMine}
         worldToChunk={worldToChunk}
         densityCache={densityCache}
       />

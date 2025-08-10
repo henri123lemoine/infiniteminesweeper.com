@@ -13,6 +13,7 @@ export default defineConfig(({ mode }) => ({
   server: {
     proxy: {
       '/ws': { target: 'http://localhost:8080', ws: true },
+      '/spectate': { target: 'http://localhost:8080', ws: true },
     },
   },
   define: {

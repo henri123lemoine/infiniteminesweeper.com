@@ -136,8 +136,6 @@ export const useGameState = () => {
   // Game state refs
   const seedCache = useRef(new Map());
   const densityCache = useRef(new Map());
-  const subscribedChunks = useRef(new Set());
-  const subscriptionOrder = useRef([]);
   const revealedCellsRef = useRef(new Map());
   const flaggedCellsRef = useRef(new Map());
   const chunkVersionRef = useRef(new Map()); // "cx,cy" -> monotonically increasing version
@@ -277,11 +275,6 @@ export const useGameState = () => {
 
     return placedFlags + revealedMines === expectedMines;
   }, [countAdjacentFlags, countAdjacentMines]);
-
-  // Deprecated per-chunk subscribe path is replaced by view-based updates.
-  const ensureChunkSubscription = useCallback(() => {}, []);
-
-  const ensureChunkUnsubscription = useCallback(() => {}, []);
 
   // Send throttled view updates with viewport size in world cells
   const sendViewUpdate = useRef(
@@ -556,7 +549,6 @@ export const useGameState = () => {
         setWs(null);
         wsRef.current = null;
         connectedRef.current = false;
-        subscribedChunks.current.clear();
         optimisticActions.current.clear();
         revealedCellsRef.current.clear();
         flaggedCellsRef.current.clear();
@@ -912,27 +904,15 @@ export const useGameState = () => {
     tick,
     setTick,
     seedCache,
-    subscribedChunks,
     revealedCellsRef,
     flaggedCellsRef,
     playerFlagsRef,
     chunkVersionRef,
     handleCellClick,
-    ensureChunkSubscription,
-    ensureChunkUnsubscription,
     connectWs,
     connectSpectate,
     disconnect,
     worldToChunk,
-    // New preferred mine test API using chunk coords
-    isMineAt: (cx, cy, cell) => {
-      const key = `${cx},${cy}`;
-      const seed = seedCache.current.get(key);
-      const d = densityCache.current.get(key);
-      if (!seed || d == null) return false;
-      return isMineWith(seed, d, cell);
-    },
-    isMine: (seed, cell) => false, // deprecated; kept for backward compatibility
     // expose caches for minimap and other consumers
     densityCache,
     // expose throttled view-update sender to App.jsx

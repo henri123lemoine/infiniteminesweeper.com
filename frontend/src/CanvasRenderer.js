@@ -121,50 +121,6 @@ export class CanvasRenderer {
     }
   }
 
-  // Content Drawing Functions
-  drawMine(ctx, x, y, size) {
-    const mineScale = 0.8;
-    const centerX = x + size / 2;
-    const centerY = y + size / 2;
-    const radius = size * 0.25 * mineScale;
-
-    // Mine body
-    ctx.fillStyle = "#2a2a2a";
-    ctx.beginPath();
-    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Mine spikes
-    ctx.strokeStyle = "#2a2a2a";
-    ctx.lineWidth = Math.max(1, size * 0.06 * mineScale);
-    const spikeLength = radius * 0.8;
-
-    for (let i = 0; i < 8; i++) {
-      const angle = (i * Math.PI) / 4;
-      const startX = centerX + Math.cos(angle) * radius * 0.6;
-      const startY = centerY + Math.sin(angle) * radius * 0.6;
-      const endX = centerX + Math.cos(angle) * (radius + spikeLength);
-      const endY = centerY + Math.sin(angle) * (radius + spikeLength);
-
-      ctx.beginPath();
-      ctx.moveTo(startX, startY);
-      ctx.lineTo(endX, endY);
-      ctx.stroke();
-    }
-
-    // Highlight on mine
-    ctx.fillStyle = "#5a5a5a";
-    ctx.beginPath();
-    ctx.arc(
-      centerX - radius * 0.3,
-      centerY - radius * 0.3,
-      radius * 0.3,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-  }
-
   drawNumber(ctx, x, y, size, number, getNumberColor) {
     const fontSize = Math.max(8, size * 0.5);
     ctx.font = `bold ${fontSize}px monospace`;
@@ -256,6 +212,7 @@ export class CanvasRenderer {
         }
         if (isFlagged) {
           // compact placeholder; main pass may overlay sprite when zoomed in
+          // TODO: make it the color of the flag; doesn't add cost, makes it look better
           ctx.fillStyle = "#202020";
           ctx.fillRect(dx + 1, dy + 1, size - 2, size - 2);
         }
