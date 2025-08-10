@@ -385,6 +385,35 @@ func (s *Server) handleReveal(
 		}
 	}
 
+	// WAL: persist all state changes for crash-recovery
+	// 1) Revealed cells per chunk
+	for cid, cells := range allRevealedCells {
+		if cells == nil || len(cells.Cells) == 0 {
+			continue
+		}
+		s.writeWALEntry("reveal", struct {
+			ChunkID ChunkID  `json:"chunk_id"`
+			Cells   []uint32 `json:"cells"`
+		}{ChunkID: cid, Cells: cells.Cells})
+	}
+	// 2) Flags placed
+	for cid, placements := range allPlacedFlags {
+		for _, p := range placements {
+			s.writeWALEntry("flag", struct {
+				ChunkID ChunkID `json:"chunk_id"`
+				Cell    uint32  `json:"cell"`
+				FlagID  uint32  `json:"flag_id"`
+			}{ChunkID: cid, Cell: p.Cell, FlagID: p.FlagID})
+		}
+	}
+	// 3) Score update (only if changed this action)
+	if scoreDelta != 0 {
+		s.writeWALEntry("score_update", struct {
+			PlayerID uint32 `json:"player_id"`
+			Score    int32  `json:"score"`
+		}{PlayerID: playerID, Score: s.scores[playerID]})
+	}
+
 	s.lbDirty = true
 
 	// phase 2: hand the mutations to the outer scope and release the lock

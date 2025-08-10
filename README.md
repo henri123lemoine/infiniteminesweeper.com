@@ -107,6 +107,7 @@ make deploy
 
 - If `S3_BUCKET_NAME` is set (and AWS creds are provided), snapshots and WAL are stored in S3. WAL is flushed periodically and truncated after successful snapshots.
 - Otherwise, the server persists to `DATA_DIR` (default `./data`). In Fly, a volume is mounted at `/data` per `fly.toml`.
+- On startup: if no snapshot is found, the server replays any existing WAL to recover state and then immediately writes an initial snapshot (so a snapshot always exists going forward).
 
 ### Build Notes
 
