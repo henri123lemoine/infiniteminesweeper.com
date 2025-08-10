@@ -95,7 +95,6 @@ function App() {
   const handleWheel = useCallback(
     (e) => {
       e.preventDefault();
-      if (!connected) return;
       userMovedRef.current = true;
 
       const container = containerRef.current;
