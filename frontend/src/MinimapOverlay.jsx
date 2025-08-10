@@ -79,15 +79,22 @@ export default function MinimapOverlay({ updateMinimapSubscriptions, clearMinima
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Mouse pan and wheel zoom
+  // Pointer-based pan and wheel zoom (supports mouse & touch)
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     let dragging = false;
+    let pointerId = null;
     let last = { x: 0, y: 0 };
-    const onDown = (e) => { dragging = true; last = { x: e.clientX, y: e.clientY }; };
-    const onMove = (e) => {
-      if (!dragging) return;
+    const onPointerDown = (e) => {
+      e.preventDefault();
+      dragging = true;
+      pointerId = e.pointerId;
+      last = { x: e.clientX, y: e.clientY };
+    };
+    const onPointerMove = (e) => {
+      if (!dragging || e.pointerId !== pointerId) return;
+      e.preventDefault();
       const dx = (e.clientX - last.x) / viewRef.current.zoom;
       const dy = (e.clientY - last.y) / viewRef.current.zoom;
       last = { x: e.clientX, y: e.clientY };
@@ -95,7 +102,11 @@ export default function MinimapOverlay({ updateMinimapSubscriptions, clearMinima
       setView(viewRef.current);
       schedulePaint();
     };
-    const onUp = () => { dragging = false; };
+    const onPointerUp = (e) => {
+      if (e.pointerId !== pointerId) return;
+      dragging = false;
+      pointerId = null;
+    };
     const onWheel = (e) => {
       e.preventDefault();
       const rect = el.getBoundingClientRect();
@@ -112,14 +123,14 @@ export default function MinimapOverlay({ updateMinimapSubscriptions, clearMinima
       setView(viewRef.current);
       schedulePaint();
     };
-    el.addEventListener('mousedown', onDown);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    el.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => {
-      el.removeEventListener('mousedown', onDown);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      el.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
       el.removeEventListener('wheel', onWheel);
     };
   }, [schedulePaint]);
@@ -146,7 +157,7 @@ export default function MinimapOverlay({ updateMinimapSubscriptions, clearMinima
 
   return (
     <div ref={containerRef} style={{ position: 'relative', width: '100%', height: '100%', background: '#202020' }}>
-      <canvas ref={canvasRef} style={{ width: '100%', height: '100%' }} />
+      <canvas ref={canvasRef} style={{ width: '100%', height: '100%', touchAction: 'none' }} />
     </div>
   );
 }

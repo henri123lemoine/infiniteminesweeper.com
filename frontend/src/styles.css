@@ -1,8 +1,11 @@
+html,
 body {
   margin: 0;
   padding: 0;
   font-family: Arial, sans-serif;
   background: #f0f0f0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .game-container {
@@ -32,6 +35,7 @@ body {
   position: relative;
   image-rendering: pixelated;
   cursor: default;
+  touch-action: none;
 }
 
 .canvas-container.dragging {
@@ -54,6 +58,7 @@ body {
   height: 100%;
   background: #c0c0c0;
   image-rendering: pixelated;
+  touch-action: none;
 }
 
 .coordinates-debug {
@@ -188,16 +193,17 @@ body {
     font-size: 10px;
     padding: 4px 6px;
   }
-  .leaderboard {
-    top: 5px;
-    right: 5px;
-    padding: 10px;
-    font-size: 12px;
-    width: 180px;
-    height: 350px;
+    .leaderboard {
+      top: 5px;
+      right: 5px;
+      padding: 8px;
+      font-size: 12px;
+      width: 150px;
+      max-height: 40vh;
+      overflow-y: auto;
+    }
+    .leaderboard h3 {
+      font-size: 16px;
+      margin-bottom: 6px;
+    }
   }
-  .leaderboard h3 {
-    font-size: 20px;
-    margin-bottom: 10px;
-  }
-}

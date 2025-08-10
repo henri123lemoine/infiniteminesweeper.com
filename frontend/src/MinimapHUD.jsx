@@ -25,6 +25,7 @@ export default function MinimapHUD({
   const mmRef = useRef(mmView);
   const draggingRef = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
+  const activePointerIdRef = useRef(null);
 
   const paint = useCallback(() => {
     const canvas = canvasRef.current;
@@ -150,14 +151,15 @@ export default function MinimapHUD({
       // update subs next tick
       requestAnimationFrame(() => updateMinimapSubscriptions(newCx, newCy, newCells, newCells, 1, 'hud'));
     };
-    const onDown = (e) => {
+    const onPointerDown = (e) => {
       e.preventDefault();
       lastMmInteractionAtRef.current = performance.now();
       draggingRef.current = true;
+      activePointerIdRef.current = e.pointerId;
       lastPosRef.current = { x: e.clientX, y: e.clientY };
     };
-    const onMove = (e) => {
-      if (!draggingRef.current) return;
+    const onPointerMove = (e) => {
+      if (!draggingRef.current || e.pointerId !== activePointerIdRef.current) return;
       e.preventDefault();
       lastMmInteractionAtRef.current = performance.now();
       const dx = e.clientX - lastPosRef.current.x;
@@ -169,22 +171,23 @@ export default function MinimapHUD({
       setMmView(mmRef.current);
       paint();
     };
-    const onUp = () => {
-      if (!draggingRef.current) return;
+    const onPointerUp = (e) => {
+      if (!draggingRef.current || e.pointerId !== activePointerIdRef.current) return;
       draggingRef.current = false;
+      activePointerIdRef.current = null;
       lastMmInteractionAtRef.current = performance.now();
       const { cx, cy, cells } = mmRef.current;
       requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 1, 'hud'));
     };
     el.addEventListener('wheel', onWheel, { passive: false });
-    el.addEventListener('mousedown', onDown);
-    window.addEventListener('mousemove', onMove, { passive: false });
-    window.addEventListener('mouseup', onUp);
+    el.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove, { passive: false });
+    window.addEventListener('pointerup', onPointerUp);
     return () => {
       el.removeEventListener('wheel', onWheel);
-      el.removeEventListener('mousedown', onDown);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      el.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
     };
   }, [CHUNK, MINIMAP_SIZE, updateMinimapSubscriptions, paint]);
 
@@ -217,10 +220,10 @@ export default function MinimapHUD({
 
   return (
     <div ref={containerWrapRef} className="minimap" style={{ position: 'fixed', bottom: 10, right: 10, width: MINIMAP_SIZE, height: MINIMAP_SIZE }}>
-      <canvas
-        ref={canvasRef}
-        style={{ width: '100%', height: '100%', cursor: "grab" }}
-      />
+        <canvas
+          ref={canvasRef}
+          style={{ width: '100%', height: '100%', cursor: "grab", touchAction: 'none' }}
+        />
       <button
         onClick={onOpenOverlay}
         title="Expand minimap"
