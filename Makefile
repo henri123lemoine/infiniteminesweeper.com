@@ -11,6 +11,7 @@ FRONTEND_SRCS  := $(shell find frontend/src -type f)
 ENVFILE_PATH   := $(wildcard $(ENVFILE))
 SNAPFREE       ?= 0
 SNAPSHOT_FILE  ?= data/snapshot.gob.gz
+WAL_FILE       ?= data/wal.log
 
 .PHONY: help proto deps frontend-build go-build go-run docker-build docker-run deploy clean
 
@@ -64,8 +65,8 @@ go-build: proto frontend-build
 
 go-run: go-build
 	@if [ "$(SNAPFREE)" = "1" ]; then \
-		echo "Removing snapshot $(SNAPSHOT_FILE)"; \
-		rm -f "$(SNAPSHOT_FILE)"; \
+		echo "Removing snapshot $(SNAPSHOT_FILE) and WAL $(WAL_FILE)"; \
+		rm -f "$(SNAPSHOT_FILE)" "$(WAL_FILE)"; \
 	fi
 	@echo "Running backend (MODE=$(MODE))"
 	MODE=$(MODE) backend/dist/backend

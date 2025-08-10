@@ -1,5 +1,7 @@
 # "One-Core, Infinite Minesweeper" – Senior-Engineer Kick-Off Notes
 
+NOTE: SOME ASPECTS OF THIS PLAN ARE OUTDATED.
+
 ## 0. Product & Load Assumptions
 
 | Aspect           | Target                                                                                                        |
@@ -40,12 +42,10 @@ _No Redis, no DB._ Everything stays in RAM; we serialize snapshots to S3 / local
 
 3. **Leaderboard**
 
-   - `map[playerID]uint32`.
-
 4. **Fan-out**
 
    - Each chunk keeps a _subscriber set_ → buffered chan\<revealMsg>.
-   - Broadcast to 3×3 neighborhood; non-blocking send (drops counted).
+   - Broadcast to in-view neighborhood; non-blocking send (drops counted).
 
 5. **Persistence**
 
@@ -66,14 +66,14 @@ We do NOT shard locks until profiling shows ≥ 5 % of wall time inside the mute
 
 ## 4. Protocol
 
-| Msg                           | Dir               | Payload               | Notes                          |
-| ----------------------------- | ----------------- | --------------------- | ------------------------------ |
-| `SeedReq {cx,cy}`             | C→S               | –                     | Rate-limited 200/min           |
-| `SeedResp {seed}`             | S→C               | 32 B                  | cached client-side             |
-| `RevealReq {x,y}`             | C→S               | –                     | client optimistic              |
-| `RevealAck {x,y, ok, scorer}` | S→C               | –                     | `ok=false` if already revealed |
-| `Broadcast {x,y, scorer}`     | S→C               | fan-out to 3×3 chunks |                                |
-| `LBTop {entries[]}`           | S→C (HTTP-cached) | top-100 every 10 s    |                                |
+| Msg                           | Dir               | Payload                   | Notes                          |
+| ----------------------------- | ----------------- | ------------------------- | ------------------------------ |
+| `SeedReq {cx,cy}`             | C→S               | –                         | Rate-limited 200/min           |
+| `SeedResp {seed}`             | S→C               | 32 B                      | cached client-side             |
+| `RevealReq {x,y}`             | C→S               | –                         | client optimistic              |
+| `RevealAck {x,y, ok, scorer}` | S→C               | –                         | `ok=false` if already revealed |
+| `Broadcast {x,y, scorer}`     | S→C               | fan-out to in-view chunks |                                |
+| `LBTop {entries[]}`           | S→C (HTTP-cached) | top-100 every 10 s        |                                |
 
 _All protobuf, zstd-compressed, batched ≤ 200 ms._
 
@@ -133,12 +133,9 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 ## 7. Persistence & Recovery
 
 - Snapshot file: `snapshot_<unix>.pb.gz` (chunks, scores, lastSeq).
-- WAL (`replay.log`): append compressed `Reveal` records; truncate after snapshot sync.
+- WAL (`wal.log`): append compressed `Reveal` records; truncate after snapshot sync.
 - Cold storage: cron rsync to S3 every hour; keep last 100 snapshots.
-- On boot:
-  1. Load newest snapshot.
-  2. Replay WAL.
-  3. Resume accepting connections (≤ 200 ms cold start).
+- On start-up: load latest snapshot + replay tail of WAL.
 
 ## 8. Monitoring & Observability
 
@@ -146,60 +143,3 @@ _All protobuf, zstd-compressed, batched ≤ 200 ms._
 
 - Key events: connections, reveals, rate limit hits, errors
 - Performance metrics: reveal latency, memory usage, active connections
-
-## Implementation Notes
-
-- Cell content is never stored (determined from cell coordinates with SplitMix64). Seeds are never stored (determined from chunk coordinates).
-- Server stores world state (revealed cells) in a bitset, the flags, and maintains the leaderboard.
-
-# TODO List
-
-- [ ] Add connection status and player count indicators
-
-## Data Integrity & Validation
-
-- [ ] Client should occasionally hash local chunk reveals and send to server for validation
-- [ ] Add HTTP endpoint for leaderboard queries (/leaderboard)
-- [ ] Way to see user statistics (reveals, flags, exploded bombs, points over time, etc.)
-- [x] Add user flag appearance to leaderboard display component
-- [ ] Website page; rather than just direct joining the game, with a button to join, if that makes sense? Pages for leaderboard, about, user profile / stats, etc.
-
-## Game Balance & Fun
-
-- [ ] Rehash scoring system to make more sense (bomb = -100 always is too harsh for new players)
-- [ ] Large-scale variance in bomb density with regional multipliers
-- [ ] More points for higher density of active players in a region
-- [ ] Reveals only allowed for cells two-adjacent to revealed cells (encourages connected exploration)
-
-## Quality of Life
-
-- [ ] Usernames max 20 characters
-- [ ] Color wheel alignment fix for user flags
-
-## Completed Items
-
-- [x] Flags (client-side implementation)
-- [x] Color wheel for user flags (on first join)
-- [x] Server-side flags for scoring system, remove undoing option
-- [x] Chords (client-side)
-- [x] Self score display at the top
-- [x] Better scoring system
-- [x] Implement WAL and truncation on snapshot success
-- [x] Cleaner looking flags
-- [x] Better mobile support fixes
-- [x] Minimap like in old game version
-- [x] Use `devicePixelRatio` when sizing the `<canvas>` to avoid blurry tiles on mobile
-- [x] Lazy-load React via `defer`/`async` + bundle with esbuild for ~70% initial JS size
-- [x] Origin check + SameSite cookies for CSRF
-
-## Miscellaneous
-
-- Might it make sense for the client to never ever bother to unsubscribe from chunks? The server could have a queue of chunks that the client is subscribed to, max 30 or so, when the client tries to subscribe to a new chunk it drops the oldest chunk from the queue and adds the new one, and when the client disconnects, the server could just clear the queue.
-
-## Technical Notes
-
-**Memory Calculations:**
-
-- 8 bytes per line × 64 lines = 512 bytes per chunk
-- Possible to handle larger than 3×3 chunk grids per player (up to 7×7)
-- Minimap: 3×3 chunks = (3×64)² = 192×192 binary image with color coding for flags/bombs/numbers
