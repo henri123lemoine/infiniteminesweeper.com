@@ -82,39 +82,6 @@ function App() {
     [commitViewRef],
   );
   const [zoom, setZoom] = useState(1);
-  const handleZoom = useCallback(
-    (delta) => {
-      userMovedRef.current = true;
-      const container = containerRef.current;
-      const MIN_ZOOM = 0.5;
-      const MAX_ZOOM = 3;
-      const direction = Math.sign(delta) || 1; // interpret delta as intent
-      const STEP = 1.2; // multiplicative step feels linear perceptually
-
-      setZoom((prevZoom) => {
-        const factor = direction > 0 ? STEP : 1 / STEP;
-        const targetZoom = Math.min(Math.max(prevZoom * factor, MIN_ZOOM), MAX_ZOOM);
-
-        if (container) {
-          // Anchor zoom at the screen center so the view doesn't drift
-          const width = container.clientWidth;
-          const height = container.clientHeight;
-          const centerX = width / 2;
-          const centerY = height / 2;
-
-          const worldCenterX = viewRef.current.x + centerX / prevZoom;
-          const worldCenterY = viewRef.current.y + centerY / prevZoom;
-
-          const newViewX = worldCenterX - centerX / targetZoom;
-          const newViewY = worldCenterY - centerY / targetZoom;
-          scheduleViewUpdate(newViewX, newViewY);
-        }
-
-        return targetZoom;
-      });
-    },
-    [scheduleViewUpdate],
-  );
   const handleWheel = useCallback(
     (e) => {
       e.preventDefault();
@@ -127,8 +94,8 @@ function App() {
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
 
-      const MIN_ZOOM = 0.5;
-      const MAX_ZOOM = 3;
+      const MIN_ZOOM = 0.1;
+      const MAX_ZOOM = 5;
 
       // Smooth exponential zoom; negative deltaY -> zoom in
       const zoomFactor = Math.exp(-e.deltaY * 0.001);
@@ -1144,10 +1111,6 @@ function App() {
         ) : (
           <p>No players yet</p>
         )}
-      </div>
-      <div className="zoom-controls">
-        <button onClick={() => handleZoom(0.25)}>+</button>
-        <button onClick={() => handleZoom(-0.25)}>-</button>
       </div>
     </div>
   );
