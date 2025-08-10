@@ -1033,7 +1033,7 @@ function App() {
                 </div>
                 {lbLoading && fullLeaderboard == null && <p>Loading leaderboard…</p>}
                 {!lbLoading && fullLeaderboard && fullLeaderboard.length === 0 && <p>No players yet.</p>}
-                {!lbLoading && Array.isArray(fullLeaderboard) && fullLeaderboard.length > 0 && (
+                {Array.isArray(fullLeaderboard) && fullLeaderboard.length > 0 && (
                   <ol style={{ maxHeight: "60vh", overflow: "auto", paddingRight: 8 }}>
                     {fullLeaderboard.map((row) => {
                       const myName = (localStorage.getItem("username") || username || "").trim();
