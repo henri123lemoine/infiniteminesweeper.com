@@ -5,16 +5,28 @@ import (
 )
 
 const (
+	// Bomb density field parameters (world generation)
 	densityMean = 0.20
 	sScale      = 0.20
 
-	// Length scales in chunk units
+	// Length scales in chunk units for bomb density noise
 	broadLenChunks = 20
 	localLenChunks = 2.5
 
-	// Weights
+	// Weights for bomb density noise
 	aWeight = 0.6
 	bWeight = 0.8
+
+	// Active player scoring boost parameters
+	// Radius in chunks around the action chunk to measure unique players
+	activeRadiusChunks = 2 // looks at a 5x5 chunk window
+	// Linear boost per unique nearby player (configured so 12 players -> 5x)
+	activeBoostPerPlayer = (5.0 - 1.0) / 12.0
+	// Cap the number of players contributing to the boost
+	activeBoostPlayerCap = 12
+	// Clamp active multiplier
+	activeMinMultiplier = 1.0
+	activeMaxMultiplier = 5.0
 )
 
 // Quintic fade 6t^5 - 15t^4 + 10t^3
@@ -97,16 +109,70 @@ func (s *Server) getChunkDensity(chunkID ChunkID) float64 {
 	return dens
 }
 
-// getScoreMultiplier returns a small, controllable multiplier based on density (centered at 1.0).
-func (s *Server) getScoreMultiplier(chunkID ChunkID) float64 {
-	d := s.getChunkDensity(chunkID)
-	// One-sigma above mean (~+0.0194) gives +k multiplier
-	const k = 0.20 // conservative for now; tune via config if needed
-	m := 1.0 + k*((d-densityMean)/sScale)
-	if m < 0.75 {
-		m = 0.75
-	} else if m > 1.5 {
-		m = 1.5
+// getActivePlayerMultiplier computes a score multiplier based on the density of
+// active players (unique subscribers) within a small chunk radius around chunkID.
+// Caller is expected to hold s.stateMu when calling this to ensure a consistent view.
+func (s *Server) getActivePlayerMultiplier(chunkID ChunkID) float64 {
+	// Collect unique player IDs across a (2*R+1)^2 chunk window
+	unique := make(map[uint32]struct{})
+	for dy := int64(-activeRadiusChunks); dy <= int64(activeRadiusChunks); dy++ {
+		for dx := int64(-activeRadiusChunks); dx <= int64(activeRadiusChunks); dx++ {
+			cid := ChunkID{X: chunkID.X + dx, Y: chunkID.Y + dy}
+			if subs, ok := s.subs[cid]; ok {
+				for pid := range subs {
+					unique[pid] = struct{}{}
+				}
+			}
+		}
+	}
+
+	n := len(unique)
+	if n <= 0 {
+		return activeMinMultiplier
+	}
+
+	// Linear boost per unique player, capped and clamped.
+	if n > activeBoostPlayerCap {
+		n = activeBoostPlayerCap
+	}
+	m := activeMinMultiplier + activeBoostPerPlayer*float64(n)
+	if m < activeMinMultiplier {
+		m = activeMinMultiplier
+	}
+	if m > activeMaxMultiplier {
+		m = activeMaxMultiplier
 	}
 	return m
+}
+
+// getBombDensityMultiplier implements the density-based score multiplier as defined in
+// scripts/python/score_multiplier.py. It maps density percent in [10,50] to [0.2x,10x]
+// using a quintic smoothstep of t^q, with 1.0x at 21%.
+func (s *Server) getBombDensityMultiplier(chunkID ChunkID) float64 {
+	d := s.getChunkDensity(chunkID) // [0,1]
+	dPct := d * 100.0
+	const (
+		dLo = 10.0
+		dHi = 50.0
+		yLo = 0.2
+		yHi = 10.0
+		q   = 1.1453726926484111 // chosen so f(21%) == 1.0
+	)
+	if dPct <= dLo {
+		return yLo
+	}
+	if dPct >= dHi {
+		return yHi
+	}
+	// Normalize to [0,1]
+	t := (dPct - dLo) / (dHi - dLo)
+	// s = smoothstep5(t^q) where smoothstep5 is 6t^5 - 15t^4 + 10t^3
+	sVal := fade(math.Pow(t, q))
+	return yLo + (yHi-yLo)*sVal
+}
+
+func (s *Server) getScoreMultiplier(chunkID ChunkID) float64 {
+	active := s.getActivePlayerMultiplier(chunkID)
+	dens := s.getBombDensityMultiplier(chunkID)
+	return active * dens
 }
