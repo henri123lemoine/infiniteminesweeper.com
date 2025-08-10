@@ -35,30 +35,30 @@ func main() {
 
 	if os.Getenv("MODE") == "development" {
 		server.devRevealOriginArea(30)
-		server.devAddTestUsers()
+		server.devAddTestUsers(100)
 
 		cfgs := []BotConfig{
-			// {
-			// 	Name:             "CalmBot",
-			// 	FlagID:           56,
-			// 	ActionsPerSecond: 5,
-			// },
-			// {
-			// 	Name:                "SpeedBot",
-			// 	FlagID:              38,
-			// 	ActionsPerSecond:    12,
-			// 	FailFlagProbability: 0.08,
-			// },
-			// {
-			// 	Name:                "BBot",
-			// 	FlagID:              69,
-			// 	ActionsPerSecond:    40,
-			// 	FailFlagProbability: 0.14,
-			// },
+			{
+				Name:             "CalmBot",
+				FlagID:           56,
+				ActionsPerSecond: 5,
+			},
+			{
+				Name:                "SpeedBot",
+				FlagID:              38,
+				ActionsPerSecond:    12,
+				FailFlagProbability: 0.08,
+			},
+			{
+				Name:                "BBot",
+				FlagID:              69,
+				ActionsPerSecond:    40,
+				FailFlagProbability: 0.14,
+			},
 			{
 				Name:             "OPBot",
 				FlagID:           80,
-				ActionsPerSecond: 50,
+				ActionsPerSecond: 40,
 			},
 		}
 		server.devStartCountingBots(cfgs)
