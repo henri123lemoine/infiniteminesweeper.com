@@ -1,9 +1,14 @@
 import meta from "./assets/spritesheet.json";
 import sheetUrl from "./assets/spritesheet.png?url";
+import { CHUNK } from "./useGameState.js";
 
 export class CanvasRenderer {
   constructor() {
     this.canvasSizeRef = { w: 0, h: 0, dpr: 1 };
+    // Per-chunk raster cache: key "cx,cy" -> { canvas, version }
+    this.chunkCache = new Map();
+    this.maxCachedChunks = 200;
+    this.baseCell = 16; // offscreen raster base size per cell
   }
 
   // Fast numeric-ID -> key table (built once at module load-time)
@@ -181,25 +186,90 @@ export class CanvasRenderer {
   static #sheetImg;
   static #frames   = meta.frames;
   static #frameKeys = Object.keys(meta.frames);
-  static #ready;
+  static #ready = false;
 
-  static async initSprites() {
-    if (CanvasRenderer.#ready) return CanvasRenderer.#ready;
-    CanvasRenderer.#ready = new Promise((resolve, reject) => {
-      CanvasRenderer.#sheetImg = new Image();
-      CanvasRenderer.#sheetImg.onload = resolve;
-      CanvasRenderer.#sheetImg.onerror = reject;
-      CanvasRenderer.#sheetImg.src = sheetUrl;
-    });
-    return CanvasRenderer.#ready;
+  static initSprites() {
+    if (CanvasRenderer.#ready) return;
+    CanvasRenderer.#sheetImg = new Image();
+    CanvasRenderer.#sheetImg.onload = () => { CanvasRenderer.#ready = true; };
+    CanvasRenderer.#sheetImg.src = sheetUrl;
+  }
+
+  // Simple LRU touch and evict helpers
+  _touch(key) {
+    const v = this.chunkCache.get(key);
+    if (!v) return;
+    this.chunkCache.delete(key);
+    this.chunkCache.set(key, v);
+  }
+  _evictIfNeeded() {
+    while (this.chunkCache.size > this.maxCachedChunks) {
+      const oldestKey = this.chunkCache.keys().next().value;
+      this.chunkCache.delete(oldestKey);
+    }
+  }
+
+  _rasterizeChunk(cx, cy, refs) {
+    const { revealedCellsRef, flaggedCellsRef, getNumberColor } = refs;
+    const size = this.baseCell;
+    const off = typeof OffscreenCanvas !== "undefined"
+      ? new OffscreenCanvas(CHUNK * size, CHUNK * size)
+      : Object.assign(document.createElement("canvas"), { width: CHUNK * size, height: CHUNK * size });
+    const ctx = off.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    // Draw background
+    ctx.fillStyle = "#c0c0c0";
+    ctx.fillRect(0, 0, off.width, off.height);
+
+    const prefix = `${cx},${cy},`;
+    for (let ly = 0; ly < CHUNK; ly++) {
+      for (let lx = 0; lx < CHUNK; lx++) {
+        const cell = ly * CHUNK + lx;
+        const cellData = revealedCellsRef.current.get(prefix + cell);
+        const wx = cx * CHUNK + lx;
+        const wy = cy * CHUNK + ly;
+        const isFlagged = flaggedCellsRef.current.has(`${wx},${wy}`);
+        const dx = lx * size;
+        const dy = ly * size;
+
+        if (!cellData && !isFlagged) {
+          // unrevealed
+          continue; // background already filled
+        }
+        if (!isFlagged) {
+          // revealed flat tile
+          ctx.fillStyle = "#e0e0e0";
+          ctx.fillRect(dx, dy, size, size);
+          if (cellData?.isMine) {
+            ctx.fillStyle = "#101010";
+            const r = Math.max(1, size * 0.25);
+            ctx.beginPath();
+            ctx.arc(dx + size / 2, dy + size / 2, r, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (cellData && cellData.adjacentMines > 0) {
+            ctx.font = `bold ${Math.max(8, size * 0.5)}px monospace`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillStyle = getNumberColor(cellData.adjacentMines);
+            ctx.fillText(String(cellData.adjacentMines), dx + size / 2, dy + size / 2 + 1);
+          }
+        }
+        if (isFlagged) {
+          // compact placeholder; main pass may overlay sprite when zoomed in
+          ctx.fillStyle = "#202020";
+          ctx.fillRect(dx + 1, dy + 1, size - 2, size - 2);
+        }
+      }
+    }
+    return off;
   }
 
   /**
    * @param {CanvasRenderingContext2D} ctx
    * @param {number|string} spriteID uint32 from server OR direct key/string
    */
-  async drawSprite(ctx, spriteID, dx, dy, dw, dh) {
-    await CanvasRenderer.initSprites();
+  drawSprite(ctx, spriteID, dx, dy, dw, dh) {
+    if (!CanvasRenderer.#ready) return;
     let key;
     if (typeof spriteID === "string") {
       key = spriteID;                           // direct string lookup
@@ -215,10 +285,7 @@ export class CanvasRenderer {
     }
 
     const frame = CanvasRenderer.#frames[key];
-    if (!frame) {
-      console.warn("⚠️  Unknown sprite", spriteID, "(resolved key:", key, ")");
-      return;
-    }
+    if (!frame) return;
     const { x, y, w, h } = frame.frame;
     ctx.drawImage(CanvasRenderer.#sheetImg, x, y, w, h, dx, dy, dw, dh);
   }
@@ -232,9 +299,15 @@ export class CanvasRenderer {
     cellData,
     isRevealed,
     getNumberColor,
+    LOD,
   ) {
-    // Always draw the base cell first
-    this.draw3DCell(ctx, screenX, screenY, cellSize, isRevealed);
+    // Base cell: beveled for LOD 0, flat for higher LODs
+    if (LOD === 0) {
+      this.draw3DCell(ctx, screenX, screenY, cellSize, isRevealed);
+    } else {
+      ctx.fillStyle = isRevealed ? "#e0e0e0" : "#c0c0c0";
+      ctx.fillRect(screenX, screenY, cellSize, cellSize);
+    }
 
     // If not revealed, we're done (content will be handled separately for flags)
     if (!isRevealed) return;
@@ -244,9 +317,18 @@ export class CanvasRenderer {
       return;
     }
     if (cellData.isMine) {
-      // Use the real mine sprite (stable key "mine", ID 162)
-      this.drawSprite(ctx, "mine", screenX, screenY, cellSize, cellSize);
-    } else if (cellData.adjacentMines > 0) {
+      if (LOD <= 1) {
+        // Use the real mine sprite (stable key "mine", ID 162)
+        this.drawSprite(ctx, "mine", screenX, screenY, cellSize, cellSize);
+      } else {
+        // LOD 2: draw a simple dot for a mine
+        ctx.fillStyle = "#101010";
+        const r = Math.max(1, cellSize * 0.25);
+        ctx.beginPath();
+        ctx.arc(screenX + cellSize / 2, screenY + cellSize / 2, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (cellData.adjacentMines > 0 && LOD === 0) {
       this.drawNumber(
         ctx,
         screenX,
@@ -267,6 +349,7 @@ export class CanvasRenderer {
     CELL_SIZE,
     revealedCellsRef,
     flaggedCellsRef,
+    chunkVersionRef,
     worldToChunk,
     getNumberColor,
     flagID,
@@ -297,6 +380,10 @@ export class CanvasRenderer {
     // Apply zoom and DPR scaling
     ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, 0, 0);
 
+    // Level of detail based on effective pixels per cell
+    const effPx = CELL_SIZE * zoom * dpr;
+    const LOD = effPx < 8 ? 2 : effPx < 16 ? 1 : 0; // 0=full, 1=simple, 2=ultra-simple
+
     // Clear background
     ctx.fillStyle = "#c0c0c0";
     // Always clear the visible viewport in logical (pre-zoom) units
@@ -311,45 +398,101 @@ export class CanvasRenderer {
       (viewRef.current.y + height / zoom) / CELL_SIZE,
     );
 
-    // Render all cells in the visible area
-    for (let worldY = startWorldY; worldY <= endWorldY; worldY++) {
-      for (let worldX = startWorldX; worldX <= endWorldX; worldX++) {
-        const screenX = worldX * CELL_SIZE - viewRef.current.x;
-        const screenY = worldY * CELL_SIZE - viewRef.current.y;
+    // At close zoom (LOD 0), draw per-cell with beveled tiles and high detail
+    if (LOD === 0) {
+      for (let worldY = startWorldY; worldY <= endWorldY; worldY++) {
+        for (let worldX = startWorldX; worldX <= endWorldX; worldX++) {
+          const screenX = worldX * CELL_SIZE - viewRef.current.x;
+          const screenY = worldY * CELL_SIZE - viewRef.current.y;
 
-        const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
-        const cellKey = `${chunkX},${chunkY},${cell}`;
-        const cellDataRaw = revealedCellsRef.current.get(cellKey) || null;
-        const isRevealedState = cellDataRaw !== null;
+          const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
+          const cellKey = `${chunkX},${chunkY},${cell}`;
+          const cellDataRaw = revealedCellsRef.current.get(cellKey) || null;
+          const isRevealedState = cellDataRaw !== null;
 
-        // Inline flag detection for this cell to avoid cross-frame flicker
-        const flagKey = `${worldX},${worldY}`;
-        const flagForCell = flaggedCellsRef.current.get(flagKey);
-        const isFlagged = flagForCell !== undefined;
+          const flagKey = `${worldX},${worldY}`;
+          const flagForCell = flaggedCellsRef.current.get(flagKey);
+          const isFlagged = flagForCell !== undefined;
 
-        const cellData = cellDataRaw
-          ? { ...cellDataRaw, isFlagged: isFlagged || cellDataRaw.isFlagged }
-          : { isMine: false, adjacentMines: 0, isFlagged };
+          const cellData = cellDataRaw
+            ? { ...cellDataRaw, isFlagged: isFlagged || cellDataRaw.isFlagged }
+            : { isMine: false, adjacentMines: 0, isFlagged };
 
-        // Visually treat flagged cells as UNREVEALED for base tile shading
-        const isRevealedForRender = isRevealedState && !isFlagged;
+          const isRevealedForRender = isRevealedState && !isFlagged;
 
-        // Render the cell
-        this.renderCell(
-          ctx,
-          screenX,
-          screenY,
-          CELL_SIZE,
-          cellData,
-          isRevealedForRender,
-          getNumberColor,
-        );
+          this.renderCell(
+            ctx,
+            screenX,
+            screenY,
+            CELL_SIZE,
+            cellData,
+            isRevealedForRender,
+            getNumberColor,
+            LOD,
+          );
 
-        // Draw flag for this cell (on top) if present
-        if (isFlagged) {
-          this.drawSprite(ctx, flagForCell, screenX, screenY, CELL_SIZE, CELL_SIZE);
+          if (isFlagged) {
+            this.drawSprite(ctx, flagForCell, screenX, screenY, CELL_SIZE, CELL_SIZE);
+          }
         }
       }
+      return;
+    }
+
+    // Render by chunks using cache
+    const startCX = Math.floor(startWorldX / CHUNK);
+    const startCY = Math.floor(startWorldY / CHUNK);
+    const endCX = Math.floor((endWorldX - 1) / CHUNK);
+    const endCY = Math.floor((endWorldY - 1) / CHUNK);
+
+    const refs = { revealedCellsRef, flaggedCellsRef, getNumberColor };
+
+    for (let cy = startCY; cy <= endCY; cy++) {
+      for (let cx = startCX; cx <= endCX; cx++) {
+        const key = `${cx},${cy}`;
+        const version = chunkVersionRef?.current.get(key) || 0;
+        let entry = this.chunkCache.get(key);
+        if (!entry || entry.version !== version) {
+          const canvas = this._rasterizeChunk(cx, cy, refs);
+          entry = { canvas, version };
+          this.chunkCache.set(key, entry);
+          this._evictIfNeeded();
+        } else {
+          this._touch(key);
+        }
+
+        const chunkScreenX = cx * CHUNK * CELL_SIZE - viewRef.current.x;
+        const chunkScreenY = cy * CHUNK * CELL_SIZE - viewRef.current.y;
+        ctx.drawImage(
+          entry.canvas,
+          0,
+          0,
+          entry.canvas.width,
+          entry.canvas.height,
+          chunkScreenX,
+          chunkScreenY,
+          CHUNK * CELL_SIZE,
+          CHUNK * CELL_SIZE,
+        );
+      }
+    }
+
+    // Overlay high-quality flag sprites when in mid LOD (LOD 1)
+    if (LOD === 1) {
+      const minX = startWorldX;
+      const minY = startWorldY;
+      const maxX = endWorldX;
+      const maxY = endWorldY;
+      flaggedCellsRef.current.forEach((flagForCell, key) => {
+        const comma = key.indexOf(",");
+        if (comma <= 0) return;
+        const wx = Number(key.slice(0, comma));
+        const wy = Number(key.slice(comma + 1));
+        if (wx < minX || wx >= maxX || wy < minY || wy >= maxY) return;
+        const screenX = wx * CELL_SIZE - viewRef.current.x;
+        const screenY = wy * CELL_SIZE - viewRef.current.y;
+        this.drawSprite(ctx, flagForCell, screenX, screenY, CELL_SIZE, CELL_SIZE);
+      });
     }
   }
 }

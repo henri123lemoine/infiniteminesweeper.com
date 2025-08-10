@@ -134,6 +134,13 @@ export const useGameState = () => {
   const subscriptionOrder = useRef([]);
   const revealedCellsRef = useRef(new Map());
   const flaggedCellsRef = useRef(new Map());
+  const chunkVersionRef = useRef(new Map()); // "cx,cy" -> monotonically increasing version
+
+  const bumpChunkVersion = useCallback((cx, cy) => {
+    const k = `${cx},${cy}`;
+    const v = (chunkVersionRef.current.get(k) || 0) + 1;
+    chunkVersionRef.current.set(k, v);
+  }, []);
   const playerFlagsRef = useRef(new Map());
   const optimisticActions = useRef(new Map());
 
@@ -218,8 +225,10 @@ export const useGameState = () => {
           });
         }
       }
+      // Any change to this chunk's content should bump its version
+      bumpChunkVersion(X, Y);
     },
-    [countAdjacentMines]
+    [countAdjacentMines, bumpChunkVersion]
   );
 
   // Count flags around a (world-coord) cell
@@ -415,6 +424,9 @@ export const useGameState = () => {
         if (change.type === "reveal") optimisticChanges.get(cKey).reveals.add(change.cell);
         if (change.type === "flag")   optimisticChanges.get(cKey).flags.add(change.cell);
         didLocalMutation = true;
+        // bump the chunk version for this optimistic mutation
+        const [cx, cy] = cKey.split(",").map(Number);
+        bumpChunkVersion(cx, cy);
       };
 
       if (isRightClick) {
@@ -484,7 +496,7 @@ export const useGameState = () => {
             revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: adjacent });
           }
           recordChange(chunkKey, { type: 'reveal', cell });
-        }
+      }
       }
 
       setTick((t) => t + 1);
@@ -638,6 +650,9 @@ export const useGameState = () => {
               const worldY = cy * CHUNK + ly;
               flaggedCellsRef.current.delete(`${worldX},${worldY}`);
             });
+            // bump version for reverted optimistic changes
+            const [bx, by] = chunkKey.split(",").map(Number);
+            bumpChunkVersion(bx, by);
           }
 
           // 2) Clean up optimistic record
@@ -677,6 +692,7 @@ export const useGameState = () => {
                   adjacentMines: adjacent,
                 });
               }
+              bumpChunkVersion(X, Y);
             } else if (outcomeType === "flaggedCell") {
               const cellIdx = (outcome && typeof outcome === "object" && Number.isFinite(outcome.cell)) ? outcome.cell : outcome;
               const lx = cellIdx % CHUNK;
@@ -687,6 +703,7 @@ export const useGameState = () => {
               // Also mark the cell as revealed (content suppressed) for continuity/compression-aware logic
               const cellKey = `${primaryChunkKey},${cellIdx}`;
               revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: 0, isFlagged: true });
+              bumpChunkVersion(X, Y);
             }
 
             // update score + popup
@@ -753,6 +770,7 @@ export const useGameState = () => {
                     const isFlagged = flaggedCellsRef.current.has(worldKey);
                     revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent, isFlagged });
                 }
+                bumpChunkVersion(X, Y);
             } else if (updateType === "flaggedCell") {
                 const lX = updateData.cell % CHUNK, lY = Math.floor(updateData.cell / CHUNK);
                 const wX = X * CHUNK + lX, wY = Y * CHUNK + lY;
@@ -760,6 +778,7 @@ export const useGameState = () => {
                 // Also mark as revealed (content suppressed)
                 const cellKey = `${chunkKey},${updateData.cell}`;
                 revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: 0, isFlagged: true });
+                bumpChunkVersion(X, Y);
             }
 
             setTick(t => t+1);
@@ -817,6 +836,7 @@ export const useGameState = () => {
     revealedCellsRef,
     flaggedCellsRef,
     playerFlagsRef,
+    chunkVersionRef,
     handleCellClick,
     ensureChunkSubscription,
     ensureChunkUnsubscription,
