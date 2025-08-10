@@ -33,6 +33,7 @@ function App() {
     userRank,
     username,
     setUsername,
+    connectSpectate,
     disconnect,
     leaderboard,
     scorePopups,
@@ -91,6 +92,7 @@ function App() {
   const handleWheel = useCallback(
     (e) => {
       e.preventDefault();
+      if (!connected) return;
       userMovedRef.current = true;
 
       const container = containerRef.current;
@@ -122,7 +124,7 @@ function App() {
         return targetZoom;
       });
     },
-    [containerRef, scheduleViewUpdate],
+    [containerRef, scheduleViewUpdate, connected],
   );
 
   // Attach non-passive wheel listener to prevent page scroll while zooming
@@ -143,7 +145,7 @@ function App() {
   // Leaderboard visibility and number formatting
   const [leaderboardVisible, setLeaderboardVisible] = useState(true);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [showHomeOverlay, setShowHomeOverlay] = useState(false);
+  const [showHomeOverlay, setShowHomeOverlay] = useState(true);
   const lbRefreshTimerRef = useRef(null);
 
   // Build numeric sprite ID list for the 'flag' category only
@@ -310,7 +312,7 @@ function App() {
 
   // Instead of per-chunk subscribes, send a viewUpdate proportional to viewport
   const sendViewportUpdate = useCallback(() => {
-    if (!connected) return;
+    if (!connected && typeof sendViewUpdateRef?.current !== 'function') return;
     requestAnimationFrame(() => {
       const container = containerRef.current;
       const width = container?.clientWidth || window.innerWidth || 0;
@@ -333,7 +335,7 @@ function App() {
   const handleMouseDown = useCallback(
     (e) => {
       e.preventDefault(); // Prevent context menu and other default behaviors
-
+      if (!connected) return;
       if (e.button === 2) {
         // Right click for flag
         const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
@@ -361,7 +363,7 @@ function App() {
 
   const handleMouseMove = useCallback(
     (e) => {
-      if (!dragStart.x) return; // No mouse down recorded
+      if (!connected || !dragStart.x) return; // No mouse down recorded or not joined
 
       const dx = Math.abs(e.clientX - dragStart.x);
       const dy = Math.abs(e.clientY - dragStart.y);
@@ -388,6 +390,7 @@ function App() {
 
   const handleMouseUp = useCallback(
     (e) => {
+      if (!connected) return;
       if (dragTimeoutRef.current) {
         clearTimeout(dragTimeoutRef.current);
         dragTimeoutRef.current = null;
@@ -430,6 +433,7 @@ function App() {
   // Touch event handlers for mobile
   const handleTouchStart = useCallback(
     (e) => {
+      if (!connected) return;
       if (e.touches.length === 1) {
         const touch = e.touches[0];
         e.preventDefault(); // Prevent text selection
@@ -461,6 +465,7 @@ function App() {
   const handleTouchMove = useCallback(
     (e) => {
       e.preventDefault(); // Prevent scrolling
+      if (!connected) return;
       if (e.touches.length === 1 && dragStart.x) {
         const touch = e.touches[0];
         const dx = Math.abs(touch.clientX - dragStart.x);
@@ -492,6 +497,7 @@ function App() {
 
   const handleTouchEnd = useCallback(
     (e) => {
+      if (!connected) return;
       // Clear the long press timeout
       if (dragTimeoutRef.current) {
         clearTimeout(dragTimeoutRef.current);
@@ -535,6 +541,7 @@ function App() {
 
   // Keyboard panning with Arrow keys (and optional WASD)
   useEffect(() => {
+    if (!connected) return;
     const handleKeyDown = (e) => {
       // Ignore if typing into inputs or contentEditable elements
       const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
@@ -581,7 +588,7 @@ function App() {
 
     window.addEventListener("keydown", handleKeyDown, { passive: false });
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [CELL_SIZE, scheduleViewUpdate]);
+  }, [CELL_SIZE, scheduleViewUpdate, connected]);
 
   useEffect(() => {
     if (!username) return;
@@ -612,6 +619,30 @@ function App() {
     sessionStorage.setItem("viewX", String(viewX));
     sessionStorage.setItem("viewY", String(viewY));
   }, [viewX, viewY]);
+
+  // When on the home overlay (spectating), proactively nudge view updates
+  // until we receive at least one chunk so the background animates quickly.
+  useEffect(() => {
+    if (username) return; // only in spectate mode
+    if (!showHomeOverlay) return;
+    // If we already have any chunk seed, no need to spam
+    if (seedCache.current && seedCache.current.size > 0) return;
+    // Kick immediately and then retry a few times
+    sendViewportUpdate();
+    let tries = 0;
+    const id = setInterval(() => {
+      if (seedCache.current && seedCache.current.size > 0) {
+        clearInterval(id);
+        return;
+      }
+      if (tries++ > 8) {
+        clearInterval(id);
+        return;
+      }
+      sendViewportUpdate();
+    }, 500);
+    return () => clearInterval(id);
+  }, [username, showHomeOverlay, sendViewportUpdate, seedCache]);
 
   // Cleanup RAF on unmount
   useEffect(() => {
@@ -698,6 +729,21 @@ function App() {
     }
   }, [fullLeaderboard, showHomeOverlay, activeTab, lbFollowMe]);
 
+  // Open a passive spectator WebSocket until the user joins (no identity).
+  useEffect(() => {
+    if (username) {
+      // If transitioning from guest → player, ensure guest connection is closed
+      if (guestCleanupRef.current) {
+        try { guestCleanupRef.current(); } catch {}
+        guestCleanupRef.current = null;
+      }
+      return;
+    }
+    const cleanup = connectSpectate();
+    guestCleanupRef.current = cleanup;
+    return cleanup;
+  }, [username, connectSpectate]);
+
   // Handle window resize
   useEffect(() => {
     const handleResize = () => {
@@ -729,12 +775,22 @@ function App() {
   const centerDensity = densityCache.current.get(`${centerChunkX},${centerChunkY}`);
 
   const joinGame = useCallback(() => {
+    setJoinError("");
     const trimmedName = (nameInput || "").trim();
-    const chosen =
-      trimmedName || `User${Math.floor(Math.random() * 100000).toString().padStart(5, "0")}`;
+    const valid = /^[A-Za-z0-9_-]{1,20}$/.test(trimmedName);
+    if (!valid) {
+      setJoinError("Enter 1-20 characters: letters, numbers, _ or -");
+      return;
+    }
+    const chosen = trimmedName;
     const token = localStorage.getItem("session_token");
 
     if (token) {
+      // Ensure spectator WS is closed before promoting to player
+      if (guestCleanupRef.current) {
+        try { guestCleanupRef.current(); } catch {}
+        guestCleanupRef.current = null;
+      }
       fetch("/profile/update", {
         method: "POST",
         headers: {
@@ -744,13 +800,22 @@ function App() {
         body: JSON.stringify({ name: chosen }),
       })
         .then((r) => (r.ok ? r.json() : Promise.reject(r)))
-        .then(() => {
-          localStorage.setItem("username", chosen);
-          setUsername(chosen);
-        })
-        .catch(() => {
-          setUsername(chosen);
-        })
+         .then((r) => {
+           if (!r || r.ok === false) throw new Error("update failed");
+           localStorage.setItem("username", chosen);
+           setUsername(chosen);
+         })
+         .catch(async (err) => {
+           try {
+             const text = await err.text?.();
+             if (text && text.includes("username taken")) {
+               setJoinError("That username is taken. Try another.");
+               return;
+             }
+           } catch {}
+           // Fall back to joining without profile update
+           setUsername(chosen);
+         })
         .finally(() => setShowHomeOverlay(false));
       return;
     }
@@ -766,13 +831,28 @@ function App() {
   return (
     <div className="game-container">
       {/* Home button (hidden on homepage) */}
-      {username && !showHomeOverlay && (
+      {!showHomeOverlay && (
         <button
           onClick={() => {
             // Keep connection alive; simply show overlay
             setShowHomeOverlay(true);
             setActiveTab("play");
             setNameInput(localStorage.getItem("username") || nameInput);
+            // Suggest a contrasting flag based on visible flags near center
+            try {
+              const centerX = Math.floor((viewRef.current.x + (containerRef.current?.clientWidth || 0) / 2 / zoom) / CELL_SIZE);
+              const centerY = Math.floor((viewRef.current.y + (containerRef.current?.clientHeight || 0) / 2 / zoom) / CELL_SIZE);
+              const R = 8; // radius in cells to scan for flags
+              const nearby = new Set();
+              for (let dy = -R; dy <= R; dy++) {
+                for (let dx = -R; dx <= R; dx++) {
+                  const id = flaggedCellsRef.current.get(`${centerX + dx},${centerY + dy}`);
+                  if (Number.isFinite(id)) nearby.add(id);
+                }
+              }
+              const pick = FLAG_IDS.find(id => !nearby.has(id)) ?? FLAG_IDS[0];
+              if (Number.isFinite(pick)) setFlagID(pick);
+            } catch {}
           }}
           style={{
             position: "fixed",

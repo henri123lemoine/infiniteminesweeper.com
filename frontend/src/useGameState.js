@@ -117,13 +117,7 @@ const worldToChunk = (worldX, worldY) => {
 };
 
 export const useGameState = () => {
-  const initialName = (() => {
-    const existing = (localStorage.getItem("username") || "").trim();
-    if (existing) return existing;
-    const generated = `User${String(Math.floor(Math.random() * 100000)).padStart(5, "0")}`;
-    localStorage.setItem("username", generated);
-    return generated;
-  })();
+  const initialName = "";
 
   const [ws, setWs] = useState(null);
   const [connected, setConnected] = useState(false);
@@ -343,29 +337,6 @@ export const useGameState = () => {
       };
     })(),
   );
-
-  // Small helper for App.jsx to compute + send view update based on current DOM/zoom
-  const computeAndSendViewUpdate = useCallback(() => {
-    const container = document.querySelector('#root')?.firstElementChild || null;
-    const c = container;
-    if (!c) return;
-    const width = c.clientWidth;
-    const height = c.clientHeight;
-    // width/height in world cells (1 world cell == 1 game cell, size-independent)
-    const worldWidthCells = Math.ceil(width / (window.devicePixelRatio || 1) / 1);
-    const worldHeightCells = Math.ceil(height / (window.devicePixelRatio || 1) / 1);
-
-    const centerWorldX = Math.floor((viewRef.current.x + (width / 1) / 2) / 1);
-    const centerWorldY = Math.floor((viewRef.current.y + (height / 1) / 2) / 1);
-    const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
-    sendViewUpdate.current(
-      chunkX,
-      chunkY,
-      cell,
-      worldWidthCells,
-      worldHeightCells,
-    );
-  }, [worldToChunk]);
 
   // Return true if all chunks intersecting a Chebyshev radius (default 2) are known (we have their seed)
   const isRadiusFullyKnown = useCallback((worldX, worldY, radius = 2) => {
@@ -831,6 +802,94 @@ export const useGameState = () => {
     [countAdjacentMines, username],
   );
 
+  // Passive spectate connection: no Hello, only view-based sync.
+  const connectSpectate = useCallback(() => {
+    const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/spectate`;
+    const websocket = new WebSocket(wsUrl);
+    websocket.binaryType = "arraybuffer";
+
+    websocket.onopen = () => {
+      // Treat as transport-ready for viewUpdate sending, but keep gameplay disabled.
+      setWs(websocket);
+      wsRef.current = websocket;
+      connectedRef.current = true;
+      // Do not set `connected` to true so clicks remain disabled pre-join.
+      requestAnimationFrame(() => {
+        try {
+          // Prefer DOM dimensions, but fall back to a conservative default.
+          const root = document.querySelector('#root')?.firstElementChild;
+          const width = root?.clientWidth || window.innerWidth || 800;
+          const height = root?.clientHeight || window.innerHeight || 600;
+          const worldWidthCells = Math.ceil(width / 1);
+          const worldHeightCells = Math.ceil(height / 1);
+          const centerWorldX = Math.floor((viewRef.current.x + width / 2) / 1);
+          const centerWorldY = Math.floor((viewRef.current.y + height / 2) / 1);
+          const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
+          sendViewUpdate.current(chunkX, chunkY, cell, worldWidthCells, worldHeightCells);
+        } catch {}
+      });
+    };
+
+    websocket.onclose = () => {
+      if (wsRef.current === websocket) {
+        wsRef.current = null;
+        setWs(null);
+        connectedRef.current = false;
+      }
+    };
+
+    websocket.onmessage = (event) => {
+      const msg = decodeMsg(event.data);
+      const type = activeKey(msg);
+      const data = msg[type];
+      if (type === "chunkSync") {
+        applyChunkSync(data);
+        setTick((t) => t + 1);
+      } else if (type === "chunkRegionSync") {
+        const region = PB.ChunkRegion.toObject(PB.ChunkRegion.decode(data.chunks), { defaults: false });
+        for (const cs of region.chunks || []) applyChunkSync(cs);
+        setTick((t) => t + 1);
+      } else if (type === "chunkUpdateBroadcast") {
+        // Reuse the same reconciliation path as in main connection
+        const { chunkId } = data;
+        const { X, Y } = normalizeChunkId(chunkId);
+        const chunkKey = `${X},${Y}`;
+        const updateType = data.revealedCells ? "revealedCells" : data.flaggedCell ? "flaggedCell" : null;
+        if (!updateType) return;
+        const updateData = data[updateType];
+        if (updateType === "revealedCells") {
+          const cells = Array.isArray(updateData.cells) ? updateData.cells : [];
+          for (const cell of cells) {
+            const cellKey = `${chunkKey},${cell}`;
+            const seed = seedCache.current.get(chunkKey);
+            const d = densityCache.current.get(chunkKey);
+            const isMineVal = seed && d != null ? isMineWith(seed, d, cell) : false;
+            const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
+            revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent });
+          }
+          bumpChunkVersion(X, Y);
+        } else if (updateType === "flaggedCell") {
+          const cellIdx = (updateData && typeof updateData === "object" && Number.isFinite(updateData.cell)) ? updateData.cell : updateData;
+          const lx = cellIdx % CHUNK;
+          const ly = Math.floor(cellIdx / CHUNK);
+          const worldX = X * CHUNK + lx;
+          const worldY = Y * CHUNK + ly;
+          const flagID = (updateData && typeof updateData === "object" && Number.isFinite(updateData.flagID)) ? updateData.flagID : 0;
+          flaggedCellsRef.current.set(`${worldX},${worldY}`, flagID);
+          // Mark as revealed to maintain continuity
+          const cellKey = `${chunkKey},${cellIdx}`;
+          revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: 0, isFlagged: true });
+          bumpChunkVersion(X, Y);
+        }
+        setTick((t) => t + 1);
+      }
+    };
+
+    return () => {
+      try { websocket.close(); } catch {}
+    };
+  }, [worldToChunk, applyChunkSync, bumpChunkVersion, setTick]);
+
   const disconnect = useCallback(() => {
     try {
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -862,6 +921,7 @@ export const useGameState = () => {
     ensureChunkSubscription,
     ensureChunkUnsubscription,
     connectWs,
+    connectSpectate,
     disconnect,
     worldToChunk,
     // New preferred mine test API using chunk coords
@@ -877,6 +937,5 @@ export const useGameState = () => {
     densityCache,
     // expose throttled view-update sender to App.jsx
     sendViewUpdateRef: sendViewUpdate,
-    computeAndSendViewUpdate,
   };
 };

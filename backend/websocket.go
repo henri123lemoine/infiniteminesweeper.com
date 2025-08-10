@@ -273,6 +273,222 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Player %d (%s) connected.", playerID, playerName)
 }
 
+// handleSpectateWebSocket establishes a passive WebSocket connection that does not
+// authenticate or create a persisted player identity. It only accepts ViewUpdate
+// messages (and will manage per-connection subscriptions) and streams ChunkRegionSync
+// plus ChunkUpdateBroadcast messages for the subscribed chunks.
+func (s *Server) handleSpectateWebSocket(w http.ResponseWriter, r *http.Request) {
+    conn, err := s.upgrader.Upgrade(w, r, nil)
+    if err != nil {
+        log.Printf("Spectate WebSocket upgrade error: %v", err)
+        return
+    }
+
+    // Connection hygiene
+    conn.SetReadLimit(1 << 20)
+    conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+    conn.SetPongHandler(func(string) error {
+        conn.SetReadDeadline(time.Now().Add(35 * time.Second))
+        return nil
+    })
+
+    // Allocate an ephemeral spectator ID in a disjoint range to avoid collisions.
+    // We use the high bit to mark spectators.
+    const baseSpectatorID = uint32(1 << 31)
+
+    s.stateMu.Lock()
+    sid := baseSpectatorID + s.nextSpectatorID
+    s.nextSpectatorID++
+    s.stateMu.Unlock()
+
+    // Register a lightweight Player to reuse existing infra (send queues, subs, broadcasts).
+    s.playersMu.Lock()
+    if s.players[sid] == nil {
+        s.players[sid] = make(map[*Player]struct{})
+    }
+    player := &Player{
+        ID:          sid,
+        Conn:        conn,
+        Send:        make(chan []byte, SendBufSize),
+        Mailbox:     make(chan func(*Player), 64),
+        TokenBucket: TokenBucket{tokens: 200},
+        Name:        "", // no identity
+        FlagID:      0,
+        Score:       0,
+        done:        make(chan struct{}),
+    }
+    s.players[sid][player] = struct{}{}
+    s.playersMu.Unlock()
+
+    // Start pumps; spectator read loop only handles ViewUpdate.
+    go s.writePump(player)
+    go s.readPumpSpectator(player)
+
+    log.Printf("Spectator %d connected.", sid)
+}
+
+// readPumpSpectator handles only view-based subscription updates for spectator connections.
+func (s *Server) readPumpSpectator(player *Player) {
+    defer func() {
+        s.removePlayer(player)
+        player.Conn.Close()
+    }()
+
+    // The connection is now established; reset the read deadline.
+    player.Conn.SetReadDeadline(time.Time{})
+
+    for {
+        _, data, err := player.Conn.ReadMessage()
+        if err != nil {
+            break
+        }
+
+        gz, err := gzip.NewReader(bytes.NewReader(data))
+        if err != nil {
+            continue
+        }
+        pbData, err := io.ReadAll(gz)
+        gz.Close()
+        if err != nil {
+            continue
+        }
+
+        var msg pb.Msg
+        if err := proto.Unmarshal(pbData, &msg); err != nil {
+            continue
+        }
+
+        // Only honor view updates and ignore any attempts at gameplay.
+        switch t := msg.Payload.(type) {
+        case *pb.Msg_ViewUpdate:
+            vu := t.ViewUpdate
+            if vu.ChunkId == nil {
+                continue
+            }
+
+            // Record spectator view center
+            view := PlayerView{Chunk: ChunkID{X: vu.ChunkId.X, Y: vu.ChunkId.Y}, Cell: vu.Cell}
+            s.stateMu.Lock()
+            s.playerViews[player.ID] = view
+            s.stateMu.Unlock()
+
+            // Compute proportional region around viewport, identical to player handling
+            widthCells := int(vu.WidthCells)
+            heightCells := int(vu.HeightCells)
+            if widthCells <= 0 || heightCells <= 0 {
+                widthCells, heightCells = ChunkSize*3, ChunkSize*3
+            }
+            chunksWide := (widthCells + ChunkSize - 1) / ChunkSize
+            chunksHigh := (heightCells + ChunkSize - 1) / ChunkSize
+            chunksWide += 2
+            chunksHigh += 2
+
+            cellX := int(vu.Cell % uint32(ChunkSize))
+            cellY := int(vu.Cell / uint32(ChunkSize))
+            centerWorldX := int(vu.ChunkId.X)*ChunkSize + cellX
+            centerWorldY := int(vu.ChunkId.Y)*ChunkSize + cellY
+            centerChunkX := int64(centerWorldX / ChunkSize)
+            centerChunkY := int64(centerWorldY / ChunkSize)
+
+            halfW := chunksWide / 2
+            halfH := chunksHigh / 2
+            startX := centerChunkX - int64(halfW)
+            startY := centerChunkY - int64(halfH)
+            endX := startX + int64(chunksWide) - 1
+            endY := startY + int64(chunksHigh) - 1
+
+            newSet := make(map[ChunkID]struct{}, chunksWide*chunksHigh)
+            for cy := startY; cy <= endY; cy++ {
+                for cx := startX; cx <= endX; cx++ {
+                    newSet[ChunkID{X: cx, Y: cy}] = struct{}{}
+                }
+            }
+
+            s.stateMu.Lock()
+            current := s.playerSubs[player.ID]
+            if current == nil {
+                current = make(map[ChunkID]struct{})
+                s.playerSubs[player.ID] = current
+            }
+            lastSeen := s.playerSubLastSeen[player.ID]
+            if lastSeen == nil {
+                lastSeen = make(map[ChunkID]uint64)
+                s.playerSubLastSeen[player.ID] = lastSeen
+            }
+
+            adds := make([]ChunkID, 0)
+            for cid := range newSet {
+                if _, ok := current[cid]; !ok {
+                    if s.subs[cid] == nil {
+                        s.subs[cid] = make(map[uint32]struct{})
+                    }
+                    s.subs[cid][player.ID] = struct{}{}
+                    current[cid] = struct{}{}
+                    adds = append(adds, cid)
+                }
+                s.subTick++
+                lastSeen[cid] = s.subTick
+            }
+
+            // Evict using same LRU policy and capacity as players
+            over := len(current) - s.maxPlayerSubs
+            if over > 0 {
+                type pair struct{ id ChunkID; t uint64 }
+                candidates := make([]pair, 0)
+                for cid := range current {
+                    if _, inView := newSet[cid]; inView {
+                        continue
+                    }
+                    candidates = append(candidates, pair{id: cid, t: lastSeen[cid]})
+                }
+                sort.Slice(candidates, func(i, j int) bool { return candidates[i].t < candidates[j].t })
+                for i := 0; i < len(candidates) && over > 0; i++ {
+                    cid := candidates[i].id
+                    if subs, ok := s.subs[cid]; ok {
+                        delete(subs, player.ID)
+                        if len(subs) == 0 {
+                            delete(s.subs, cid)
+                        }
+                    }
+                    delete(current, cid)
+                    delete(lastSeen, cid)
+                    over--
+                }
+                if over > 0 {
+                    any := make([]pair, 0, len(current))
+                    for cid := range current {
+                        any = append(any, pair{id: cid, t: lastSeen[cid]})
+                    }
+                    sort.Slice(any, func(i, j int) bool { return any[i].t < any[j].t })
+                    for i := 0; i < len(any) && over > 0; i++ {
+                        cid := any[i].id
+                        if subs, ok := s.subs[cid]; ok {
+                            delete(subs, player.ID)
+                            if len(subs) == 0 {
+                                delete(s.subs, cid)
+                            }
+                        }
+                        delete(current, cid)
+                        delete(lastSeen, cid)
+                        over--
+                    }
+                }
+            }
+            chunkIDs := adds
+            s.stateMu.Unlock()
+
+            if len(chunkIDs) > 0 {
+                if os.Getenv("MODE") == "development" {
+                    log.Printf("[DEBUG] Spectator %d <- ChunkRegionSync add %d chunks (rect %dx%d)", player.ID, len(chunkIDs), chunksWide, chunksHigh)
+                }
+                s.sendChunkRegionSync(player.ID, chunkIDs)
+            }
+        default:
+            // ignore all other messages for spectators
+        }
+    }
+}
+
 func (s *Server) readPump(player *Player) {
 	defer func() {
 		s.removePlayer(player)
