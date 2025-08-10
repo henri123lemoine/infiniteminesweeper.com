@@ -139,6 +139,7 @@ function App() {
   // Leaderboard visibility and number formatting
   const [leaderboardVisible, setLeaderboardVisible] = useState(true);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [showHomeOverlay, setShowHomeOverlay] = useState(false);
 
   // Build numeric sprite ID list for the 'flag' category only
   const FLAG_IDS = useMemo(
@@ -677,34 +678,70 @@ function App() {
   );
   const centerDensity = densityCache.current.get(`${centerChunkX},${centerChunkY}`);
 
+  const joinGame = useCallback(() => {
+    const trimmedName = (nameInput || "").trim();
+    const chosen =
+      trimmedName || `User${Math.floor(Math.random() * 100000).toString().padStart(5, "0")}`;
+    const token = localStorage.getItem("session_token");
+
+    if (token) {
+      fetch("/profile/update", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-Token": token,
+        },
+        body: JSON.stringify({ name: chosen }),
+      })
+        .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+        .then(() => {
+          localStorage.setItem("username", chosen);
+          setUsername(chosen);
+        })
+        .catch(() => {
+          setUsername(chosen);
+        })
+        .finally(() => setShowHomeOverlay(false));
+      return;
+    }
+
+    if (guestCleanupRef.current) {
+      try { guestCleanupRef.current(); } catch {}
+      guestCleanupRef.current = null;
+    }
+    setUsername(chosen);
+    setShowHomeOverlay(false);
+  }, [nameInput, setUsername]);
+
   return (
     <div className="game-container">
-      {/* Home button to reopen overlay */}
-      <button
-        onClick={() => {
-          // Disconnect any existing real session and go back to spectate landing
-          try { disconnect(); } catch {}
-          // Clear stored username to trigger overlay
-          localStorage.removeItem("username");
-          setUsername("");
-        }}
-        style={{
-          position: "fixed",
-          top: 52, // below the score chip
-          left: "50%",
-          transform: "translateX(-50%)",
-          zIndex: 21,
-          background: "#fff",
-          border: "1px solid #ccc",
-          borderRadius: 6,
-          padding: "6px 10px",
-          cursor: "pointer",
-          boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
-        }}
-      >
-        Home
-      </button>
-      {!username && (
+      {/* Home button (hidden on homepage) */}
+      {username && !showHomeOverlay && (
+        <button
+          onClick={() => {
+            // Keep connection alive; simply show overlay
+            setShowHomeOverlay(true);
+            setActiveTab("play");
+            setNameInput(localStorage.getItem("username") || nameInput);
+          }}
+          style={{
+            position: "fixed",
+            top: 52, // below the score chip
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 21,
+            background: "#fff",
+            border: "1px solid #ccc",
+            borderRadius: 6,
+            padding: "6px 10px",
+            cursor: "pointer",
+            boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+          }}
+        >
+          Home
+        </button>
+      )}
+      {showHomeOverlay && (
         <div
           style={{
             position: "fixed",
@@ -714,6 +751,18 @@ function App() {
             alignItems: "center",
             justifyContent: "center",
             zIndex: 20,
+          }}
+          onMouseDown={(e) => {
+            if (e.currentTarget === e.target) {
+              e.preventDefault();
+              setShowHomeOverlay(false);
+            }
+          }}
+          onTouchStart={(e) => {
+            if (e.currentTarget === e.target) {
+              e.preventDefault();
+              setShowHomeOverlay(false);
+            }
           }}
         >
           <div
@@ -727,6 +776,8 @@ function App() {
               height: "90vh",
               overflow: "auto",
             }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
           >
             <h1 style={{ marginTop: 0 }}>Infinite Minesweeper</h1>
             <p style={{ margin: "8px 0 16px", color: "#555" }}>
@@ -790,38 +841,7 @@ function App() {
                   title="Use 1-20 characters: letters, numbers, underscores, or hyphens"
                 />
                 <button
-                  onClick={() => {
-                    const trimmedName = nameInput.trim();
-                    const chosen =
-                      trimmedName || `User${Math.floor(Math.random() * 100000).toString().padStart(5, "0")}`;
-                    const token = localStorage.getItem("session_token");
-                    // If we already have a session, persist rename server-side first
-                    if (token) {
-                      fetch("/profile/update", {
-                        method: "POST",
-                        headers: {
-                          "Content-Type": "application/json",
-                          "X-Session-Token": token,
-                        },
-                        body: JSON.stringify({ name: chosen }),
-                      })
-                        .then((r) => r.ok ? r.json() : Promise.reject(r))
-                        .then(() => {
-                          localStorage.setItem("username", chosen);
-                          setUsername(chosen);
-                        })
-                        .catch(() => {
-                          setUsername(chosen); // Fallback: will reconnect and get rejected/accepted
-                        });
-                      return;
-                    }
-                    // Close guest connection before joining
-                    if (guestCleanupRef.current) {
-                      try { guestCleanupRef.current(); } catch {}
-                      guestCleanupRef.current = null;
-                    }
-                    setUsername(chosen);
-                  }}
+                  onClick={joinGame}
                   style={{
                     padding: "10px 20px",
                     backgroundColor: "#4CAF50",
