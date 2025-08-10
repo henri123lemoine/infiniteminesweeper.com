@@ -39,6 +39,15 @@ func debugLogMessage(msg *pb.Msg, playerID uint32) {
 	case *pb.Msg_ViewUpdate:
 		log.Printf("[DEBUG] Player %d -> ViewUpdate: ChunkId=(%d,%d), Cell=%d, SizeCells=(%d x %d)",
 			playerID, payload.ViewUpdate.ChunkId.X, payload.ViewUpdate.ChunkId.Y, payload.ViewUpdate.Cell, payload.ViewUpdate.WidthCells, payload.ViewUpdate.HeightCells)
+	case *pb.Msg_MinimapSubscribe:
+		log.Printf("[DEBUG] Player %d -> MinimapSubscribe: %d tiles", playerID, len(payload.MinimapSubscribe.Tiles))
+	case *pb.Msg_MinimapUnsubscribe:
+		log.Printf("[DEBUG] Player %d -> MinimapUnsubscribe: %d tiles", playerID, len(payload.MinimapUnsubscribe.Tiles))
+	case *pb.Msg_MinimapResendFull:
+		tr := payload.MinimapResendFull.Tile
+		if tr != nil {
+			log.Printf("[DEBUG] Player %d -> MinimapResendFull: (%d,%d)", playerID, tr.X, tr.Y)
+		}
 
 	default:
 		log.Printf("[DEBUG] Player %d -> Unknown message type: %T", playerID, payload)
@@ -696,6 +705,45 @@ func (s *Server) readPump(player *Player) {
 					log.Printf("[DEBUG] Player %d <- ChunkRegionSync add %d chunks (rect %dx%d)", player.ID, len(chunkIDs), chunksWide, chunksHigh)
 				}
 				s.sendChunkRegionSync(player.ID, chunkIDs)
+			}
+
+		case *pb.Msg_MinimapSubscribe:
+			m := t.MinimapSubscribe
+			if m != nil {
+				s.stateMu.Lock()
+				for _, tr := range m.Tiles {
+					cid := ChunkID{X: int64(tr.X), Y: int64(tr.Y)}
+					if s.minimapSubs[cid] == nil {
+						s.minimapSubs[cid] = make(map[uint32]struct{})
+					}
+					s.minimapSubs[cid][player.ID] = struct{}{}
+					// send current full tile snapshot
+					s.minimapSendFullTo(player.ID, cid)
+				}
+				s.stateMu.Unlock()
+			}
+		case *pb.Msg_MinimapUnsubscribe:
+			m := t.MinimapUnsubscribe
+			if m != nil {
+				s.stateMu.Lock()
+				for _, tr := range m.Tiles {
+					cid := ChunkID{X: int64(tr.X), Y: int64(tr.Y)}
+					if subs, ok := s.minimapSubs[cid]; ok {
+						delete(subs, player.ID)
+						if len(subs) == 0 {
+							delete(s.minimapSubs, cid)
+						}
+					}
+				}
+				s.stateMu.Unlock()
+			}
+		case *pb.Msg_MinimapResendFull:
+			m := t.MinimapResendFull
+			if m != nil && m.Tile != nil {
+				cid := ChunkID{X: int64(m.Tile.X), Y: int64(m.Tile.Y)}
+				s.stateMu.Lock()
+				s.minimapSendFullTo(player.ID, cid)
+				s.stateMu.Unlock()
 			}
 		}
 	}

@@ -446,6 +446,9 @@ func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, 
 		(*collector)[chunkID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
 	}
 	(*collector)[chunkID].Cells = append((*collector)[chunkID].Cells, cell)
+
+	// Update minimap tile (under the same lock)
+	s.minimapOnReveal(chunkID, cell)
 }
 
 func (s *Server) setCellFlagged(chunkID ChunkID, cell uint32, playerID uint32, flagID uint32, collector *map[ChunkID][]*pb.FlagPlacement) {
@@ -459,6 +462,9 @@ func (s *Server) setCellFlagged(chunkID ChunkID, cell uint32, playerID uint32, f
 	}
 	placement := &pb.FlagPlacement{Cell: cell, FlagID: flagID}
 	(*collector)[chunkID] = append((*collector)[chunkID], placement)
+
+	// Update minimap tile (under the same lock)
+	s.minimapOnFlag(chunkID, cell)
 }
 
 func (s *Server) isCellRevealed(chunkID ChunkID, cell uint32) bool {
