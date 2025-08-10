@@ -63,11 +63,23 @@ func (s *Server) applyScore(playerID uint32, delta int32) int32 {
 	return newScore
 }
 
-// isMine determines if a cell contains a mine using the chunk's seed.
+// isMine determines if a cell contains a mine using the chunk's seed and density.
 func (s *Server) isMine(chunkID ChunkID, cell uint32) bool {
-	seed := s.generateChunkSeed(chunkID)
-	cellSeed := splitmix64(seed + uint64(cell))
-	return (cellSeed % 100) < MineCount
+    seed := s.generateChunkSeed(chunkID)
+    cellSeed := splitmix64(seed + uint64(cell))
+    // Use per-chunk density mapped to 0..100 threshold.
+    // Quantize to float32 to match what is sent to the client and used for its calculations.
+    d32 := float32(s.getChunkDensity(chunkID)) // [0,1] as float32 like on the wire
+    if d32 < 0 {
+        d32 = 0
+    } else if d32 > 1 {
+        d32 = 1
+    }
+    threshold := uint64(math.Floor(float64(d32 * 100.0)))
+    if threshold > 100 {
+        threshold = 100
+    }
+    return (cellSeed % 100) < threshold
 }
 
 func (s *Server) countAdjacentMines(chunkID ChunkID, cell uint32) int {
@@ -151,7 +163,9 @@ func (s *Server) handleReveal(
 
 		playerFlagID := s.playerFlags[playerID]
 		if s.isMine(chunkID, cell) {
-			scoreDelta = 10 // correct flag
+			// correct flag
+			m := s.getScoreMultiplier(chunkID)
+			scoreDelta = int32(math.Round(10 * m))
 			s.applyScore(playerID, scoreDelta)
 			s.setCellFlagged(chunkID, cell, playerID, playerFlagID, &allPlacedFlags)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_FlaggedCell{FlaggedCell: &pb.FlagPlacement{Cell: cell, FlagID: playerFlagID}}}
@@ -280,6 +294,11 @@ func (s *Server) handleReveal(
 			}
 		}
 
+		// Apply multiplier only if net positive
+		if scoreDelta > 0 {
+			m := s.getScoreMultiplier(chunkID)
+			scoreDelta = int32(math.Round(float64(scoreDelta) * m))
+		}
 		s.applyScore(playerID, scoreDelta)
 		ack := &pb.RevealAck{
 			Outcome: &pb.RevealAck_RevealedCells{
@@ -311,7 +330,8 @@ func (s *Server) handleReveal(
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
 		} else if s.countAdjacentMines(chunkID, cell) > 0 {
-			scoreDelta = 1
+			m := s.getScoreMultiplier(chunkID)
+			scoreDelta = int32(math.Round(1 * m))
 			s.applyScore(playerID, scoreDelta)
 			s.setCellRevealed(chunkID, cell, playerID, &allRevealedCells)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
@@ -355,6 +375,10 @@ func (s *Server) handleReveal(
 				}
 			}
 			scoreDelta = int32(len(visited))
+			if scoreDelta > 0 {
+				m := s.getScoreMultiplier(chunkID)
+				scoreDelta = int32(math.Round(float64(scoreDelta) * m))
+			}
 			s.applyScore(playerID, scoreDelta)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)

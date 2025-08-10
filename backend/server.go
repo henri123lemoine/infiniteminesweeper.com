@@ -57,6 +57,10 @@ type Server struct {
 	seedCache   map[ChunkID]uint64
 	seedCacheMu sync.RWMutex
 
+	// Density cache for per-chunk bomb densities
+	densityCache   map[ChunkID]float64
+	densityCacheMu sync.RWMutex
+
 	// Persistence configuration
 	useS3   bool
 	dataDir string
@@ -94,6 +98,7 @@ func NewServer() *Server {
 		playerViews:       make(map[uint32]PlayerView),
 		sessionTokens:     make(map[string]uint32), // Initialize the new map
 		seedCache:         make(map[ChunkID]uint64),
+		densityCache:      make(map[ChunkID]float64),
 		nextPlayerID:      1,
 		dataDir:           "data",
 		proximityRadius:   2, // default behavior: must be within distance <= 2 of any revealed cell

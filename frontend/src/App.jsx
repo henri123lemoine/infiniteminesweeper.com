@@ -46,6 +46,7 @@ function App() {
     connectWs,
     worldToChunk,
     isMine,
+    densityCache,
     sendViewUpdateRef,
   } = useGameState();
 
@@ -672,6 +673,7 @@ function App() {
     centerWorldX,
     centerWorldY,
   );
+  const centerDensity = densityCache.current.get(`${centerChunkX},${centerChunkY}`);
 
   return (
     <div className="game-container">
@@ -1019,7 +1021,8 @@ function App() {
               View: ({Math.round(viewRef.current.x)},{" "}
               {Math.round(viewRef.current.y)})<br />
               Center: ({centerWorldX}, {centerWorldY})<br />
-              Chunk: ({centerChunkX}, {centerChunkY})
+              Chunk: ({centerChunkX}, {centerChunkY})<br />
+              Density: {centerDensity != null ? centerDensity.toFixed(3) : "n/a"}
             </div>
           )}
         </div>
@@ -1038,6 +1041,7 @@ function App() {
         flaggedCellsRef={flaggedCellsRef}
         isMine={isMine}
         worldToChunk={worldToChunk}
+        densityCache={densityCache}
       />
 
       <div className="leaderboard">
