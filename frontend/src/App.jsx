@@ -21,6 +21,10 @@ function App() {
   const [activeTab, setActiveTab] = useState("play"); // play | leaderboard | advancements
   const [fullLeaderboard, setFullLeaderboard] = useState(null);
   const [lbLoading, setLbLoading] = useState(false);
+  const lbLoadingRef = useRef(false);
+  const [lbFollowMe, setLbFollowMe] = useState(true);
+  const lbContainerRef = useRef(null);
+  const myLbRowRef = useRef(null);
   const [joinError, setJoinError] = useState("");
 
   const {
@@ -140,6 +144,7 @@ function App() {
   const [leaderboardVisible, setLeaderboardVisible] = useState(true);
   const [helpOpen, setHelpOpen] = useState(false);
   const [showHomeOverlay, setShowHomeOverlay] = useState(false);
+  const lbRefreshTimerRef = useRef(null);
 
   // Build numeric sprite ID list for the 'flag' category only
   const FLAG_IDS = useMemo(
@@ -199,6 +204,21 @@ function App() {
 
   const toggleLeaderboard = useCallback(() => {
     setLeaderboardVisible((v) => !v);
+  }, []);
+
+  // Centralized home leaderboard fetcher (stable; guarded by ref to avoid re-runs)
+  const fetchHomeLeaderboard = useCallback(() => {
+    if (lbLoadingRef.current) return;
+    lbLoadingRef.current = true;
+    setLbLoading(true);
+    fetch("/leaderboard")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows) => setFullLeaderboard(Array.isArray(rows) ? rows : []))
+      .catch(() => setFullLeaderboard([]))
+      .finally(() => {
+        lbLoadingRef.current = false;
+        setLbLoading(false);
+      });
   }, []);
 
   const formatScore = useCallback((score) => {
@@ -648,6 +668,36 @@ function App() {
     };
   }, [centerCameraOnWorld]);
 
+  // Auto-refresh home leaderboard while the tab is open
+  useEffect(() => {
+    if (showHomeOverlay && activeTab === "leaderboard") {
+      // Fetch immediately and then on an interval
+      fetchHomeLeaderboard();
+      lbRefreshTimerRef.current = setInterval(fetchHomeLeaderboard, 5000);
+      return () => {
+        if (lbRefreshTimerRef.current) {
+          clearInterval(lbRefreshTimerRef.current);
+          lbRefreshTimerRef.current = null;
+        }
+      };
+    }
+    // Cleanup when leaving the tab/overlay
+    if (lbRefreshTimerRef.current) {
+      clearInterval(lbRefreshTimerRef.current);
+      lbRefreshTimerRef.current = null;
+    }
+  }, [showHomeOverlay, activeTab, fetchHomeLeaderboard]);
+
+  // Keep my row centered if "Follow me" is enabled
+  useEffect(() => {
+    if (!showHomeOverlay || activeTab !== "leaderboard") return;
+    if (!lbFollowMe) return;
+    const el = myLbRowRef.current;
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "center" });
+    }
+  }, [fullLeaderboard, showHomeOverlay, activeTab, lbFollowMe]);
+
   // Handle window resize
   useEffect(() => {
     const handleResize = () => {
@@ -801,12 +851,7 @@ function App() {
                   onClick={() => {
                     setActiveTab(t.k);
                     if (t.k === "leaderboard" && fullLeaderboard == null && !lbLoading) {
-                      setLbLoading(true);
-                      fetch("/leaderboard")
-                        .then((r) => (r.ok ? r.json() : []))
-                        .then((rows) => setFullLeaderboard(Array.isArray(rows) ? rows : []))
-                        .catch(() => setFullLeaderboard([]))
-                        .finally(() => setLbLoading(false));
+                      fetchHomeLeaderboard();
                     }
                   }}
                   style={{
@@ -886,39 +931,69 @@ function App() {
 
             {activeTab === "leaderboard" && (
               <div style={{ textAlign: "left", maxWidth: 720, margin: "0 auto" }}>
-                {lbLoading && <p>Loading leaderboard…</p>}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, color: "#666" }}>
+                    {Array.isArray(fullLeaderboard) && fullLeaderboard.length > 0 && (
+                      <>Players: {fullLeaderboard.length}</>
+                    )}
+                  </div>
+                  <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={lbFollowMe}
+                      onChange={(e) => setLbFollowMe(e.target.checked)}
+                    />
+                    Follow me
+                  </label>
+                </div>
+                {lbLoading && fullLeaderboard == null && <p>Loading leaderboard…</p>}
                 {!lbLoading && fullLeaderboard && fullLeaderboard.length === 0 && <p>No players yet.</p>}
                 {!lbLoading && Array.isArray(fullLeaderboard) && fullLeaderboard.length > 0 && (
-                  <ol>
-                    {fullLeaderboard.slice(0, 200).map((row) => (
-                      <li key={row.name} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <canvas
-                          ref={(c) => {
-                            if (!c) return;
-                            const ctx = c.getContext("2d");
-                            const cssSize = 20;
-                            const dpr = window.devicePixelRatio || 1;
-                            c.width = Math.round(cssSize * dpr);
-                            c.height = Math.round(cssSize * dpr);
-                            c.style.width = `${cssSize}px`;
-                            c.style.height = `${cssSize}px`;
-                            ctx.imageSmoothingEnabled = false;
-                            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                            rendererRef.current.drawSprite(
-                              ctx,
-                              row.flagID ?? 0,
-                              0,
-                              0,
-                              cssSize,
-                              cssSize,
-                            );
+                  <ol ref={lbContainerRef} style={{ maxHeight: "60vh", overflow: "auto", paddingRight: 8 }}>
+                    {fullLeaderboard.map((row) => {
+                      const myName = (localStorage.getItem("username") || username || "").trim();
+                      const isMe = myName && row.name === myName;
+                      return (
+                        <li
+                          key={row.name}
+                          ref={isMe ? myLbRowRef : null}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "2px 4px",
+                            borderRadius: 4,
+                            background: isMe ? "#fff8d5" : "transparent",
                           }}
-                          style={{ imageRendering: "pixelated" }}
-                        />
-                        <span style={{ flex: 1 }}>{row.name}</span>
-                        <b>{formatScore(row.score ?? 0)}</b>
-                      </li>
-                    ))}
+                        >
+                          <canvas
+                            ref={(c) => {
+                              if (!c) return;
+                              const ctx = c.getContext("2d");
+                              const cssSize = 20;
+                              const dpr = window.devicePixelRatio || 1;
+                              c.width = Math.round(cssSize * dpr);
+                              c.height = Math.round(cssSize * dpr);
+                              c.style.width = `${cssSize}px`;
+                              c.style.height = `${cssSize}px`;
+                              ctx.imageSmoothingEnabled = false;
+                              ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                              rendererRef.current.drawSprite(
+                                ctx,
+                                row.flagID ?? 0,
+                                0,
+                                0,
+                                cssSize,
+                                cssSize,
+                              );
+                            }}
+                            style={{ imageRendering: "pixelated" }}
+                          />
+                          <span style={{ flex: 1, fontWeight: isMe ? "600" : undefined }}>{row.name}</span>
+                          <b>{formatScore(row.score ?? 0)}</b>
+                        </li>
+                      );
+                    })}
                   </ol>
                 )}
               </div>

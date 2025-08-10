@@ -22,21 +22,16 @@ func (s *Server) devRevealOriginArea(radius int) {
 		}
 	}
 }
-func (s *Server) devAddTestUsers() {
+func (s *Server) devAddTestUsers(n int) {
 	r := rand.New(rand.NewSource(64))
-
-	testNames := []string{
-		"Name1", "Name2", "Name3", "Name4", "Name5",
-		"Name6", "Name7", "Name8", "Name9", "Name10",
-		"Name11", "Name12", "Name13", "Name14", "Name15",
-		"Name16", "Name17", "Name18", "Name19", "Name20",
-	}
 
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
-	// Add 20 test users with random scores between 50 and 200
-	for _, name := range testNames {
+	// Add n test users with random scores between 50 and 200
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("Name%d", i+1)
+
 		playerID := s.nextPlayerID
 		s.nextPlayerID++
 
