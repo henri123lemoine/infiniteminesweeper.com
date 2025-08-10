@@ -50,8 +50,10 @@ type Server struct {
 	playerNames map[uint32]string
 	// Fast lookup to reuse identity by name if token is missing/invalid
 	nameToPlayerID map[string]uint32
-	nextPlayerID   uint32
-	sessionTokens  map[string]uint32 // session_token -> playerID
+    nextPlayerID   uint32
+    // Ephemeral spectator IDs (separate space, no identity/state persisted)
+    nextSpectatorID uint32
+    sessionTokens  map[string]uint32 // session_token -> playerID
 
 	// Seed cache for performance
 	seedCache   map[ChunkID]uint64
@@ -81,7 +83,7 @@ type Server struct {
 }
 
 func NewServer() *Server {
-	return &Server{
+    return &Server{
 		secret:            []byte("minesweeper-secret-key"),
 		chunks:            make(map[ChunkID]*ChunkBits),
 		flags:             make(map[ChunkID]map[uint32]Flag),
@@ -99,8 +101,9 @@ func NewServer() *Server {
 		sessionTokens:     make(map[string]uint32), // Initialize the new map
 		seedCache:         make(map[ChunkID]uint64),
 		densityCache:      make(map[ChunkID]float64),
-		nextPlayerID:      1,
-		dataDir:           "data",
+        nextPlayerID:      1,
+        nextSpectatorID:   1,
+        dataDir:           "data",
 		proximityRadius:   2, // default behavior: must be within distance <= 2 of any revealed cell
 		upgrader: websocket.Upgrader{
 			// Reject cross-site WebSocket requests (prevents CSRF via <iframe>).
