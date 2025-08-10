@@ -19,7 +19,6 @@ const activeKey = (m) =>
 const normalizeChunkId = (cid = {}) => ({ X: cid.X ?? 0, Y: cid.Y ?? 0 });
 
 export const CHUNK = 64;
-const MINE_COUNT = 20;
 
 function encodeMsg(msg) {
   if (msg && msg.payload && Object.keys(msg).length === 1) {
@@ -84,10 +83,22 @@ const splitmix64 = (state) => {
   return state ^ (state >> 31n);
 };
 
-const isMine = (seed, cell) => {
-  if (!Number.isFinite(cell)) return false;
-  const cellSeed = splitmix64(seed + BigInt(Math.trunc(cell)));
-  return Number(cellSeed % 100n) < MINE_COUNT;
+const isMineWith = (seed, density, cell) => {
+  // Validate seed
+  if (typeof seed !== 'bigint' || seed < 0n) return null;
+
+  // Validate cell
+  if (!Number.isInteger(cell) || cell < 0 || cell >= 4096) return null;
+
+  // Validate density type
+  if (typeof density !== 'number' || !Number.isFinite(density)) return null;
+
+  // Clamp density to [0, 1]
+  const clampedDensity = Math.max(0, Math.min(1, density));
+
+  const cellSeed = splitmix64(seed + BigInt(cell));
+  const threshold = Math.floor(clampedDensity * 100);
+  return Number(cellSeed % 100n) < threshold;
 };
 
 // Convert world coordinates to chunk and cell index coordinates
@@ -130,6 +141,7 @@ export const useGameState = () => {
 
   // Game state refs
   const seedCache = useRef(new Map());
+  const densityCache = useRef(new Map());
   const subscribedChunks = useRef(new Set());
   const subscriptionOrder = useRef([]);
   const revealedCellsRef = useRef(new Map());
@@ -159,9 +171,11 @@ export const useGameState = () => {
           chunkY: ncy,
           cell: ncell,
         } = worldToChunk(worldX + dx, worldY + dy);
-        const nSeed = seedCache.current.get(`${ncx},${ncy}`);
-        if (!nSeed) continue;
-        if (isMine(nSeed, ncell)) count++;
+        const chunkKey = `${ncx},${ncy}`;
+        const nSeed = seedCache.current.get(chunkKey);
+        const nDensity = densityCache.current.get(chunkKey);
+        if (!nSeed || nDensity == null) continue;
+        if (isMineWith(nSeed, nDensity, ncell)) count++;
       }
     }
     return count;
@@ -169,7 +183,7 @@ export const useGameState = () => {
 
   const applyChunkSync = useCallback(
     (data) => {
-      const { chunkId, seed, reveals, flagGroups: fgRaw } = data;
+      const { chunkId, seed, reveals, flagGroups: fgRaw, density } = data;
       const { X, Y } = normalizeChunkId(chunkId);
       const chunkKey = `${X},${Y}`;
       const seedBigInt = new DataView(
@@ -178,6 +192,7 @@ export const useGameState = () => {
         8
       ).getBigUint64(0, true);
       seedCache.current.set(chunkKey, seedBigInt);
+      if (typeof density === 'number') densityCache.current.set(chunkKey, density);
 
       const flagGroups = Array.isArray(fgRaw) ? fgRaw : [];
       for (const group of flagGroups) {
@@ -215,7 +230,8 @@ export const useGameState = () => {
             (1n << BigInt(bitIndex))) !== 0n
         ) {
           const cellKey = `${X},${Y},${i}`;
-          const isMineVal = isMine(seedBigInt, i);
+          const d = densityCache.current.get(chunkKey);
+          const isMineVal = d != null ? isMineWith(seedBigInt, d, i) : false;
           const adjacent = isMineVal
             ? 0
             : countAdjacentMines(X, Y, i);
@@ -432,10 +448,11 @@ export const useGameState = () => {
       if (isRightClick) {
         const myFlagId = playerFlagsRef.current.get(username);
         const seed = seedCache.current.get(chunkKey);
+        const d = densityCache.current.get(chunkKey);
         // Always send flag placement requests to the server
         didLocalMutation = true;
         // If we know the seed and this is NOT a mine, suppress optimistic flag but still send the request.
-        if (seed && !isMine(seed, cell)) {
+        if (seed && !isMineWith(seed, d, cell)) {
           // Don't set optimistic flag for non-mines
         } else if (myFlagId !== undefined) {
           // Only optimistic-flag when unknown or when it is actually a mine
@@ -468,10 +485,11 @@ export const useGameState = () => {
           visited.add(cellKey);
 
           const seed = seedCache.current.get(chunkKey);
-          if (!seed) continue;
+          const d = densityCache.current.get(chunkKey);
+          if (!seed || d == null) continue;
 
           // reveal
-          const isM = isMine(seed, cidx);
+          const isM = isMineWith(seed, d, cidx);
           const adj = isM ? 0 : countAdjacentMines(cx, cy, cidx);
           revealedCellsRef.current.set(cellKey, { isMine: isM, adjacentMines: adj });
           recordChange(chunkKey, { type: 'reveal', cell: cidx });
@@ -488,8 +506,9 @@ export const useGameState = () => {
         }
       } else { // Standard reveal
         const seed = seedCache.current.get(chunkKey);
-        if (seed) {
-          if (isMine(seed, cell)) {
+        const d = densityCache.current.get(chunkKey);
+        if (seed && d != null) {
+          if (isMineWith(seed, d, cell)) {
             revealedCellsRef.current.set(cellKey, { isMine: true, adjacentMines: 0 });
           } else {
             const adjacent = countAdjacentMines(chunkX, chunkY, cell);
@@ -683,7 +702,8 @@ export const useGameState = () => {
               for (const cell of cells) {
                 const cellKey = `${primaryChunkKey},${cell}`;
                 const seed = seedCache.current.get(primaryChunkKey);
-                const isMineVal = seed ? isMine(seed, cell) : false;
+                const d = densityCache.current.get(primaryChunkKey);
+                const isMineVal = seed && d != null ? isMineWith(seed, d, cell) : false;
                 const adjacent = isMineVal
                   ? 0
                   : countAdjacentMines(X, Y, cell);
@@ -756,7 +776,8 @@ export const useGameState = () => {
                     const worldKey = `${X * CHUNK + lX},${Y * CHUNK + lY}`;
 
                     const seed = seedCache.current.get(chunkKey);
-                    const isMineVal = seed ? isMine(seed, cell) : false;
+                    const d = densityCache.current.get(chunkKey);
+                    const isMineVal = seed && d != null ? isMineWith(seed, d, cell) : false;
                     const adjacent = isMineVal
                         ? 0
                         : countAdjacentMines(X, Y, cell);
@@ -843,7 +864,17 @@ export const useGameState = () => {
     connectWs,
     disconnect,
     worldToChunk,
-    isMine,
+    // New preferred mine test API using chunk coords
+    isMineAt: (cx, cy, cell) => {
+      const key = `${cx},${cy}`;
+      const seed = seedCache.current.get(key);
+      const d = densityCache.current.get(key);
+      if (!seed || d == null) return false;
+      return isMineWith(seed, d, cell);
+    },
+    isMine: (seed, cell) => false, // deprecated; kept for backward compatibility
+    // expose caches for minimap and other consumers
+    densityCache,
     // expose throttled view-update sender to App.jsx
     sendViewUpdateRef: sendViewUpdate,
     computeAndSendViewUpdate,

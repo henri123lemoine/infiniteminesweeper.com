@@ -92,6 +92,8 @@ message ChunkSync {
   bytes seed = 2; // The deterministic seed for mine generation.
   bytes reveals = 3; // Gzip-compressed bitmap of revealed cells.
   repeated FlagGroup flagGroups = 4;
+  // Per-chunk bomb density in [0,1]. The client must not recompute density.
+  float density = 5;
 }
 
 // A batch of chunk syncs describing a rectangular region of the world.

@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-func (s *Server) devRevealOriginArea() {
-	const radius = 10 // cells
+func (s *Server) devRevealOriginArea(radius int) {
 	r2 := radius * radius
 	for y := -radius; y <= radius; y++ {
 		for x := -radius; x <= radius; x++ {

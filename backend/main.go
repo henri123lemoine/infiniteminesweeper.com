@@ -16,7 +16,6 @@ var content embed.FS
 const (
 	ChunkSize   = 64
 	SendBufSize = 4096 // outbound msgs kept per player before back‑pressure
-	MineCount   = 20   // mines per 100 cells (20% chance)
 )
 
 func main() {
@@ -35,26 +34,31 @@ func main() {
 	server.initPersistence()
 
 	if os.Getenv("MODE") == "development" {
-		server.devRevealOriginArea()
+		server.devRevealOriginArea(30)
 		server.devAddTestUsers()
 
 		cfgs := []BotConfig{
+			// {
+			// 	Name:             "CalmBot",
+			// 	FlagID:           56,
+			// 	ActionsPerSecond: 5,
+			// },
+			// {
+			// 	Name:                "SpeedBot",
+			// 	FlagID:              38,
+			// 	ActionsPerSecond:    12,
+			// 	FailFlagProbability: 0.08,
+			// },
+			// {
+			// 	Name:                "BBot",
+			// 	FlagID:              69,
+			// 	ActionsPerSecond:    40,
+			// 	FailFlagProbability: 0.14,
+			// },
 			{
-				Name:             "CalmBot",
-				FlagID:           56,
-				ActionsPerSecond: 5,
-			},
-			{
-				Name:                "SpeedBot",
-				FlagID:              80,
-				ActionsPerSecond:    12,
-				FailFlagProbability: 0.08,
-			},
-			{
-				Name:                "BBot",
-				FlagID:              69,
-				ActionsPerSecond:    40,
-				FailFlagProbability: 0.14,
+				Name:             "OPBot",
+				FlagID:           80,
+				ActionsPerSecond: 50,
 			},
 		}
 		server.devStartCountingBots(cfgs)

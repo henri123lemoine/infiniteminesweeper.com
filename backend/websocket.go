@@ -600,11 +600,14 @@ func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
 		binary.LittleEndian.PutUint64(revealsBytes[i*8:], word)
 	}
 
+	density := s.getChunkDensity(chunkID)
+
 	cs := &pb.Msg{Payload: &pb.Msg_ChunkSync{ChunkSync: &pb.ChunkSync{
 		ChunkId:    &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
 		Seed:       seedBytes[:],
 		Reveals:    revealsBytes,
 		FlagGroups: flagGroups,
+		Density:    float32(density),
 	}}}
 
 	// Unlock the state mutex *before* sending data to avoid deadlocks.
@@ -672,11 +675,13 @@ func (s *Server) sendChunkRegionSync(playerID uint32, chunkIDs []ChunkID) {
 			binary.LittleEndian.PutUint64(revealsBytes[i*8:], word)
 		}
 
+		density := s.getChunkDensity(chunkID)
 		chunks = append(chunks, &pb.ChunkSync{
 			ChunkId:    &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
 			Seed:       seedBytes[:],
 			Reveals:    revealsBytes,
 			FlagGroups: flagGroups,
+			Density:    float32(density),
 		})
 	}
 

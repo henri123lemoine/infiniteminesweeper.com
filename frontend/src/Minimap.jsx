@@ -15,6 +15,7 @@ export default function Minimap({
   flaggedCellsRef,
   worldToChunk,
   isMine,
+  densityCache,
 }) {
   const miniRef = useRef(null);
   const [minimapChunks, setMinimapChunks] = useState(3); // 1→3→5 cycle
@@ -92,6 +93,7 @@ export default function Minimap({
         const cellKey = `${chunkX},${chunkY},${cellIndex}`;
         const flagKey = `${worldX},${worldY}`;
         const seed = seedCache.current.get(`${chunkX},${chunkY}`);
+        const density = densityCache.current.get(`${chunkX},${chunkY}`);
 
         let color = "#909090";
         const flagID = flaggedCellsRef.current.get(flagKey);
@@ -124,7 +126,7 @@ export default function Minimap({
                                 ? "#ffe8b3" // visible soft amber
                                 : "#e4e4e4"; // others
           }
-        } else if (seed && isMine(seed, cellIndex)) {
+        } else if (seed && density != null /* keep same minimal background logic */) {
           color = "#909090";
         }
 
