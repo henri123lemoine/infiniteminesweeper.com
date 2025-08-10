@@ -40,6 +40,7 @@ function App() {
     revealedCellsRef,
     flaggedCellsRef,
     playerFlagsRef,
+    chunkVersionRef,
     handleCellClick,
     ensureChunkSubscription,
     ensureChunkUnsubscription,
@@ -278,6 +279,7 @@ function App() {
       CELL_SIZE,
       revealedCellsRef,
       flaggedCellsRef,
+      chunkVersionRef,
       worldToChunk,
       getNumberColor,
       flagID,
@@ -880,9 +882,14 @@ function App() {
                             c.style.height = `${cssSize}px`;
                             ctx.imageSmoothingEnabled = false;
                             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                            rendererRef.current
-                              .drawSprite(ctx, row.flagID ?? 0, 0, 0, cssSize, cssSize)
-                              .catch(console.error);
+                            rendererRef.current.drawSprite(
+                              ctx,
+                              row.flagID ?? 0,
+                              0,
+                              0,
+                              cssSize,
+                              cssSize,
+                            );
                           }}
                           style={{ imageRendering: "pixelated" }}
                         />
@@ -1082,8 +1089,7 @@ function App() {
                           0,
                           cssSize,
                           cssSize,
-                        )
-                        .catch(console.error);
+                        );
                     }}
                     key={`flag-${p.name}-${playerFlagsRef.current.get(p.name) ?? 0}`}
                     style={{ marginRight: 6, verticalAlign: "middle", imageRendering: "pixelated" }}
