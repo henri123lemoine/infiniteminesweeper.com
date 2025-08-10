@@ -5,7 +5,8 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import Minimap from "./Minimap.jsx";
+import MinimapHUD from "./MinimapHUD.jsx";
+import MinimapOverlay from "./MinimapOverlay.jsx";
 import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
@@ -19,6 +20,7 @@ function App() {
   const [nameInput, setNameInput] = useState(storedName);
   const [hotspotInfo, setHotspotInfo] = useState(null);
   const [activeTab, setActiveTab] = useState("play"); // play | leaderboard | advancements
+  const [showMinimapOverlay, setShowMinimapOverlay] = useState(false);
   const [fullLeaderboard, setFullLeaderboard] = useState(null);
   const [lbLoading, setLbLoading] = useState(false);
   const lbLoadingRef = useRef(false);
@@ -49,6 +51,9 @@ function App() {
     worldToChunk,
     densityCache,
     sendViewUpdateRef,
+    updateMinimapSubscriptions,
+     clearMinimapSubscriptionsFor,
+    minimapTilesRef,
   } = useGameState();
 
   const canvasRef = useRef(null);
@@ -64,6 +69,7 @@ function App() {
   const rafRef = useRef(null);
   const guestCleanupRef = useRef(null);
   const userMovedRef = useRef(false);
+  const userHasDraggedRef = useRef(false);
 
   const commitViewRef = useCallback(() => {
     setViewX(viewRef.current.x);
@@ -84,6 +90,8 @@ function App() {
     [commitViewRef],
   );
   const [zoom, setZoom] = useState(1);
+  const [mainViewMoveToken, setMainViewMoveToken] = useState(0);
+  const bumpMainViewMove = useCallback(() => setMainViewMoveToken((t) => t + 1), []);
   const handleWheel = useCallback(
     (e) => {
       e.preventDefault();
@@ -101,7 +109,7 @@ function App() {
       const MAX_ZOOM = 5;
 
       // Smooth exponential zoom; negative deltaY -> zoom in
-      const zoomFactor = Math.exp(-e.deltaY * 0.001);
+      const zoomFactor = Math.exp(-e.deltaY * 0.0007);
 
       setZoom((prevZoom) => {
         const targetZoom = Math.min(
@@ -119,7 +127,7 @@ function App() {
         return targetZoom;
       });
     },
-    [containerRef, scheduleViewUpdate, connected],
+    [containerRef, scheduleViewUpdate, bumpMainViewMove]
   );
 
   // Attach non-passive wheel listener to prevent page scroll while zooming
@@ -212,7 +220,12 @@ function App() {
   }, []);
 
   // Constants
-  const MINIMAP_SIZE = 200;
+  const computeMinimapSize = useCallback(() => {
+    const shortSide = Math.min(window.innerWidth || 0, window.innerHeight || 0);
+    const target = shortSide * 0.22; // 22% of the shorter viewport side
+    return Math.round(Math.max(160, Math.min(360, target))); // clamp to [160, 360]
+  }, []);
+  const [MINIMAP_SIZE, setMINIMAP_SIZE] = useState(() => computeMinimapSize());
   const BASE_CELL_SIZE = 32;
   const CELL_SIZE = BASE_CELL_SIZE;
 
@@ -354,13 +367,15 @@ function App() {
 
       if (isDragging) {
         userMovedRef.current = true;
+        userHasDraggedRef.current = true;
         const deltaX = (e.clientX - dragStart.x) / zoom;
         const deltaY = (e.clientY - dragStart.y) / zoom;
 
         scheduleViewUpdate(dragStart.viewX - deltaX, dragStart.viewY - deltaY);
+        bumpMainViewMove();
       }
     },
-    [isDragging, dragStart, zoom, scheduleViewUpdate],
+    [isDragging, dragStart, zoom, scheduleViewUpdate, bumpMainViewMove],
   );
 
   const handleMouseUp = useCallback(
@@ -457,6 +472,7 @@ function App() {
 
         if (isDragging) {
           userMovedRef.current = true;
+          userHasDraggedRef.current = true;
           const deltaX = (touch.clientX - dragStart.x) / zoom;
           const deltaY = (touch.clientY - dragStart.y) / zoom;
 
@@ -464,10 +480,11 @@ function App() {
             dragStart.viewX - deltaX,
             dragStart.viewY - deltaY,
           );
+          bumpMainViewMove();
         }
       }
     },
-    [isDragging, dragStart, zoom, scheduleViewUpdate],
+    [isDragging, dragStart, zoom, scheduleViewUpdate, bumpMainViewMove],
   );
 
   const handleTouchEnd = useCallback(
@@ -554,7 +571,7 @@ function App() {
       }
 
       e.preventDefault(); // prevent page scroll
-      userMovedRef.current = true;
+      userMovedRef.current = true; // keyboard pan shouldn't trigger minimap recenter
       const dxPx = dxCells * CELL_SIZE;
       const dyPx = dyCells * CELL_SIZE;
       // ArrowRight increases viewX to move camera right; ArrowDown increases viewY
@@ -582,10 +599,13 @@ function App() {
   }, [connected, sendViewportUpdate, zoom]);
 
   useEffect(() => {
-    const onResize = () => sendViewportUpdate();
+    const onResize = () => {
+      sendViewportUpdate();
+      setMINIMAP_SIZE(computeMinimapSize());
+    };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, [sendViewportUpdate]);
+  }, [sendViewportUpdate, computeMinimapSize]);
 
   // Sync viewRef to sessionStorage
   useEffect(() => {
@@ -654,7 +674,7 @@ function App() {
     scheduleViewUpdate(newViewX, newViewY);
   }, [CELL_SIZE, zoom, scheduleViewUpdate]);
 
-  // Fetch hotspot to showcase activity on landing
+  // Fetch hotspot metadata (no auto-centering; user must drag to move the camera)
   useEffect(() => {
     let canceled = false;
     fetch("/hotspot")
@@ -662,17 +682,12 @@ function App() {
       .then(data => {
         if (canceled || !data) return;
         setHotspotInfo(data);
-        // Only auto-center if the user hasn't moved the camera yet
-        if (userMovedRef.current) return;
-        const chunkWorldX = data.X * CHUNK + CHUNK / 2;
-        const chunkWorldY = data.Y * CHUNK + CHUNK / 2;
-        requestAnimationFrame(() => centerCameraOnWorld(chunkWorldX, chunkWorldY));
       })
       .catch(() => {});
     return () => {
       canceled = true;
     };
-  }, [centerCameraOnWorld]);
+  }, []);
 
   // Auto-refresh home leaderboard while the tab is open
   useEffect(() => {
@@ -846,6 +861,21 @@ function App() {
           Home
         </button>
       )}
+      {showMinimapOverlay && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "#111", zIndex: 30 }}
+          onDoubleClick={() => setShowMinimapOverlay(false)}
+        >
+          <div style={{ position: "absolute", top: 8, right: 8, zIndex: 31 }}>
+            <button onClick={() => setShowMinimapOverlay(false)} style={{ padding: "6px 10px" }}>Close</button>
+          </div>
+          <MinimapOverlay
+            updateMinimapSubscriptions={updateMinimapSubscriptions}
+            clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
+            minimapTilesRef={minimapTilesRef}
+          />
+        </div>
+      )}
       {showHomeOverlay && (
         <div
           style={{
@@ -899,6 +929,7 @@ function App() {
               {[
                 { k: "play", label: "Play" },
                 { k: "leaderboard", label: "Leaderboard" },
+                { k: "minimap", label: "Minimap" },
                 { k: "advancements", label: "Advancements" },
               ].map((t) => (
                 <button
@@ -1054,6 +1085,16 @@ function App() {
               </div>
             )}
 
+            {activeTab === "minimap" && (
+              <div style={{ width: "100%", height: "72vh" }}>
+                <MinimapOverlay
+                  updateMinimapSubscriptions={updateMinimapSubscriptions}
+                  clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
+                  minimapTilesRef={minimapTilesRef}
+                />
+              </div>
+            )}
+
             {activeTab === "advancements" && (
               <div style={{ color: "#666" }}>
                 Coming soon: personal milestones, streaks, and discoveries.
@@ -1175,7 +1216,7 @@ function App() {
         </div>
       </div>
 
-      <Minimap
+      <MinimapHUD
         CHUNK={CHUNK}
         CELL_SIZE={CELL_SIZE}
         MINIMAP_SIZE={MINIMAP_SIZE}
@@ -1183,11 +1224,10 @@ function App() {
         viewX={viewX}
         viewY={viewY}
         containerRef={containerRef}
-        seedCache={seedCache}
-        revealedCellsRef={revealedCellsRef}
-        flaggedCellsRef={flaggedCellsRef}
-        worldToChunk={worldToChunk}
-        densityCache={densityCache}
+        updateMinimapSubscriptions={updateMinimapSubscriptions}
+        minimapTilesRef={minimapTilesRef}
+        onOpenOverlay={() => setShowMinimapOverlay(true)}
+        mainViewMoveToken={mainViewMoveToken}
       />
 
       <div className="leaderboard">

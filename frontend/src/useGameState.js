@@ -73,6 +73,24 @@ function decodeMsg(data) {
   return msg;
 }
 
+// bytes decoding helper (protobufjs toObject gives base64 strings for bytes)
+function b64ToU8(v) {
+  if (!v) return new Uint8Array(0);
+  if (v instanceof Uint8Array) return v;
+  if (Array.isArray(v)) return new Uint8Array(v);
+  if (typeof v === 'string') {
+    try {
+      const bin = atob(v);
+      const u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i) & 0xff;
+      return u8;
+    } catch {
+      return new Uint8Array(0);
+    }
+  }
+  return new Uint8Array(0);
+}
+
 // Deterministic helpers
 const splitmix64 = (state) => {
   state = (state + 0x9e3779b97f4a7c15n) & 0xffffffffffffffffn;
@@ -132,6 +150,98 @@ export const useGameState = () => {
   const [scorePopups, setScorePopups] = useState([]);
   const [hintPopups, setHintPopups] = useState([]);
   const [tick, setTick] = useState(0);
+
+  // Minimap streaming store and helpers
+  const minimapTilesRef = useRef(new Map()); // key "x,y" -> { version, data: Uint8Array, canvas }
+  // Union of active subscriptions actually sent to the server
+  const minimapActiveSubsRef = useRef(new Set());
+  // Desired subscriptions per logical source (e.g. 'hud', 'overlay')
+  const minimapDesiredBySourceRef = useRef(new Map()); // sourceKey -> Set("x,y")
+  // 0..9: board background, mines, numbers; 10..19: 10 flag colors
+  const minimapPalette = new Uint32Array(256);
+  // base board colors
+  minimapPalette[0] = 0xff808080; // unseen
+  // Use very dark gray for mines so pure black can be reserved for a flag color
+  minimapPalette[1] = 0xff202020; // mine (dark gray)
+  minimapPalette[2] = 0xffe0e0e0; // empty
+  minimapPalette[3] = 0xffe9ecff; // n1
+  minimapPalette[4] = 0xffe9ffea; // n2
+  minimapPalette[5] = 0xffffe9ea; // n3
+  minimapPalette[6] = 0xffececff; // n4
+  minimapPalette[7] = 0xfffff0ea; // n5
+  minimapPalette[8] = 0xffd4fff2; // n6
+  minimapPalette[9] = 0xfff0e4ff; // n7+ (slightly purple for contrast)
+  // 10 flag buckets must align with (flagID % 10) color mapping:
+  // 0: light_gray, 1: red, 2: green, 3: blue, 4: yellow,
+  // 5: orange, 6: purple, 7: cyan, 8: pink, 9: dark_gray (black)
+  const flagColors = [
+    0xffdcdcdc, // light_gray
+    0xffe31c1c, // red
+    0xff22c55e, // green
+    0xff2166f3, // blue
+    0xfff59e0b, // yellow
+    0xffff6b2c, // orange
+    0xffa855f7, // purple
+    0xff06b6d4, // cyan
+    0xffff69b4, // pink
+    0xff000000, // dark_gray / black
+  ];
+  for (let i = 0; i < 10; i++) minimapPalette[10 + i] = flagColors[i];
+
+  const minimapGetCanvas = useCallback((key) => {
+    const rec = minimapTilesRef.current.get(key);
+    if (!rec) return null;
+    if (rec.canvas) return rec.canvas;
+    const c = (typeof OffscreenCanvas !== 'undefined')
+      ? new OffscreenCanvas(CHUNK, CHUNK)
+      : (() => { const el = document.createElement('canvas'); el.width = CHUNK; el.height = CHUNK; return el; })();
+    rec.canvas = c;
+    return c;
+  }, []);
+
+  const minimapDrawFull = useCallback((key) => {
+    const rec = minimapTilesRef.current.get(key);
+    if (!rec) return;
+    const c = minimapGetCanvas(key);
+    const ctx = c.getContext('2d');
+    const img = ctx.createImageData(CHUNK, CHUNK);
+    const dst = img.data;
+    const data = rec.data;
+    let di = 0;
+    for (let i = 0; i < data.length; i++) {
+      const idx = data[i] & 0xff;
+      const color = minimapPalette[idx] >>> 0;
+      const a = (color >>> 24) & 0xff;
+      const r = (color >>> 16) & 0xff;
+      const g = (color >>> 8) & 0xff;
+      const b = (color) & 0xff;
+      dst[di++] = r; dst[di++] = g; dst[di++] = b; dst[di++] = a;
+    }
+    ctx.putImageData(img, 0, 0);
+  }, []);
+
+  const minimapDrawRect = useCallback((key, x, y, w, h) => {
+    const rec = minimapTilesRef.current.get(key);
+    if (!rec) return;
+    const c = minimapGetCanvas(key);
+    const ctx = c.getContext('2d');
+    const img = ctx.getImageData(x, y, w, h);
+    const dst = img.data;
+    let di = 0;
+    for (let row = 0; row < h; row++) {
+      const base = (y + row) * CHUNK + x;
+      for (let col = 0; col < w; col++) {
+        const idx = rec.data[base + col] & 0xff;
+        const color = minimapPalette[idx] >>> 0;
+        const a = (color >>> 24) & 0xff;
+        const r = (color >>> 16) & 0xff;
+        const g = (color >>> 8) & 0xff;
+        const b = (color) & 0xff;
+        dst[di++] = r; dst[di++] = g; dst[di++] = b; dst[di++] = a;
+      }
+    }
+    ctx.putImageData(img, x, y);
+  }, []);
 
   // Game state refs
   const seedCache = useRef(new Map());
@@ -602,6 +712,39 @@ export const useGameState = () => {
             applyChunkSync(cs);
           }
           setTick(t => t + 1);
+        } else if (type === "minimapFullTile") {
+          const tr = data.tile || {};
+          const key = `${tr.x},${tr.y}`;
+          const buf = b64ToU8(data.data);
+          const rec = { version: Number(data.version) || 0, data: new Uint8Array(buf) };
+          minimapTilesRef.current.set(key, rec);
+          minimapDrawFull(key);
+        } else if (type === "minimapTileDelta") {
+          const tr = data.tile || {};
+          const key = `${tr.x},${tr.y}`;
+          let rec = minimapTilesRef.current.get(key);
+          // If we haven't received a full tile yet, bootstrap an unseen tile and apply delta
+          if (!rec) {
+            rec = { version: 0, data: new Uint8Array(CHUNK * CHUNK) };
+            minimapTilesRef.current.set(key, rec);
+            // draw initial unseen background for this tile
+            minimapDrawFull(key);
+          }
+          const incVersion = Number(data.version) || 0;
+          if (incVersion <= (rec.version || 0)) return; // idempotent
+          const rects = Array.isArray(data.rects) ? data.rects : [];
+          for (const r of rects) {
+            const x = r.x|0, y = r.y|0, w = r.w|0, h = r.h|0;
+            const bytes = b64ToU8(r.rows || []);
+            let src = 0;
+            for (let row = 0; row < h; row++) {
+              const base = (y + row) * CHUNK + x;
+              rec.data.set(bytes.subarray(src, src + w), base);
+              src += w;
+            }
+            minimapDrawRect(key, x, y, w, h);
+          }
+          rec.version = incVersion;
         } else if (type === "revealAck") {
           // `requestId` arrives as string (because we set `longs:"String"`).
           const reqRaw = data.requestId ?? data.request_id;
@@ -917,5 +1060,76 @@ export const useGameState = () => {
     densityCache,
     // expose throttled view-update sender to App.jsx
     sendViewUpdateRef: sendViewUpdate,
+    // Minimap streaming
+    minimapTilesRef,
+    updateMinimapSubscriptions: useCallback((centerWorldX, centerWorldY, widthCells, heightCells, marginTiles = 1, sourceKey = 'default') => {
+      const s = wsRef.current;
+      if (!s || s.readyState !== WebSocket.OPEN) return;
+
+      const tilesWide = Math.ceil(widthCells / CHUNK) + marginTiles * 2;
+      const tilesHigh = Math.ceil(heightCells / CHUNK) + marginTiles * 2;
+      const centerChunkX = Math.floor(centerWorldX / CHUNK);
+      const centerChunkY = Math.floor(centerWorldY / CHUNK);
+      const halfW = Math.floor(tilesWide / 2);
+      const halfH = Math.floor(tilesHigh / 2);
+      const startX = centerChunkX - halfW;
+      const startY = centerChunkY - halfH;
+
+      // Compute desired set for this source
+      const desiredForSource = new Set();
+      for (let y = 0; y < tilesHigh; y++) {
+        for (let x = 0; x < tilesWide; x++) {
+          desiredForSource.add(`${startX + x},${startY + y}`);
+        }
+      }
+      minimapDesiredBySourceRef.current.set(sourceKey, desiredForSource);
+
+      // Compute union of all sources
+      const union = new Set();
+      for (const set of minimapDesiredBySourceRef.current.values()) {
+        for (const k of set) union.add(k);
+      }
+
+      // Diff against active set we have on the server
+      const toAdd = [];
+      const toDel = [];
+      for (const k of union) if (!minimapActiveSubsRef.current.has(k)) toAdd.push(k);
+      for (const k of minimapActiveSubsRef.current) if (!union.has(k)) toDel.push(k);
+
+      if (toAdd.length) {
+        const tiles = toAdd.map(k => { const [x, y] = k.split(',').map(Number); return { x, y }; });
+        s.send(encodeMsg({ minimapSubscribe: { tiles } }));
+        toAdd.forEach(k => minimapActiveSubsRef.current.add(k));
+      }
+      if (toDel.length) {
+        const tiles = toDel.map(k => { const [x, y] = k.split(',').map(Number); return { x, y }; });
+        s.send(encodeMsg({ minimapUnsubscribe: { tiles } }));
+        toDel.forEach(k => minimapActiveSubsRef.current.delete(k));
+      }
+    }, []),
+    clearMinimapSubscriptionsFor: useCallback((sourceKey = 'default') => {
+      const s = wsRef.current;
+      if (!s || s.readyState !== WebSocket.OPEN) {
+        // Still clear local desired so next call recomputes union cleanly
+        minimapDesiredBySourceRef.current.delete(sourceKey);
+        return;
+      }
+      // Remove this source's desired set
+      minimapDesiredBySourceRef.current.delete(sourceKey);
+      // Recompute union
+      const union = new Set();
+      for (const set of minimapDesiredBySourceRef.current.values()) {
+        for (const k of set) union.add(k);
+      }
+      // Anything active but not in union should be unsubscribed
+      const toDel = [];
+      for (const k of minimapActiveSubsRef.current) if (!union.has(k)) toDel.push(k);
+      if (toDel.length) {
+        const tiles = toDel.map(k => { const [x, y] = k.split(',').map(Number); return { x, y }; });
+        s.send(encodeMsg({ minimapUnsubscribe: { tiles } }));
+        toDel.forEach(k => minimapActiveSubsRef.current.delete(k));
+      }
+    }, []),
   };
 };
+

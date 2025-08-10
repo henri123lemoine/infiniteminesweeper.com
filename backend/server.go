@@ -80,6 +80,11 @@ type Server struct {
 	proximityRadius int
 
 	upgrader websocket.Upgrader
+
+	// Minimap streaming state
+	minimapTiles      map[ChunkID]*MinimapTile            // tile data + version + dirty
+	minimapSubs       map[ChunkID]map[uint32]struct{}     // per-tile subscriber sets
+	minimapDirtyTiles map[ChunkID]struct{}               // tiles with pending dirties
 }
 
 func NewServer() *Server {
@@ -124,7 +129,12 @@ func NewServer() *Server {
 				return clean(u.Host) == clean(r.Host)
 			},
 		},
-	}
+
+		// Minimap
+		minimapTiles:      make(map[ChunkID]*MinimapTile),
+		minimapSubs:       make(map[ChunkID]map[uint32]struct{}),
+		minimapDirtyTiles: make(map[ChunkID]struct{}),
+    }
 }
 
 // generateSessionToken creates a new, cryptographically secure session token.

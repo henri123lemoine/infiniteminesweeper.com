@@ -175,5 +175,47 @@ message Msg {
     ChunkUpdateBroadcast chunkUpdateBroadcast = 9;
     Leaderboard leaderboard = 10;
     ChunkRegionSync chunkRegionSync = 11;
+
+    // Minimap streaming (client -> server)
+    SubscribeTiles minimapSubscribe = 12;
+    UnsubscribeTiles minimapUnsubscribe = 13;
+    ResendFull minimapResendFull = 14;
+
+    // Minimap streaming (server -> client)
+    FullTile minimapFullTile = 15;
+    TileDelta minimapTileDelta = 16;
   }
+}
+
+// Minimap Streaming
+// Fixed 64x64 tiles using 8-bit palette indices. Reliable & ordered.
+message TileRef {
+  sint32 x = 1; // chunk X
+  sint32 y = 2; // chunk Y
+}
+
+// Client → Server
+message SubscribeTiles { repeated TileRef tiles = 1; }
+message UnsubscribeTiles { repeated TileRef tiles = 1; }
+message ResendFull { TileRef tile = 1; }
+
+// Server → Client
+message FullTile {
+  TileRef tile = 1;
+  uint32 version = 2; // monotonically increasing per tile
+  bytes data = 3;     // 64*64 palette indices (raw)
+}
+
+message DeltaRect {
+  uint32 x = 1; // 0..63
+  uint32 y = 2; // 0..63
+  uint32 w = 3; // 1..64
+  uint32 h = 4; // 1..64
+  bytes rows = 5; // concatenated rows of palette indices (no RLE initially)
+}
+
+message TileDelta {
+  TileRef tile = 1;
+  uint32 version = 2; // version AFTER applying this delta
+  repeated DeltaRect rects = 3;
 }
