@@ -2,6 +2,20 @@ import meta from "./assets/spritesheet.json";
 import sheetUrl from "./assets/spritesheet.png?url";
 import { CHUNK } from "./useGameState.js";
 
+// Basic color buckets matching flag sprite groups (flagID % 10)
+const FLAG_COLORS = [
+  "#dcdcdc", // light_gray
+  "#e31c1c", // red
+  "#22c55e", // green
+  "#2166f3", // blue
+  "#f59e0b", // yellow
+  "#ff6b2c", // orange
+  "#a855f7", // purple
+  "#06b6d4", // cyan
+  "#ff69b4", // pink
+  "#000000", // dark_gray / black
+];
+
 export class CanvasRenderer {
   constructor() {
     this.canvasSizeRef = { w: 0, h: 0, dpr: 1 };
@@ -184,7 +198,8 @@ export class CanvasRenderer {
         const cellData = revealedCellsRef.current.get(prefix + cell);
         const wx = cx * CHUNK + lx;
         const wy = cy * CHUNK + ly;
-        const isFlagged = flaggedCellsRef.current.has(`${wx},${wy}`);
+        const flagForCell = flaggedCellsRef.current.get(`${wx},${wy}`);
+        const isFlagged = flagForCell !== undefined;
         const dx = lx * size;
         const dy = ly * size;
 
@@ -212,8 +227,8 @@ export class CanvasRenderer {
         }
         if (isFlagged) {
           // compact placeholder; main pass may overlay sprite when zoomed in
-          // TODO: make it the color of the flag; doesn't add cost, makes it look better
-          ctx.fillStyle = "#202020";
+          const color = FLAG_COLORS[Number(flagForCell) % FLAG_COLORS.length] || "#202020";
+          ctx.fillStyle = color;
           ctx.fillRect(dx + 1, dy + 1, size - 2, size - 2);
         }
       }
