@@ -90,6 +90,17 @@ function App() {
     [commitViewRef],
   );
   const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(1);
+  const zoomRafRef = useRef(null);
+  const scheduleZoomUpdate = useCallback((z) => {
+    zoomRef.current = z;
+    if (!zoomRafRef.current) {
+      zoomRafRef.current = requestAnimationFrame(() => {
+        zoomRafRef.current = null;
+        setZoom(zoomRef.current);
+      });
+    }
+  }, []);
   const [mainViewMoveToken, setMainViewMoveToken] = useState(0);
   const bumpMainViewMove = useCallback(() => setMainViewMoveToken((t) => t + 1), []);
   const handleWheel = useCallback(
@@ -110,23 +121,22 @@ function App() {
       // Smooth exponential zoom; negative deltaY -> zoom in
       const zoomFactor = Math.exp(-e.deltaY * 0.0007);
 
-      setZoom((prevZoom) => {
-        const targetZoom = Math.min(
-          Math.max(prevZoom * zoomFactor, MIN_ZOOM),
-          MAX_ZOOM,
-        );
+      const prevZoom = zoomRef.current;
+      const targetZoom = Math.min(
+        Math.max(prevZoom * zoomFactor, MIN_ZOOM),
+        MAX_ZOOM,
+      );
 
-        // Anchor the zoom on the mouse position for intuitive behavior
-        const worldX = viewRef.current.x + mouseX / prevZoom;
-        const worldY = viewRef.current.y + mouseY / prevZoom;
-        const newViewX = worldX - mouseX / targetZoom;
-        const newViewY = worldY - mouseY / targetZoom;
-        scheduleViewUpdate(newViewX, newViewY);
-
-        return targetZoom;
-      });
+      // Anchor the zoom on the mouse position for intuitive behavior
+      const worldX = viewRef.current.x + mouseX / prevZoom;
+      const worldY = viewRef.current.y + mouseY / prevZoom;
+      const newViewX = worldX - mouseX / targetZoom;
+      const newViewY = worldY - mouseY / targetZoom;
+      scheduleViewUpdate(newViewX, newViewY);
+      scheduleZoomUpdate(targetZoom);
+      bumpMainViewMove();
     },
-    [containerRef, scheduleViewUpdate, bumpMainViewMove]
+    [containerRef, scheduleViewUpdate, scheduleZoomUpdate, bumpMainViewMove]
   );
 
   // Attach non-passive wheel listener to prevent page scroll while zooming
