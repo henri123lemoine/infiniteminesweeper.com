@@ -66,6 +66,8 @@ function App() {
   const [viewX, setViewX] = useState(storedViewX);
   const [viewY, setViewY] = useState(storedViewY);
   const viewRef = useRef({ x: storedViewX, y: storedViewY });
+  // Zoom: use ref for frame-accurate math/rendering, state for UI/re-renders
+  const zoomRef = useRef(1);
   const rafRef = useRef(null);
   const guestCleanupRef = useRef(null);
   const userMovedRef = useRef(false);
@@ -110,21 +112,19 @@ function App() {
       // Smooth exponential zoom; negative deltaY -> zoom in
       const zoomFactor = Math.exp(-e.deltaY * 0.0007);
 
-      setZoom((prevZoom) => {
-        const targetZoom = Math.min(
-          Math.max(prevZoom * zoomFactor, MIN_ZOOM),
-          MAX_ZOOM,
-        );
+      const prevZoom = zoomRef.current;
+      const targetZoom = Math.min(Math.max(prevZoom * zoomFactor, MIN_ZOOM), MAX_ZOOM);
 
-        // Anchor the zoom on the mouse position for intuitive behavior
-        const worldX = viewRef.current.x + mouseX / prevZoom;
-        const worldY = viewRef.current.y + mouseY / prevZoom;
-        const newViewX = worldX - mouseX / targetZoom;
-        const newViewY = worldY - mouseY / targetZoom;
-        scheduleViewUpdate(newViewX, newViewY);
+      // Anchor the zoom on the mouse position for intuitive behavior
+      const worldX = viewRef.current.x + mouseX / prevZoom;
+      const worldY = viewRef.current.y + mouseY / prevZoom;
+      const newViewX = worldX - mouseX / targetZoom;
+      const newViewY = worldY - mouseY / targetZoom;
 
-        return targetZoom;
-      });
+      // Update ref immediately for in-frame math/rendering; state for UI/re-render
+      zoomRef.current = targetZoom;
+      scheduleViewUpdate(newViewX, newViewY);
+      setZoom(targetZoom);
     },
     [containerRef, scheduleViewUpdate, bumpMainViewMove]
   );
@@ -235,8 +235,9 @@ function App() {
       if (!container) return { x: 0, y: 0 };
 
       const rect = container.getBoundingClientRect();
-      const canvasX = (screenX - rect.left) / zoom;
-      const canvasY = (screenY - rect.top) / zoom;
+      const z = zoomRef.current;
+      const canvasX = (screenX - rect.left) / z;
+      const canvasY = (screenY - rect.top) / z;
 
       // Convert canvas pixels to world coordinates
       const worldX = Math.floor((canvasX + viewRef.current.x) / CELL_SIZE);
@@ -244,7 +245,7 @@ function App() {
 
       return { x: worldX, y: worldY };
     },
-    [zoom, CELL_SIZE],
+    [CELL_SIZE],
   );
 
   // Add getNumberColor for Minesweeper number coloring
@@ -285,7 +286,7 @@ function App() {
       canvasRef,
       containerRef,
       viewRef,
-      zoom,
+      zoom: zoomRef.current,
       tick,
       CELL_SIZE,
       revealedCellsRef,
@@ -295,7 +296,7 @@ function App() {
       getNumberColor,
       flagID,
     });
-  }, [tick, zoom, getNumberColor, worldToChunk, flagID]);
+  }, [tick, getNumberColor, worldToChunk, flagID]);
 
   // Instead of per-chunk subscribes, send a viewUpdate proportional to viewport
   const sendViewportUpdate = useCallback(() => {
@@ -305,18 +306,19 @@ function App() {
       const width = container?.clientWidth || window.innerWidth || 0;
       const height = container?.clientHeight || window.innerHeight || 0;
 
-      const worldWidthCells = Math.ceil(width / zoom / CELL_SIZE);
-      const worldHeightCells = Math.ceil(height / zoom / CELL_SIZE);
+      const z = zoomRef.current;
+      const worldWidthCells = Math.ceil(width / z / CELL_SIZE);
+      const worldHeightCells = Math.ceil(height / z / CELL_SIZE);
 
-      const centerWorldX = Math.floor((viewRef.current.x + (width / zoom) / 2) / CELL_SIZE);
-      const centerWorldY = Math.floor((viewRef.current.y + (height / zoom) / 2) / CELL_SIZE);
+      const centerWorldX = Math.floor((viewRef.current.x + (width / z) / 2) / CELL_SIZE);
+      const centerWorldY = Math.floor((viewRef.current.y + (height / z) / 2) / CELL_SIZE);
       const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
 
       if (typeof sendViewUpdateRef?.current === 'function') {
         sendViewUpdateRef.current(chunkX, chunkY, cell, worldWidthCells, worldHeightCells);
       }
     });
-  }, [connected, zoom, CELL_SIZE, worldToChunk]);
+  }, [connected, CELL_SIZE, worldToChunk]);
 
   // Mouse event handlers
   const handleMouseDown = useCallback(
@@ -367,14 +369,15 @@ function App() {
       if (isDragging) {
         userMovedRef.current = true;
         userHasDraggedRef.current = true;
-        const deltaX = (e.clientX - dragStart.x) / zoom;
-        const deltaY = (e.clientY - dragStart.y) / zoom;
+        const z = zoomRef.current;
+        const deltaX = (e.clientX - dragStart.x) / z;
+        const deltaY = (e.clientY - dragStart.y) / z;
 
         scheduleViewUpdate(dragStart.viewX - deltaX, dragStart.viewY - deltaY);
         bumpMainViewMove();
       }
     },
-    [isDragging, dragStart, zoom, scheduleViewUpdate, bumpMainViewMove],
+    [isDragging, dragStart, scheduleViewUpdate, bumpMainViewMove],
   );
 
   const handleMouseUp = useCallback(
@@ -472,8 +475,9 @@ function App() {
         if (isDragging) {
           userMovedRef.current = true;
           userHasDraggedRef.current = true;
-          const deltaX = (touch.clientX - dragStart.x) / zoom;
-          const deltaY = (touch.clientY - dragStart.y) / zoom;
+          const z = zoomRef.current;
+          const deltaX = (touch.clientX - dragStart.x) / z;
+          const deltaY = (touch.clientY - dragStart.y) / z;
 
           scheduleViewUpdate(
             dragStart.viewX - deltaX,
@@ -483,7 +487,7 @@ function App() {
         }
       }
     },
-    [isDragging, dragStart, zoom, scheduleViewUpdate, bumpMainViewMove],
+    [isDragging, dragStart, scheduleViewUpdate, bumpMainViewMove],
   );
 
   const handleTouchEnd = useCallback(
@@ -668,10 +672,11 @@ function App() {
     if (!container) return;
     const centerX = container.clientWidth / 2;
     const centerY = container.clientHeight / 2;
-    const newViewX = worldX * CELL_SIZE - centerX / zoom;
-    const newViewY = worldY * CELL_SIZE - centerY / zoom;
+    const z = zoomRef.current;
+    const newViewX = worldX * CELL_SIZE - centerX / z;
+    const newViewY = worldY * CELL_SIZE - centerY / z;
     scheduleViewUpdate(newViewX, newViewY);
-  }, [CELL_SIZE, zoom, scheduleViewUpdate]);
+  }, [CELL_SIZE, scheduleViewUpdate]);
 
   // Fetch hotspot metadata (no auto-centering; user must drag to move the camera)
   useEffect(() => {
@@ -751,12 +756,9 @@ function App() {
   const container = containerRef.current || { clientWidth: 0, clientHeight: 0 };
   const containerWidth = container.clientWidth;
   const containerHeight = container.clientHeight;
-  const centerWorldX = Math.floor(
-    (viewX + containerWidth / 2 / zoom) / CELL_SIZE,
-  );
-  const centerWorldY = Math.floor(
-    (viewY + containerHeight / 2 / zoom) / CELL_SIZE,
-  );
+  const debugZoom = zoomRef.current;
+  const centerWorldX = Math.floor((viewX + containerWidth / 2 / debugZoom) / CELL_SIZE);
+  const centerWorldY = Math.floor((viewY + containerHeight / 2 / debugZoom) / CELL_SIZE);
   const { chunkX: centerChunkX, chunkY: centerChunkY, cell: centerCell } = worldToChunk(
     centerWorldX,
     centerWorldY,
@@ -829,8 +831,9 @@ function App() {
             setNameInput(localStorage.getItem("username") || nameInput);
             // Suggest a contrasting flag based on visible flags near center
             try {
-              const centerX = Math.floor((viewRef.current.x + (containerRef.current?.clientWidth || 0) / 2 / zoom) / CELL_SIZE);
-              const centerY = Math.floor((viewRef.current.y + (containerRef.current?.clientHeight || 0) / 2 / zoom) / CELL_SIZE);
+              const z = zoomRef.current;
+              const centerX = Math.floor((viewRef.current.x + (containerRef.current?.clientWidth || 0) / 2 / z) / CELL_SIZE);
+              const centerY = Math.floor((viewRef.current.y + (containerRef.current?.clientHeight || 0) / 2 / z) / CELL_SIZE);
               const R = 8; // radius in cells to scan for flags
               const nearby = new Set();
               for (let dy = -R; dy <= R; dy++) {
@@ -1153,8 +1156,9 @@ function App() {
           {scorePopups.map((p) => {
             const vx = viewRef.current.x;
             const vy = viewRef.current.y;
-            const x = (p.worldX * CELL_SIZE - vx) * zoom;
-            const y = (p.worldY * CELL_SIZE - vy) * zoom;
+            const z = zoomRef.current;
+            const x = (p.worldX * CELL_SIZE - vx) * z;
+            const y = (p.worldY * CELL_SIZE - vy) * z;
             return (
               <div
                 key={p.id}
@@ -1175,8 +1179,9 @@ function App() {
           {hintPopups.map((h) => {
             const vx = viewRef.current.x;
             const vy = viewRef.current.y;
-            const x = (h.worldX * CELL_SIZE - vx) * zoom;
-            const y = (h.worldY * CELL_SIZE - vy) * zoom;
+            const z = zoomRef.current;
+            const x = (h.worldX * CELL_SIZE - vx) * z;
+            const y = (h.worldY * CELL_SIZE - vy) * z;
             return (
               <div
                 key={h.id}
