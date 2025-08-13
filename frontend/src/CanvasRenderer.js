@@ -339,7 +339,7 @@ export class CanvasRenderer {
 
     // Level of detail based on effective pixels per cell
     const effPx = CELL_SIZE * zoom * dpr;
-    const LOD = effPx < 8 ? 2 : effPx < 16 ? 1 : 0; // 0=full, 1=simple, 2=ultra-simple
+    const LOD = effPx < 8 ? 2 : effPx < 12 ? 1 : 0; // 0=full, 1=simple, 2=ultra-simple
 
     // Clear background
     ctx.fillStyle = "#c0c0c0";
@@ -434,22 +434,7 @@ export class CanvasRenderer {
       }
     }
 
-    // Overlay high-quality flag sprites when in mid LOD (LOD 1)
-    if (LOD === 1) {
-      const minX = startWorldX;
-      const minY = startWorldY;
-      const maxX = endWorldX;
-      const maxY = endWorldY;
-      flaggedCellsRef.current.forEach((flagForCell, key) => {
-        const comma = key.indexOf(",");
-        if (comma <= 0) return;
-        const wx = Number(key.slice(0, comma));
-        const wy = Number(key.slice(comma + 1));
-        if (wx < minX || wx >= maxX || wy < minY || wy >= maxY) return;
-        const screenX = wx * CELL_SIZE - viewRef.current.x;
-        const screenY = wy * CELL_SIZE - viewRef.current.y;
-        this.drawSprite(ctx, flagForCell, screenX, screenY, CELL_SIZE, CELL_SIZE);
-      });
-    }
+    // Note: Removed expensive sprite overlay in LOD 1 to fix performance bottleneck
+    // Flags are now only rendered as high-quality sprites in LOD 0 for smooth zoom behavior
   }
 }
