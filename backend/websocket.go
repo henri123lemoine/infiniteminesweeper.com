@@ -184,10 +184,26 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			// Valid name provided by client: reject if taken by someone else.
-			if _, ok := s.nameToPlayerID[chosenName]; ok {
-				s.stateMu.Unlock()
-				conn.Close()
-				return
+			if existingPlayerID, ok := s.nameToPlayerID[chosenName]; ok {
+				// Check if this is the same session trying to reconnect
+				if hello.SessionToken != "" {
+					if existingSessionPlayerID, sessionExists := s.sessionTokens[hello.SessionToken]; sessionExists && existingSessionPlayerID == existingPlayerID {
+						// Same player reconnecting with same name and valid session token
+						isNewPlayer = false
+						playerID = existingPlayerID
+						sessionToken = hello.SessionToken
+					} else {
+						// Different session token but same name - reject
+						s.stateMu.Unlock()
+						conn.Close()
+						return
+					}
+				} else {
+					// No session token and name is taken - reject
+					s.stateMu.Unlock()
+					conn.Close()
+					return
+				}
 			}
 		}
 

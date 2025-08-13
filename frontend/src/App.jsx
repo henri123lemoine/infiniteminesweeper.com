@@ -765,7 +765,7 @@ function App() {
   );
   const centerDensity = densityCache.current.get(`${centerChunkX},${centerChunkY}`);
 
-  const joinGame = useCallback(() => {
+  const joinGame = useCallback(async () => {
     setJoinError("");
     const trimmedName = (nameInput || "").trim();
     const valid = /^[A-Za-z0-9_-]{1,20}$/.test(trimmedName);
@@ -775,6 +775,25 @@ function App() {
     }
     const chosen = trimmedName;
     const token = localStorage.getItem("session_token");
+
+    // Check username availability first (unless we have a valid session token)
+    if (!token) {
+      try {
+        const response = await fetch("/username/check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: chosen }),
+        });
+        const result = await response.json();
+        if (!result.available) {
+          setJoinError(result.error || "That username is taken. Try another.");
+          return;
+        }
+      } catch (err) {
+        // If username check fails, proceed anyway - server will handle it
+        console.warn("Username check failed:", err);
+      }
+    }
 
     if (token) {
       // Ensure spectator WS is closed before promoting to player

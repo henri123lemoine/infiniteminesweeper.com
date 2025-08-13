@@ -321,3 +321,43 @@ func (s *Server) handleProfileUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 }
+
+type usernameCheckReq struct {
+	Name string `json:"name"`
+}
+
+type usernameCheckResp struct {
+	Available bool   `json:"available"`
+	Error     string `json:"error,omitempty"`
+}
+
+// handleUsernameCheck validates if a username is available for use
+func (s *Server) handleUsernameCheck(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(usernameCheckResp{Available: false, Error: "method not allowed"})
+		return
+	}
+
+	var req usernameCheckReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(usernameCheckResp{Available: false, Error: "invalid json"})
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if !isValidUsername(name) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(usernameCheckResp{Available: false, Error: "invalid username format"})
+		return
+	}
+
+	s.stateMu.RLock()
+	_, taken := s.nameToPlayerID[name]
+	s.stateMu.RUnlock()
+
+	resp := usernameCheckResp{Available: !taken}
+	_ = json.NewEncoder(w).Encode(resp)
+}

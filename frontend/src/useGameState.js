@@ -654,7 +654,7 @@ export const useGameState = () => {
         });
       };
 
-      websocket.onclose = () => {
+      websocket.onclose = (event) => {
         setConnected(false);
         setWs(null);
         wsRef.current = null;
@@ -667,6 +667,10 @@ export const useGameState = () => {
         // reset username so the join dialog is shown again.
         if (!didWelcome) {
           setUsername("");
+          // Clear any stale session token if authentication failed
+          if (event.code === 1006 || event.code === 1000) {
+            localStorage.removeItem("session_token");
+          }
         }
       };
 

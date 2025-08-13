@@ -69,6 +69,7 @@ func main() {
 	http.HandleFunc("/hotspot", server.handleHotspot)
 	http.HandleFunc("/leaderboard", server.handleLeaderboardHTTP)
 	http.HandleFunc("/profile/update", server.handleProfileUpdate)
+	http.HandleFunc("/username/check", server.handleUsernameCheck)
 	distFS, _ := fs.Sub(content, "dist")
 	http.Handle("/", http.FileServer(http.FS(distFS)))
 
