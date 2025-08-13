@@ -24,7 +24,6 @@ function App() {
   const [fullLeaderboard, setFullLeaderboard] = useState(null);
   const [lbLoading, setLbLoading] = useState(false);
   const lbLoadingRef = useRef(false);
-  const [lbFollowMe, setLbFollowMe] = useState(true);
   const myLbRowRef = useRef(null);
   const [joinError, setJoinError] = useState("");
 
@@ -128,6 +127,14 @@ function App() {
     },
     [containerRef, scheduleViewUpdate, bumpMainViewMove]
   );
+
+  // Handle scroll to user's position in leaderboard
+  const scrollToMyPosition = useCallback(() => {
+    const el = myLbRowRef.current;
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, []);
 
   // Attach non-passive wheel listener to prevent page scroll while zooming
   useEffect(() => {
@@ -713,15 +720,6 @@ function App() {
     }
   }, [showHomeOverlay, activeTab, fetchHomeLeaderboard]);
 
-  // Keep my row centered if "Follow me" is enabled
-  useEffect(() => {
-    if (!showHomeOverlay || activeTab !== "leaderboard") return;
-    if (!lbFollowMe) return;
-    const el = myLbRowRef.current;
-    if (el && typeof el.scrollIntoView === "function") {
-      el.scrollIntoView({ block: "center" });
-    }
-  }, [fullLeaderboard, showHomeOverlay, activeTab, lbFollowMe]);
 
   // Open a passive spectator WebSocket until the user joins (no identity).
   useEffect(() => {
@@ -1025,14 +1023,19 @@ function App() {
                       <>Players: {fullLeaderboard.length}</>
                     )}
                   </div>
-                  <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-                    <input
-                      type="checkbox"
-                      checked={lbFollowMe}
-                      onChange={(e) => setLbFollowMe(e.target.checked)}
-                    />
-                    Follow me
-                  </label>
+                  <button
+                    style={{
+                      fontSize: 12,
+                      padding: "4px 8px",
+                      border: "1px solid #ccc",
+                      borderRadius: 4,
+                      background: "#f9f9f9",
+                      cursor: "pointer",
+                    }}
+                    onClick={scrollToMyPosition}
+                  >
+                    Find me
+                  </button>
                 </div>
                 {lbLoading && fullLeaderboard == null && <p>Loading leaderboard…</p>}
                 {!lbLoading && fullLeaderboard && fullLeaderboard.length === 0 && <p>No players yet.</p>}
