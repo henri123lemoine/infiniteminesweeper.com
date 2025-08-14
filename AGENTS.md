@@ -1,4 +1,210 @@
-# Technical Specification: Infinite Minesweeper Real-Time Logic
+# AGENTS.md / CLAUDE.md
+
+This file provides guidance to AI agents (including Claude Code) when working with code in this repository.
+
+## Essential Commands
+
+### Development
+
+- `make go-run` - Build and run the full application locally (includes frontend build)
+- `make docker-run` - Build and run in Docker container with volume mount
+- `MODE=production make docker-run` - Run production build in Docker
+- `SNAPFREE=1 make go-run` - Run with clean state (removes snapshot/WAL)
+
+### Build System
+
+- `make proto` - Generate Go and JS protobuf stubs from `proto/messages.proto`
+- `make spritesheet` - Generate sprite assets (requires Python + uv)
+- `make frontend-build` - Build React frontend with Vite
+- `make go-build` - Build Go backend binary
+- `make deps` - Install all dependencies (Go modules + npm packages)
+
+### Testing & Deployment
+
+- `go test ./...` - Run all tests except compression benchmarks
+- `RUN_COMPRESSION_BENCH=1 go test ./...` - Include compression benchmarks
+- `make deploy` - Run tests and deploy to Fly.io
+
+## Architecture Overview
+
+This is a real-time multiplayer infinite minesweeper game with a client-server architecture using a **Command/Event-Stream** model.
+
+### Core Concepts
+
+- **Chunk-based World**: 64×64 cell chunks form the infinite game board
+- **Server-Authoritative**: All game state lives on the server; clients perform optimistic updates
+- **Real-time Updates**: WebSocket-based communication with subscriptions to chunks
+- **Persistence**: Write-Ahead Logging (WAL) to S3 or local disk with periodic snapshots
+- **Authentication**: Server-issued session token model to prevent player impersonation
+
+### Data Structures
+
+- **Chunk**: A 64x64 grid of cells, forming the base unit of the world
+- **Chunk Coordinates**: A 2D coordinate (sint64 X, sint64 Y) identifying a unique Chunk
+- **Cell Index**: A uint32 value from 0 to 4095 representing a specific cell within a chunk, calculated as y * 64 + x
+- **Subscription Model**: Players maintain a dynamic list of chunks they are subscribed to for real-time updates
+
+### Backend (Go)
+
+- **Entry Point**: `backend/main.go` - HTTP server with embedded frontend
+- **Core Logic**: `backend/server.go` - Game state, WebSocket handling, authentication
+- **Game Rules**: `backend/game.go` - Minesweeper logic, reveal/flag operations
+- **Persistence**: `backend/persistence.go` - WAL and snapshot management
+- **Protocol**: Generated from `proto/messages.proto` using Protocol Buffers
+
+### Frontend (React + Vite)
+
+- **Main App**: `frontend/src/App.jsx` - Game UI, viewport management, WebSocket client
+- **Rendering**: `frontend/src/CanvasRenderer.js` - High-performance canvas-based rendering
+- **Game State**: `frontend/src/useGameState.js` - WebSocket client and optimistic updates
+- **Components**: Minimap, leaderboard, flag selector, overlays
+
+### Key Data Flow
+
+1. **Client Commands**: Sent via WebSocket as `Reveal` messages with optimistic local updates
+2. **Server Processing**: Validates commands, updates authoritative state, writes to WAL
+3. **Response Flow**: `RevealAck` to originating client + `ChunkUpdateBroadcast` to all subscribers
+4. **Reconciliation**: Client merges server responses with optimistic state piece-by-piece
+
+## Development Workflow
+
+### Environment Setup
+
+Create three environment files from `.env.example`:
+
+- `.env.shared` - Common variables
+- `.env.development` - Dev overrides (local paths, verbose logging)
+- `.env.production` - Prod overrides (S3 credentials, etc.)
+
+### Local Development
+
+1. `make deps` - Install dependencies
+2. `make go-run` - Start server at http://localhost:8080
+3. Backend serves embedded frontend; changes require rebuild
+
+### Protocol Changes
+
+When modifying `proto/messages.proto`:
+
+1. Run `make proto` to regenerate Go and JS code
+2. Update client/server message handling accordingly
+3. Consider backward compatibility for production
+
+### Asset Pipeline
+
+- Raw sprites in `frontend/assets/raw/`
+- Sprite configuration in `frontend/assets/sprites.yaml`
+- Generated assets in `frontend/src/assets/` (git-tracked)
+- Python script generates spritesheets automatically during build
+
+## Code Architecture Notes
+
+### State Management
+
+- **Server State**: Single mutex protects all world state in `server.go`
+- **Client State**: React refs for performance-critical data, state for UI updates
+- **Optimistic Updates**: Tracked by request ID for precise reconciliation
+
+### Performance Optimizations
+
+- **Single-Core Design**: `GOMAXPROCS(1)` for predictable performance
+- **Chunk Subscriptions**: Dynamic loading based on viewport
+- **Canvas Rendering**: Direct pixel manipulation with sprite atlases
+- **Compression**: gzip + LZ4 for persistence and network
+
+### Critical Files
+
+- `backend/server.go:90-138` - Server initialization and core state
+- `backend/game.go` - Game logic (reveal, flag, flood-fill)
+- `frontend/src/useGameState.js` - WebSocket client with optimistic updates
+- `frontend/src/CanvasRenderer.js` - High-performance rendering engine
+- `proto/messages.proto` - Complete client-server protocol
+
+## Testing Strategy
+
+### Go Tests
+
+- Unit tests for game logic, persistence, compression
+- Benchmarks for performance-critical paths
+- Use `go test -v ./...` for verbose output
+
+### Manual Testing
+
+- Multi-client behavior (multiple browser tabs)
+- Network resilience (disconnect/reconnect)
+- Cross-chunk operations (flood-fill across boundaries)
+- Persistence recovery (restart with existing data)
+
+## Deployment Architecture
+
+### Fly.io Production
+
+- Multi-stage Dockerfile builds React app + Go binary
+- Volume mounted at `/data` for persistence
+- AWS S3 integration for WAL/snapshots in production
+- Environment secrets managed via `fly secrets`
+
+### Docker Development
+
+- Mounts `./data` directory for local persistence
+- Environment files merged at runtime
+- Consistent with production environment
+
+## Technical Implementation Details
+
+### Server-Side Logic Implementation
+
+**NOTE**: Some sections may be out of date with buggy behavior. See https://github.com/henri123lemoine/infiniteminesweeper.com/issues/112
+
+#### Connection & Authentication (handleWebSocket)
+
+The server MUST establish and verify player identity. The client is never trusted to declare its own ID.
+
+**Authentication Logic:**
+- If session_token is present: Look up in sessionTokens map, assign existing playerID
+- If session_token is empty/not found: Generate new playerID and sessionToken, initialize player state
+- Send Welcome message with session_token (but not internal playerID)
+
+#### Subscription Management
+
+Players dynamically subscribe/unsubscribe from chunks based on viewport. Server maintains chunk-to-subscribers mapping for efficient broadcasting.
+
+#### Authoritative Command Handler (handleReveal)
+
+Processes Reveal commands under global state mutex:
+
+1. **Command Validation**: Check user intent vs cell state (right-click, chord, standard reveal)
+2. **Process Command**: Execute game logic based on intent
+3. **Generate Events**: Create state changes for affected chunks, update WAL
+4. **Dispatch Responses**: Send RevealAck to originator, ChunkUpdateBroadcast to subscribers
+
+### Client-Side Logic Implementation
+
+#### Connection & Authentication
+- Read session_token from localStorage on start
+- Send Hello message with token
+- Handle Welcome message by updating localStorage
+
+#### Subscription Management
+- Dynamic chunk subscription based on viewport
+- Maintain local subscribed chunks set
+
+#### Optimistic Command Flow (handleCellClick)
+- Generate unique request_id
+- Perform bounded optimistic updates (subscribed chunks only)
+- Send Reveal message to server
+
+#### Intelligent Piecewise Reconciliation (onmessage)
+
+**RevealAck Handling:**
+- Reconcile primary chunk from optimistic state
+- Apply authoritative outcome, update score
+- Keep request_id if other chunks still pending
+
+**ChunkUpdateBroadcast Handling:**
+- Check if part of pending optimistic action
+- Undo optimistic changes, apply authoritative changes
+- Clean up completed reconciliations
 
 ## Project Structure
 
@@ -98,183 +304,3 @@ Note that non-git-tracked files are not included in this tree. Some examples are
 
 12 directories, 77 files
 ```
-
-## 1. Architectural Overview
-
-The system employs a server-authoritative architecture with an optimistic client-side UI using a **Command/Event-Stream** model.
-
-The Server is the single source of truth for all game state, including revealed cells, flags, and scores. It processes commands from clients and emits state change events to all relevant subscribers.
-
-The Client issues commands to the server and consumes a stream of state change events. It performs optimistic updates for immediate feedback, then reconciles its state piece-by-piece as authoritative events arrive from the server.
-
-Authentication is handled via a server-issued session token model to prevent player impersonation.
-
-## 2. Data Structures and Definitions
-
-**Chunk**: A 64x64 grid of cells, forming the base unit of the world.
-
-**Chunk Coordinates**: A 2D coordinate (sint64 X, sint64 Y) identifying a unique Chunk.
-
-**Cell Index**: A uint32 value from 0 to 4095 representing a specific cell within a chunk, calculated as y \* 64 + x.
-
-**Subscription Model**: Players maintain a dynamic list of chunks they are subscribed to for real-time updates.
-
-## 3. Protocol Buffers Definition (messages.proto)
-
-Definitions are found in `proto/messages.proto`.
-
-## 4. Server-Side Logic Implementation
-
-NOTE: This section may currently be out of date, and has buggy behavior. An issue has been created to track this: `https://github.com/henri123lemoine/infiniteminesweeper.com/issues/112`
-
-### 4.1. Connection & Authentication (handleWebSocket)
-
-The server MUST establish and verify player identity. The client is never trusted to declare its own ID.
-
-Upon a new WebSocket connection, receive the initial Hello message.
-
-Extract the session_token from the Hello message.
-
-**Authentication Logic:**
-
-If session_token is present and non-empty:
-
-- Look up the token in the server's sessionTokens map (map[string]int32).
-- If a corresponding playerID is found, the session is authenticated. Assign this playerID to the connection.
-
-If session_token is empty or not found in the map:
-
-- This is a new player. Generate a new, unique, internal playerID (e.g., from an incrementing counter).
-- Generate a new, cryptographically secure sessionToken (e.g., a UUID v4 or a random 32-byte string).
-- Store the mapping: sessionTokens[<new_token>] = <new_playerID>. This MUST be persisted in snapshots.
-- Initialize the new player's state (name, flagID, score=0) in the server's state maps.
-- Assign this playerID to the connection.
-
-**Welcome Message:**
-
-Send a Welcome message to the client. This message MUST contain the session_token but should NOT expose the internal playerID. The client only needs its session token for authentication.
-
-### 4.2. Subscription Management
-
-Players dynamically subscribe and unsubscribe from chunks based on their viewport. The server maintains a mapping of chunks to their subscribers for efficient broadcasting.
-
-When a Subscribe message is received, add the player to the subscriber list for that chunk.
-
-When an Unsubscribe message is received, remove the player from the subscriber list for that chunk.
-
-### 4.3. Authoritative Command Handler (handleReveal)
-
-This function processes Reveal commands and generates the resulting state change events.
-
-**Acquire Lock**: The function must operate under a global state mutex to ensure atomicity.
-
-**Command Validation:**
-
-Perform validation based on user intent and cell state:
-
-- Right-clicking a revealed cell is invalid.
-- Standard left-clicking a revealed cell is invalid unless it's a chord action.
-- Chord actions are only valid on revealed cells.
-
-**Process Command:**
-
-Execute the game logic based on the command intent:
-
-If is_right_click is true:
-
-- Determine if the target cell contains a mine.
-- If it is a mine: Create a flag and calculate score bonus.
-- If it is not a mine: Reveal the cell and calculate score penalty.
-
-Else if is_chord is true:
-
-- Validate that adjacent mine count equals adjacent flag count.
-- If valid, reveal all adjacent un-flagged, un-revealed cells.
-- Process each revealed cell (mine hit, number reveal, or flood-fill trigger).
-
-Else (Standard Reveal):
-
-- If the cell is a mine, calculate penalty and reveal it.
-- If the cell is safe with adjacent mines > 0, reveal it with +1 score.
-- If the cell is safe with no adjacent mines, execute flood-fill logic.
-
-**Generate Events:**
-
-Create state change events for all affected chunks:
-
-- Update player score in global state.
-- Update chunk bitmap states for all revealed cells.
-- Add or remove flags as appropriate.
-- Write all changes to the Write-Ahead Log (WAL).
-
-**Dispatch Responses:**
-
-Send RevealAck to the commanding player:
-
-- Include request_id, ok status, and score_update.
-- Include the primary chunk's changes in the outcome field for immediate reconciliation.
-
-Generate ChunkUpdateBroadcast events:
-
-- For each modified chunk, create a broadcast containing all state changes.
-- Send to all players subscribed to that chunk (including the original actor for secondary chunks).
-
-## 5. Client-Side Logic Implementation
-
-NOTE: This section may currently be out of date, and has buggy behavior. An issue has been created to track this: `https://github.com/henri123lemoine/infiniteminesweeper.com/issues/112`
-
-### 5.1. Connection & Authentication
-
-On application start, attempt to read session_token from localStorage.
-
-When opening a WebSocket connection, send a Hello message containing the token (or an empty string if none was found).
-
-Implement a handler for the Welcome message. Upon receiving it, unconditionally overwrite any existing session_token in localStorage with the one provided by the server.
-
-### 5.2. Subscription Management
-
-Dynamically subscribe to chunks based on viewport changes. Send Subscribe/Unsubscribe messages as the player's view moves through the world.
-
-Maintain a local set of subscribed chunks to optimize reconciliation logic.
-
-### 5.3. Optimistic Command Flow (handleCellClick)
-
-When a user clicks a cell, generate a new, unique request_id.
-
-**Perform Bounded Optimistic Update:**
-
-- Execute game logic locally, but only for chunks the client is subscribed to.
-- Store results in optimisticActions as a map of chunk coordinates to changed cells within those chunks.
-- Apply visual changes immediately for subscribed chunks only.
-- Do not attempt to predict changes for chunks the client doesn't have seed data for.
-
-**Send Command**: Send the Reveal message to the server with the request_id and action details.
-
-### 5.4. Intelligent Piecewise Reconciliation (onmessage)
-
-**RevealAck Handling:**
-
-- Find the request_id and corresponding optimistic changes.
-- Reconcile only the primary chunk mentioned in the RevealAck:
-  - Undo optimistic changes for that specific chunk.
-  - Apply authoritative outcome from the message.
-  - Update player's global score.
-- Remove the reconciled chunk from the optimistic change set.
-- Keep the request_id entry if other chunks were optimistically modified.
-
-**ChunkUpdateBroadcast Handling:**
-
-- Check if the broadcast chunk is part of any pending optimistic action.
-- If yes (part of client's own action):
-  - Undo optimistic changes for that specific chunk.
-  - Apply authoritative changes from the broadcast.
-  - Remove the reconciled chunk from the optimistic set.
-- If no (another player's action):
-  - Apply changes directly to game state.
-- If all chunks for a request_id have been reconciled, delete the optimistic action entry.
-
-**Final Cleanup:**
-
-After each reconciliation step, check if any optimistic action sets are now empty and clean them up.
-
-This approach ensures the client's visual state converges to server truth piece-by-piece, handling large cross-chunk actions gracefully while maintaining immediate feedback for the user's viewport.
