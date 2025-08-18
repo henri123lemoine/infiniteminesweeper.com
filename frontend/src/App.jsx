@@ -917,6 +917,8 @@ function App() {
               width: "90vw",
               height: "90vh",
               overflow: "auto",
+              WebkitOverflowScrolling: "touch",
+              touchAction: "pan-y",
             }}
             onMouseDown={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
@@ -1042,7 +1044,13 @@ function App() {
                 {lbLoading && fullLeaderboard == null && <p>Loading leaderboard…</p>}
                 {!lbLoading && fullLeaderboard && fullLeaderboard.length === 0 && <p>No players yet.</p>}
                 {!lbLoading && Array.isArray(fullLeaderboard) && fullLeaderboard.length > 0 && (
-                  <ol style={{ maxHeight: "60vh", overflow: "auto", paddingRight: 8 }}>
+                  <ol style={{ 
+                    maxHeight: "60vh", 
+                    overflow: "auto", 
+                    paddingRight: 8,
+                    WebkitOverflowScrolling: "touch",
+                    scrollbarWidth: "thin"
+                  }}>
                     {fullLeaderboard.map((row) => {
                       const myName = (localStorage.getItem("username") || username || "").trim();
                       const isMe = myName && row.name === myName;
