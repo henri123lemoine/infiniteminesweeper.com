@@ -20,4 +20,5 @@ backend/gen/proto/
 frontend/src/gen/
 
 # Misc
-.llm_info
+.claude
+
