@@ -6,8 +6,8 @@ on:
     branches: [main]
 
 jobs:
-  go-tests:
-    name: Go Tests
+  backend-and-frontend:
+    name: Backend and Frontend Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -38,7 +38,17 @@ jobs:
           mkdir -p backend/dist
           echo placeholder > backend/dist/.keep
 
-      - name: Test (fast tests only)
+      - name: Run Go tests
         env:
           RUN_COMPRESSION_BENCH: "0"
         run: go test ./...
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run frontend checks
+        run: |
+          node frontend/tests/run-frontend-tests.mjs
+          node frontend/tests/unit-helpers.mjs
