@@ -25,6 +25,14 @@ export default function MinimapHUD({
   const mmRef = useRef(mmView);
   const draggingRef = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
+  
+  // Touch state for minimap pinch-to-zoom
+  const mmTouchStateRef = useRef({
+    touches: [],
+    initialDistance: 0,
+    initialCells: 0,
+    initialCenter: { cx: 0, cy: 0 },
+  });
 
   const paint = useCallback(() => {
     const canvas = canvasRef.current;
@@ -179,35 +187,106 @@ export default function MinimapHUD({
 
     // Touch event handlers for mobile support
     const onTouchStart = (e) => {
-      if (e.touches.length === 1) {
-        e.preventDefault();
-        const touch = e.touches[0];
-        lastMmInteractionAtRef.current = performance.now();
+      e.preventDefault();
+      lastMmInteractionAtRef.current = performance.now();
+
+      const touches = Array.from(e.touches).map(t => ({
+        id: t.identifier,
+        x: t.clientX,
+        y: t.clientY,
+      }));
+
+      mmTouchStateRef.current.touches = touches;
+
+      if (touches.length === 1) {
+        // Single touch for panning
         draggingRef.current = true;
-        lastPosRef.current = { x: touch.clientX, y: touch.clientY };
+        lastPosRef.current = { x: touches[0].x, y: touches[0].y };
+      } else if (touches.length === 2) {
+        // Two finger pinch for zoom
+        draggingRef.current = false;
+        const dx = touches[1].x - touches[0].x;
+        const dy = touches[1].y - touches[0].y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        mmTouchStateRef.current.initialDistance = distance;
+        mmTouchStateRef.current.initialCells = mmRef.current.cells;
+        mmTouchStateRef.current.initialCenter = { cx: mmRef.current.cx, cy: mmRef.current.cy };
       }
     };
+
     const onTouchMove = (e) => {
-      if (!draggingRef.current || e.touches.length !== 1) return;
       e.preventDefault();
-      const touch = e.touches[0];
       lastMmInteractionAtRef.current = performance.now();
-      const dx = touch.clientX - lastPosRef.current.x;
-      const dy = touch.clientY - lastPosRef.current.y;
-      lastPosRef.current = { x: touch.clientX, y: touch.clientY };
-      const cells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, mmRef.current.cells));
-      const scale = MINIMAP_SIZE / cells;
-      mmRef.current = { cx: mmRef.current.cx - dx / scale, cy: mmRef.current.cy - dy / scale, cells };
-      setMmView(mmRef.current);
-      paint();
+
+      const touches = Array.from(e.touches).map(t => ({
+        id: t.identifier,
+        x: t.clientX,
+        y: t.clientY,
+      }));
+
+      if (touches.length === 1 && draggingRef.current) {
+        // Single touch panning
+        const touch = touches[0];
+        const dx = touch.x - lastPosRef.current.x;
+        const dy = touch.y - lastPosRef.current.y;
+        lastPosRef.current = { x: touch.x, y: touch.y };
+        const cells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, mmRef.current.cells));
+        const scale = MINIMAP_SIZE / cells;
+        mmRef.current = { cx: mmRef.current.cx - dx / scale, cy: mmRef.current.cy - dy / scale, cells };
+        setMmView(mmRef.current);
+        paint();
+      } else if (touches.length === 2) {
+        // Two finger pinch zoom
+        const dx = touches[1].x - touches[0].x;
+        const dy = touches[1].y - touches[0].y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        const { initialDistance, initialCells } = mmTouchStateRef.current;
+        if (initialDistance > 0) {
+          const zoomFactor = initialDistance / distance; // Inverted for intuitive zoom
+          const newCells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, initialCells * zoomFactor));
+          
+          mmRef.current = { 
+            cx: mmRef.current.cx, 
+            cy: mmRef.current.cy, 
+            cells: newCells 
+          };
+          setMmView(mmRef.current);
+          paint();
+        }
+      }
     };
+
     const onTouchEnd = (e) => {
-      if (!draggingRef.current) return;
       e.preventDefault();
-      draggingRef.current = false;
       lastMmInteractionAtRef.current = performance.now();
-      const { cx, cy, cells } = mmRef.current;
-      requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 1, 'hud'));
+
+      const remainingTouches = e.touches.length;
+
+      if (remainingTouches === 0) {
+        // All fingers lifted
+        draggingRef.current = false;
+        mmTouchStateRef.current = {
+          touches: [],
+          initialDistance: 0,
+          initialCells: 0,
+          initialCenter: { cx: 0, cy: 0 },
+        };
+        const { cx, cy, cells } = mmRef.current;
+        requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 1, 'hud'));
+      } else if (remainingTouches === 1 && mmTouchStateRef.current.touches.length === 2) {
+        // Transition from two fingers to one
+        const remainingTouch = e.touches[0];
+        draggingRef.current = true;
+        lastPosRef.current = { x: remainingTouch.clientX, y: remainingTouch.clientY };
+        mmTouchStateRef.current.touches = [{
+          id: remainingTouch.identifier,
+          x: remainingTouch.clientX,
+          y: remainingTouch.clientY,
+        }];
+        mmTouchStateRef.current.initialDistance = 0;
+      }
     };
 
     el.addEventListener('wheel', onWheel, { passive: false });
