@@ -212,8 +212,16 @@ export class CanvasRenderer {
         }
         if (isFlagged) {
           // compact placeholder; main pass may overlay sprite when zoomed in
-          // TODO: make it the color of the flag; doesn't add cost, makes it look better
-          ctx.fillStyle = "#202020";
+          const flagKey = `${wx},${wy}`;
+          const flagData = flaggedCellsRef.current.get(flagKey);
+          
+          // Use the flag's actual color from sprite metadata
+          let flagColor = "#202020"; // fallback
+          if (flagData && CanvasRenderer.#frames[flagData]?.hex) {
+            flagColor = CanvasRenderer.#frames[flagData].hex;
+          }
+          
+          ctx.fillStyle = flagColor;
           ctx.fillRect(dx + 1, dy + 1, size - 2, size - 2);
         }
       }
