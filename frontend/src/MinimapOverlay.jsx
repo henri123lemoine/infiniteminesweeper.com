@@ -7,6 +7,15 @@ export default function MinimapOverlay({ updateMinimapSubscriptions, clearMinima
   const [view, setView] = useState({ x: 0, y: 0, zoom: 2 });
   const viewRef = useRef(view);
   const rafRef = useRef(null);
+  
+  // Touch state for pinch-to-zoom
+  const touchStateRef = useRef({
+    touches: [],
+    initialDistance: 0,
+    initialZoom: 1,
+    initialView: { x: 0, y: 0 },
+    initialMidpoint: { x: 0, y: 0 },
+  });
 
   const schedulePaint = useCallback(() => {
     if (rafRef.current) return;
@@ -113,30 +122,113 @@ export default function MinimapOverlay({ updateMinimapSubscriptions, clearMinima
       schedulePaint();
     };
 
-    // Touch event handlers for mobile support
+    // Touch event handlers for mobile support with pinch-to-zoom
     const onTouchStart = (e) => {
-      if (e.touches.length === 1) {
-        e.preventDefault();
-        const touch = e.touches[0];
+      e.preventDefault();
+
+      const touches = Array.from(e.touches).map(t => ({
+        id: t.identifier,
+        x: t.clientX,
+        y: t.clientY,
+      }));
+
+      touchStateRef.current.touches = touches;
+
+      if (touches.length === 1) {
+        // Single touch - prepare for panning
         dragging = true;
-        last = { x: touch.clientX, y: touch.clientY };
+        last = { x: touches[0].x, y: touches[0].y };
+      } else if (touches.length === 2) {
+        // Two fingers - prepare for pinch zoom
+        dragging = false;
+        const dx = touches[1].x - touches[0].x;
+        const dy = touches[1].y - touches[0].y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const midX = (touches[0].x + touches[1].x) / 2;
+        const midY = (touches[0].y + touches[1].y) / 2;
+
+        touchStateRef.current.initialDistance = distance;
+        touchStateRef.current.initialZoom = viewRef.current.zoom;
+        touchStateRef.current.initialView = { x: viewRef.current.x, y: viewRef.current.y };
+        touchStateRef.current.initialMidpoint = { x: midX, y: midY };
       }
     };
+
     const onTouchMove = (e) => {
-      if (!dragging || e.touches.length !== 1) return;
       e.preventDefault();
-      const touch = e.touches[0];
-      const dx = (touch.clientX - last.x) / viewRef.current.zoom;
-      const dy = (touch.clientY - last.y) / viewRef.current.zoom;
-      last = { x: touch.clientX, y: touch.clientY };
-      viewRef.current = { ...viewRef.current, x: viewRef.current.x - dx, y: viewRef.current.y - dy };
-      setView(viewRef.current);
-      schedulePaint();
+
+      const touches = Array.from(e.touches).map(t => ({
+        id: t.identifier,
+        x: t.clientX,
+        y: t.clientY,
+      }));
+
+      if (touches.length === 1 && dragging) {
+        // Single touch panning
+        const touch = touches[0];
+        const dx = (touch.x - last.x) / viewRef.current.zoom;
+        const dy = (touch.y - last.y) / viewRef.current.zoom;
+        last = { x: touch.x, y: touch.y };
+        viewRef.current = { ...viewRef.current, x: viewRef.current.x - dx, y: viewRef.current.y - dy };
+        setView(viewRef.current);
+        schedulePaint();
+      } else if (touches.length === 2) {
+        // Two finger pinch zoom
+        const dx = touches[1].x - touches[0].x;
+        const dy = touches[1].y - touches[0].y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const midX = (touches[0].x + touches[1].x) / 2;
+        const midY = (touches[0].y + touches[1].y) / 2;
+
+        const { initialDistance, initialZoom, initialView, initialMidpoint } = touchStateRef.current;
+
+        if (initialDistance > 0) {
+          const rect = el.getBoundingClientRect();
+          const zoomFactor = distance / initialDistance;
+          const targetZoom = Math.min(Math.max(initialZoom * zoomFactor, 0.125), 8);
+
+          // Calculate world coordinates at the initial midpoint
+          const worldX = initialView.x + (initialMidpoint.x - rect.left) / initialZoom;
+          const worldY = initialView.y + (initialMidpoint.y - rect.top) / initialZoom;
+
+          // Calculate new view position to keep the midpoint stable
+          const newViewX = worldX - (midX - rect.left) / targetZoom;
+          const newViewY = worldY - (midY - rect.top) / targetZoom;
+
+          viewRef.current = { x: newViewX, y: newViewY, zoom: targetZoom };
+          setView(viewRef.current);
+          schedulePaint();
+        }
+      }
     };
+
     const onTouchEnd = (e) => {
-      if (!dragging) return;
       e.preventDefault();
-      dragging = false;
+      
+      const remainingTouches = e.touches.length;
+
+      if (remainingTouches === 0) {
+        // All fingers lifted
+        dragging = false;
+        touchStateRef.current = {
+          touches: [],
+          initialDistance: 0,
+          initialZoom: 1,
+          initialView: { x: 0, y: 0 },
+          initialMidpoint: { x: 0, y: 0 },
+        };
+      } else if (remainingTouches === 1 && touchStateRef.current.touches.length === 2) {
+        // Transition from two fingers to one
+        const remainingTouch = e.touches[0];
+        dragging = true;
+        last = { x: remainingTouch.clientX, y: remainingTouch.clientY };
+        touchStateRef.current.touches = [{
+          id: remainingTouch.identifier,
+          x: remainingTouch.clientX,
+          y: remainingTouch.clientY,
+        }];
+        touchStateRef.current.initialDistance = 0;
+      }
     };
 
     el.addEventListener('mousedown', onDown);
