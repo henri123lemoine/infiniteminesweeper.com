@@ -112,15 +112,48 @@ export default function MinimapOverlay({ updateMinimapSubscriptions, clearMinima
       setView(viewRef.current);
       schedulePaint();
     };
+
+    // Touch event handlers for mobile support
+    const onTouchStart = (e) => {
+      if (e.touches.length === 1) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        dragging = true;
+        last = { x: touch.clientX, y: touch.clientY };
+      }
+    };
+    const onTouchMove = (e) => {
+      if (!dragging || e.touches.length !== 1) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      const dx = (touch.clientX - last.x) / viewRef.current.zoom;
+      const dy = (touch.clientY - last.y) / viewRef.current.zoom;
+      last = { x: touch.clientX, y: touch.clientY };
+      viewRef.current = { ...viewRef.current, x: viewRef.current.x - dx, y: viewRef.current.y - dy };
+      setView(viewRef.current);
+      schedulePaint();
+    };
+    const onTouchEnd = (e) => {
+      if (!dragging) return;
+      e.preventDefault();
+      dragging = false;
+    };
+
     el.addEventListener('mousedown', onDown);
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener('touchstart', onTouchStart, { passive: false });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd, { passive: false });
     return () => {
       el.removeEventListener('mousedown', onDown);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
     };
   }, [schedulePaint]);
 
@@ -145,8 +178,8 @@ export default function MinimapOverlay({ updateMinimapSubscriptions, clearMinima
   }, [schedulePaint]);
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', width: '100%', height: '100%', background: '#202020' }}>
-      <canvas ref={canvasRef} style={{ width: '100%', height: '100%' }} />
+    <div ref={containerRef} style={{ position: 'relative', width: '100%', height: '100%', background: '#202020', touchAction: 'none' }}>
+      <canvas ref={canvasRef} style={{ width: '100%', height: '100%', touchAction: 'none' }} />
     </div>
   );
 }

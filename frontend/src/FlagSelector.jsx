@@ -116,6 +116,9 @@ export default function FlagSelector({ value, onChange }) {
           flexWrap: "wrap",
           gap: 8,
           overflowY: "auto",
+          WebkitOverflowScrolling: "touch",
+          scrollbarWidth: "thin",
+          maxHeight: "40vh",
         }}
       >
         {buttons}
