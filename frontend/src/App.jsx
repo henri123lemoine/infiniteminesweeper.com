@@ -129,13 +129,23 @@ function App() {
     [containerRef, scheduleViewUpdate, bumpMainViewMove]
   );
 
-  // Attach non-passive wheel listener to prevent page scroll while zooming
+  // Attach non-passive wheel and touch listeners to prevent page scroll
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    
     el.addEventListener("wheel", handleWheel, { passive: false });
-    return () => el.removeEventListener("wheel", handleWheel);
-  }, [handleWheel]);
+    el.addEventListener("touchstart", handleTouchStart, { passive: false });
+    el.addEventListener("touchmove", handleTouchMove, { passive: false });
+    el.addEventListener("touchend", handleTouchEnd, { passive: false });
+    
+    return () => {
+      el.removeEventListener("wheel", handleWheel);
+      el.removeEventListener("touchstart", handleTouchStart);
+      el.removeEventListener("touchmove", handleTouchMove);
+      el.removeEventListener("touchend", handleTouchEnd);
+    };
+  }, [handleWheel, handleTouchStart, handleTouchMove, handleTouchEnd]);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0, viewX: 0, viewY: 0 });
   const dragTimeoutRef = useRef(null);
@@ -1146,9 +1156,6 @@ function App() {
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
           onContextMenu={handleContextMenu}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
           style={{ touchAction: "none" }} // Prevent default touch behaviors
         >
           <canvas ref={canvasRef} id="game-canvas" />

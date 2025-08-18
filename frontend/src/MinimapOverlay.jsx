@@ -79,14 +79,19 @@ export default function MinimapOverlay({ updateMinimapSubscriptions, clearMinima
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Mouse pan and wheel zoom
+  // Mouse pan, wheel zoom, and touch support
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     let dragging = false;
     let last = { x: 0, y: 0 };
-    const onDown = (e) => { dragging = true; last = { x: e.clientX, y: e.clientY }; };
-    const onMove = (e) => {
+    
+    const onMouseDown = (e) => { 
+      dragging = true; 
+      last = { x: e.clientX, y: e.clientY }; 
+    };
+    
+    const onMouseMove = (e) => {
       if (!dragging) return;
       const dx = (e.clientX - last.x) / viewRef.current.zoom;
       const dy = (e.clientY - last.y) / viewRef.current.zoom;
@@ -95,7 +100,11 @@ export default function MinimapOverlay({ updateMinimapSubscriptions, clearMinima
       setView(viewRef.current);
       schedulePaint();
     };
-    const onUp = () => { dragging = false; };
+    
+    const onMouseUp = () => { 
+      dragging = false; 
+    };
+    
     const onWheel = (e) => {
       e.preventDefault();
       const rect = el.getBoundingClientRect();
@@ -112,15 +121,50 @@ export default function MinimapOverlay({ updateMinimapSubscriptions, clearMinima
       setView(viewRef.current);
       schedulePaint();
     };
-    el.addEventListener('mousedown', onDown);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    
+    // Touch event handlers for mobile support
+    const onTouchStart = (e) => {
+      if (e.touches.length === 1) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        dragging = true;
+        last = { x: touch.clientX, y: touch.clientY };
+      }
+    };
+    
+    const onTouchMove = (e) => {
+      if (!dragging || e.touches.length !== 1) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      const dx = (touch.clientX - last.x) / viewRef.current.zoom;
+      const dy = (touch.clientY - last.y) / viewRef.current.zoom;
+      last = { x: touch.clientX, y: touch.clientY };
+      viewRef.current = { ...viewRef.current, x: viewRef.current.x - dx, y: viewRef.current.y - dy };
+      setView(viewRef.current);
+      schedulePaint();
+    };
+    
+    const onTouchEnd = () => {
+      dragging = false;
+    };
+    
+    // Add event listeners with appropriate passive settings
+    el.addEventListener('mousedown', onMouseDown);
+    el.addEventListener('touchstart', onTouchStart, { passive: false });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd, { passive: false });
     el.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    
     return () => {
-      el.removeEventListener('mousedown', onDown);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      el.removeEventListener('mousedown', onMouseDown);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
       el.removeEventListener('wheel', onWheel);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
     };
   }, [schedulePaint]);
 

@@ -124,10 +124,11 @@ export default function MinimapHUD({
     return () => clearInterval(id);
   }, [paint]);
 
-  // Attach non-passive wheel and pan handlers directly to canvas to allow preventDefault
+  // Attach non-passive wheel, mouse, and touch handlers directly to canvas to allow preventDefault
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
+    
     const onWheel = (e) => {
       e.preventDefault();
       lastMmInteractionAtRef.current = performance.now();
@@ -150,13 +151,15 @@ export default function MinimapHUD({
       // update subs next tick
       requestAnimationFrame(() => updateMinimapSubscriptions(newCx, newCy, newCells, newCells, 1, 'hud'));
     };
-    const onDown = (e) => {
+    
+    const onMouseDown = (e) => {
       e.preventDefault();
       lastMmInteractionAtRef.current = performance.now();
       draggingRef.current = true;
       lastPosRef.current = { x: e.clientX, y: e.clientY };
     };
-    const onMove = (e) => {
+    
+    const onMouseMove = (e) => {
       if (!draggingRef.current) return;
       e.preventDefault();
       lastMmInteractionAtRef.current = performance.now();
@@ -169,22 +172,66 @@ export default function MinimapHUD({
       setMmView(mmRef.current);
       paint();
     };
-    const onUp = () => {
+    
+    const onMouseUp = () => {
       if (!draggingRef.current) return;
       draggingRef.current = false;
       lastMmInteractionAtRef.current = performance.now();
       const { cx, cy, cells } = mmRef.current;
       requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 1, 'hud'));
     };
+    
+    // Touch event handlers for mobile support
+    const onTouchStart = (e) => {
+      if (e.touches.length === 1) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        lastMmInteractionAtRef.current = performance.now();
+        draggingRef.current = true;
+        lastPosRef.current = { x: touch.clientX, y: touch.clientY };
+      }
+    };
+    
+    const onTouchMove = (e) => {
+      if (!draggingRef.current || e.touches.length !== 1) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      lastMmInteractionAtRef.current = performance.now();
+      const dx = touch.clientX - lastPosRef.current.x;
+      const dy = touch.clientY - lastPosRef.current.y;
+      lastPosRef.current = { x: touch.clientX, y: touch.clientY };
+      const cells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, mmRef.current.cells));
+      const scale = MINIMAP_SIZE / cells;
+      mmRef.current = { cx: mmRef.current.cx - dx / scale, cy: mmRef.current.cy - dy / scale, cells };
+      setMmView(mmRef.current);
+      paint();
+    };
+    
+    const onTouchEnd = () => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      lastMmInteractionAtRef.current = performance.now();
+      const { cx, cy, cells } = mmRef.current;
+      requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 1, 'hud'));
+    };
+    
+    // Add all event listeners with appropriate passive settings
     el.addEventListener('wheel', onWheel, { passive: false });
-    el.addEventListener('mousedown', onDown);
-    window.addEventListener('mousemove', onMove, { passive: false });
-    window.addEventListener('mouseup', onUp);
+    el.addEventListener('mousedown', onMouseDown);
+    el.addEventListener('touchstart', onTouchStart, { passive: false });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd, { passive: false });
+    window.addEventListener('mousemove', onMouseMove, { passive: false });
+    window.addEventListener('mouseup', onMouseUp);
+    
     return () => {
       el.removeEventListener('wheel', onWheel);
-      el.removeEventListener('mousedown', onDown);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      el.removeEventListener('mousedown', onMouseDown);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
     };
   }, [CHUNK, MINIMAP_SIZE, updateMinimapSubscriptions, paint]);
 
