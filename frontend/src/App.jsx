@@ -67,7 +67,12 @@ function App() {
   const [viewY, setViewY] = useState(storedViewY);
   const viewRef = useRef({ x: storedViewX, y: storedViewY });
   // Zoom: use ref for frame-accurate math/rendering, state for UI/re-renders
-  const zoomRef = useRef(1);
+  // Start with mobile-friendly zoom level
+  const initialZoom = useMemo(() => {
+    const isMobile = window.innerWidth <= 768 || window.innerHeight <= 768;
+    return isMobile ? 0.3 : 1; // Much more zoomed out on mobile
+  }, []);
+  const zoomRef = useRef(initialZoom);
   const rafRef = useRef(null);
   const guestCleanupRef = useRef(null);
   const userMovedRef = useRef(false);
@@ -91,7 +96,7 @@ function App() {
     },
     [commitViewRef],
   );
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(initialZoom);
   const [mainViewMoveToken, setMainViewMoveToken] = useState(0);
   const bumpMainViewMove = useCallback(() => setMainViewMoveToken((t) => t + 1), []);
   const handleWheel = useCallback(
@@ -221,8 +226,9 @@ function App() {
   // Constants
   const computeMinimapSize = useCallback(() => {
     const shortSide = Math.min(window.innerWidth || 0, window.innerHeight || 0);
-    const target = shortSide * 0.22; // 22% of the shorter viewport side
-    return Math.round(Math.max(160, Math.min(360, target))); // clamp to [160, 360]
+    const isMobile = window.innerWidth <= 768 || window.innerHeight <= 768;
+    const target = shortSide * (isMobile ? 0.18 : 0.22); // Smaller percentage on mobile
+    return Math.round(Math.max(isMobile ? 120 : 160, Math.min(360, target))); // Smaller min size on mobile
   }, []);
   const [MINIMAP_SIZE, setMINIMAP_SIZE] = useState(() => computeMinimapSize());
   const BASE_CELL_SIZE = 32;
