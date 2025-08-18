@@ -534,6 +534,20 @@ function App() {
     ],
   );
 
+  // Attach non-passive touch listeners to prevent default behaviors
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.addEventListener("touchstart", handleTouchStart, { passive: false });
+    el.addEventListener("touchmove", handleTouchMove, { passive: false });
+    el.addEventListener("touchend", handleTouchEnd, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", handleTouchStart);
+      el.removeEventListener("touchmove", handleTouchMove);
+      el.removeEventListener("touchend", handleTouchEnd);
+    };
+  }, [handleTouchStart, handleTouchMove, handleTouchEnd]);
+
   // Keyboard panning with Arrow keys (and optional WASD)
   useEffect(() => {
     if (!connected) return;
@@ -1154,9 +1168,6 @@ function App() {
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
           onContextMenu={handleContextMenu}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
           style={{ touchAction: "none" }} // Prevent default touch behaviors
         >
           <canvas ref={canvasRef} id="game-canvas" />
