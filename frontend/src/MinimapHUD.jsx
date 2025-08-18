@@ -176,15 +176,55 @@ export default function MinimapHUD({
       const { cx, cy, cells } = mmRef.current;
       requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 1, 'hud'));
     };
+
+    // Touch event handlers for mobile support
+    const onTouchStart = (e) => {
+      if (e.touches.length === 1) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        lastMmInteractionAtRef.current = performance.now();
+        draggingRef.current = true;
+        lastPosRef.current = { x: touch.clientX, y: touch.clientY };
+      }
+    };
+    const onTouchMove = (e) => {
+      if (!draggingRef.current || e.touches.length !== 1) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      lastMmInteractionAtRef.current = performance.now();
+      const dx = touch.clientX - lastPosRef.current.x;
+      const dy = touch.clientY - lastPosRef.current.y;
+      lastPosRef.current = { x: touch.clientX, y: touch.clientY };
+      const cells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, mmRef.current.cells));
+      const scale = MINIMAP_SIZE / cells;
+      mmRef.current = { cx: mmRef.current.cx - dx / scale, cy: mmRef.current.cy - dy / scale, cells };
+      setMmView(mmRef.current);
+      paint();
+    };
+    const onTouchEnd = (e) => {
+      if (!draggingRef.current) return;
+      e.preventDefault();
+      draggingRef.current = false;
+      lastMmInteractionAtRef.current = performance.now();
+      const { cx, cy, cells } = mmRef.current;
+      requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 1, 'hud'));
+    };
+
     el.addEventListener('wheel', onWheel, { passive: false });
     el.addEventListener('mousedown', onDown);
     window.addEventListener('mousemove', onMove, { passive: false });
     window.addEventListener('mouseup', onUp);
+    el.addEventListener('touchstart', onTouchStart, { passive: false });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd, { passive: false });
     return () => {
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('mousedown', onDown);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
     };
   }, [CHUNK, MINIMAP_SIZE, updateMinimapSubscriptions, paint]);
 
@@ -216,10 +256,10 @@ export default function MinimapHUD({
   }, [updateMinimapSubscriptions]);
 
   return (
-    <div ref={containerWrapRef} className="minimap" style={{ position: 'fixed', bottom: 10, right: 10, width: MINIMAP_SIZE, height: MINIMAP_SIZE }}>
+    <div ref={containerWrapRef} className="minimap" style={{ position: 'fixed', bottom: 10, right: 10, width: MINIMAP_SIZE, height: MINIMAP_SIZE, touchAction: 'none' }}>
       <canvas
         ref={canvasRef}
-        style={{ width: '100%', height: '100%', cursor: "grab" }}
+        style={{ width: '100%', height: '100%', cursor: "grab", touchAction: 'none' }}
       />
       <button
         onClick={onOpenOverlay}

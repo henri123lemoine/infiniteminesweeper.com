@@ -48,6 +48,13 @@ body {
   -webkit-touch-callout: none;
 }
 
+/* Prevent unwanted scrolling on mobile */
+body {
+  overflow: hidden;
+  -webkit-overflow-scrolling: auto;
+  touch-action: none;
+}
+
 #game-canvas {
   display: block;
   width: 100%;
@@ -191,13 +198,57 @@ body {
   .leaderboard {
     top: 5px;
     right: 5px;
-    padding: 10px;
-    font-size: 12px;
-    width: 180px;
-    height: 350px;
+    padding: 8px;
+    font-size: 11px;
+    width: 140px;
+    max-height: 60vh;
+    overflow: hidden;
   }
   .leaderboard h3 {
-    font-size: 20px;
-    margin-bottom: 10px;
+    font-size: 14px;
+    margin-bottom: 6px;
+  }
+  .leaderboard ul {
+    max-height: calc(60vh - 40px);
+    overflow: hidden;
+  }
+  .leaderboard li {
+    margin-bottom: 1px;
+    line-height: 1.2;
+  }
+  
+  /* Make minimap smaller on mobile */
+  .minimap {
+    bottom: 5px;
+    right: 5px;
+    width: 120px !important;
+    height: 120px !important;
+  }
+  
+  /* Improve player score visibility on mobile */
+  .player-score {
+    top: 5px;
+    font-size: 14px;
+    padding: 4px 8px;
+  }
+  
+  /* Help button adjustments for mobile */
+  .help-dropdown {
+    top: 5px;
+    left: 5px;
+  }
+  
+  .help-button {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  
+  .help-content {
+    max-width: 280px;
+    font-size: 12px;
+    padding: 10px;
+    max-height: 50vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 }
