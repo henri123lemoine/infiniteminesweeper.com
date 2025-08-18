@@ -218,6 +218,11 @@ function App() {
     return String(score);
   }, []);
 
+  const formatFullScore = useCallback((score) => {
+    // Format scores with commas for readability, e.g. 128,318,481
+    return score.toLocaleString();
+  }, []);
+
   // Constants
   const computeMinimapSize = useCallback(() => {
     const shortSide = Math.min(window.innerWidth || 0, window.innerHeight || 0);
@@ -1078,7 +1083,7 @@ function App() {
                             style={{ imageRendering: "pixelated" }}
                           />
                           <span style={{ flex: 1, fontWeight: isMe ? "600" : undefined }}>{row.name}</span>
-                          <b>{formatScore(row.score ?? 0)}</b>
+                          <b>{formatFullScore(row.score ?? 0)}</b>
                         </li>
                       );
                     })}
