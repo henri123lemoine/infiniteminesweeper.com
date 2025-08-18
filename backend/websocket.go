@@ -392,12 +392,9 @@ func (s *Server) readPumpSpectator(player *Player) {
             chunksWide += 2
             chunksHigh += 2
 
-            cellX := int(vu.Cell % uint32(ChunkSize))
-            cellY := int(vu.Cell / uint32(ChunkSize))
-            centerWorldX := int(vu.ChunkId.X)*ChunkSize + cellX
-            centerWorldY := int(vu.ChunkId.Y)*ChunkSize + cellY
-            centerChunkX := int64(centerWorldX / ChunkSize)
-            centerChunkY := int64(centerWorldY / ChunkSize)
+            // Use the chunk coordinates directly from the frontend
+            centerChunkX := int64(vu.ChunkId.X)
+            centerChunkY := int64(vu.ChunkId.Y)
 
             halfW := chunksWide / 2
             halfH := chunksHigh / 2
@@ -588,17 +585,12 @@ func (s *Server) readPump(player *Player) {
 			chunksWide += 2
 			chunksHigh += 2
 
-			// Center of the view in world coords
-			cellX := int(vu.Cell % uint32(ChunkSize))
-			cellY := int(vu.Cell / uint32(ChunkSize))
-			centerWorldX := int(vu.ChunkId.X)*ChunkSize + cellX
-			centerWorldY := int(vu.ChunkId.Y)*ChunkSize + cellY
-
-			// Convert center to chunk coords
-			centerChunkX := int64(centerWorldX / ChunkSize)
-			centerChunkY := int64(centerWorldY / ChunkSize)
+			// Use the chunk coordinates directly from the frontend
+			centerChunkX := vu.ChunkId.X
+			centerChunkY := vu.ChunkId.Y
 
 			// Compute rectangle of chunk IDs
+			// Use floor division to match frontend Math.floor() behavior
 			halfW := chunksWide / 2
 			halfH := chunksHigh / 2
 			startX := centerChunkX - int64(halfW)
