@@ -55,7 +55,24 @@ export default function MinimapOverlay({ updateMinimapSubscriptions, clearMinima
           if (!rec || !rec.canvas) continue;
           const ox = Math.floor(cx * CHUNK - x);
           const oy = Math.floor(cy * CHUNK - y);
-          ctx.drawImage(rec.canvas, 0, 0, CHUNK, CHUNK, Math.floor(ox * zoom), Math.floor(oy * zoom), Math.ceil(tilePx), Math.ceil(tilePx));
+          const dstX = Math.floor(ox * zoom);
+          const dstY = Math.floor(oy * zoom);
+          const size = Math.ceil(tilePx);
+
+          // Level-of-detail optimization: Skip rendering if chunk is too small
+          if (size < 2) {
+            continue; // Skip chunks smaller than 2x2 pixels
+          }
+
+          // For very small chunks (2-8 pixels), use simplified rendering
+          if (size <= 8) {
+            // Use a simplified approach: fill with average color
+            ctx.fillStyle = '#909090'; // Gray representing mixed content
+            ctx.fillRect(dstX, dstY, size, size);
+          } else {
+            // Full detail rendering for larger chunks
+            ctx.drawImage(rec.canvas, 0, 0, CHUNK, CHUNK, dstX, dstY, size, size);
+          }
         }
       }
     });

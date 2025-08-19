@@ -90,10 +90,23 @@ export default function MinimapHUD({
         const dstW = Math.ceil(srcW * scale);
         const dstH = Math.ceil(srcH * scale);
 
-        const c = rec.canvas;
-        const ctx2d = ctx;
-        // drawImage(Image, sx, sy, sw, sh, dx, dy, dw, dh)
-        ctx2d.drawImage(c, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH);
+        // Level-of-detail optimization: Skip rendering if chunk is too small
+        if (dstW < 2 || dstH < 2) {
+          continue; // Skip chunks smaller than 2x2 pixels
+        }
+
+        // For very small chunks (2-8 pixels), use simplified rendering
+        if (dstW <= 8 && dstH <= 8) {
+          // Use a simplified approach: fill with average color
+          ctx.fillStyle = '#909090'; // Gray representing mixed content
+          ctx.fillRect(dstX, dstY, dstW, dstH);
+        } else {
+          // Full detail rendering for larger chunks
+          const c = rec.canvas;
+          const ctx2d = ctx;
+          // drawImage(Image, sx, sy, sw, sh, dx, dy, dw, dh)
+          ctx2d.drawImage(c, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH);
+        }
       }
     }
 
