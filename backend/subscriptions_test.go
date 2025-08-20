@@ -22,11 +22,11 @@ func TestViewUpdateSubscriptionsAndLRU(t *testing.T) {
     defer c.Close()
 
     // handshake
-    hello := &pb.Msg{Payload: &pb.Msg_Hello{Hello: &pb.Hello{Name: "SubTester"}}}
-    if err := c.WriteMessage(websocket.BinaryMessage, mustProto(hello)); err != nil {
-        t.Fatalf("write hello: %v", err)
+    join := &pb.Msg{Payload: &pb.Msg_Join{Join: &pb.Join{Name: "SubTester"}}}
+    if err := c.WriteMessage(websocket.BinaryMessage, mustProto(join)); err != nil {
+        t.Fatalf("write join: %v", err)
     }
-    if _, _, err := c.ReadMessage(); err != nil { t.Fatalf("welcome: %v", err) }
+    if _, _, err := c.ReadMessage(); err != nil { t.Fatalf("joinAck: %v", err) }
     // drain one leaderboard if present (best-effort)
     _ = func() error { _, _, err := c.ReadMessage(); return err }()
 

@@ -161,9 +161,11 @@ When modifying `proto/messages.proto`:
 The server MUST establish and verify player identity. The client is never trusted to declare its own ID.
 
 **Authentication Logic:**
+- All connections start in SPECTATOR state
+- Join message transitions from SPECTATOR to PLAYER state
 - If session_token is present: Look up in sessionTokens map, assign existing playerID
 - If session_token is empty/not found: Generate new playerID and sessionToken, initialize player state
-- Send Welcome message with session_token (but not internal playerID)
+- Send JoinAck message with session_token (but not internal playerID)
 
 #### Subscription Management
 
@@ -182,8 +184,8 @@ Processes Reveal commands under global state mutex:
 
 #### Connection & Authentication
 - Read session_token from localStorage on start
-- Send Hello message with token
-- Handle Welcome message by updating localStorage
+- Send Join message with token to transition from SPECTATOR to PLAYER state
+- Handle JoinAck message by updating localStorage
 
 #### Subscription Management
 - Dynamic chunk subscription based on viewport

@@ -29,16 +29,6 @@ message RevealedCells {
 
 // ---- Client -> Server Messages ----
 
-// Sent on initial connection to authenticate a session or establish a new one.
-message Hello {
-  // The session token stored in the client's localStorage.
-  // This MUST be empty for a new player.
-  string session_token = 1;
-
-  // The player's chosen name and flag style. Only used if a new identity is created.
-  string name = 2;
-  uint32 flagID = 3;
-}
 
 // Subscribes the client to real-time updates for a specific chunk.
 message Subscribe {
@@ -91,16 +81,6 @@ message UpdateProfile {
 
 // ---- Server -> Client Messages ----
 
-// Sent once upon successful connection and authentication.
-message Welcome {
-  // The session token for this identity. The client MUST store this in localStorage.
-  string session_token = 1;
-
-  string name = 2;
-  sint32 score = 3;
-  uint32 flagID = 4;
-  ViewUpdate viewUpdate = 5;
-}
 
 message FlagGroup {
   uint32 flagID = 1;
@@ -205,7 +185,6 @@ message UpdateAck {
 message Msg {
   oneof payload {
     // Client -> Server
-    Hello hello = 1; // Deprecated: use Join instead
     Subscribe subscribe = 2;
     Unsubscribe unsubscribe = 3;
     Reveal reveal = 4;
@@ -214,7 +193,6 @@ message Msg {
     UpdateProfile updateProfile = 18; // FSM: Update profile while PLAYER
 
     // Server -> Client
-    Welcome welcome = 6; // Deprecated: use JoinAck instead
     ChunkSync chunkSync = 7;
     RevealAck revealAck = 8;
     ChunkUpdateBroadcast chunkUpdateBroadcast = 9;
