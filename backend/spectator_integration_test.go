@@ -6,7 +6,6 @@ import (
     "io"
     "net/http"
     "net/http/httptest"
-    "os"
     "strings"
     "testing"
     "time"
@@ -16,14 +15,13 @@ import (
     "google.golang.org/protobuf/proto"
 )
 
-// startTestServerWithSpectate spins up HTTP with both /ws and /spectate routes.
-func startTestServerWithSpectate(t *testing.T) (*Server, string, string, func()) {
+// startTestServerWithFSM spins up HTTP with unified /ws route using FSM.
+func startTestServerWithFSM(t *testing.T) (*Server, string, func()) {
     t.Helper()
     s := NewServer()
     s.proximityRadius = -1
     mux := http.NewServeMux()
     mux.HandleFunc("/ws", s.handleWebSocket)
-    mux.HandleFunc("/spectate", s.handleSpectateWebSocket)
 
     // Minimal leaderboard broadcaster so writePump has activity similar to prod
     done := make(chan struct{})
@@ -58,9 +56,8 @@ func startTestServerWithSpectate(t *testing.T) (*Server, string, string, func())
     ts := httptest.NewServer(mux)
     base := strings.TrimPrefix(ts.URL, "http")
     wsURL := "ws" + base + "/ws"
-    spURL := "ws" + base + "/spectate"
     cleanup := func() { close(done); ts.Close() }
-    return s, wsURL, spURL, cleanup
+    return s, wsURL, cleanup
 }
 
 func writePB(conn *websocket.Conn, m *pb.Msg) error {
@@ -91,14 +88,15 @@ func readPB(conn *websocket.Conn, timeout time.Duration) (*pb.Msg, error) {
 }
 
 func TestSpectatorReceivesChunkRegionSync(t *testing.T) {
-    _, _, spectateURL, cleanup := startTestServerWithSpectate(t)
+    _, wsURL, cleanup := startTestServerWithFSM(t)
     defer cleanup()
 
-    c, _, err := websocket.DefaultDialer.Dial(spectateURL, nil)
-    if err != nil { t.Fatalf("dial spectate: %v", err) }
+    // Connect to unified /ws endpoint - starts in SPECTATOR state automatically
+    c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+    if err != nil { t.Fatalf("dial ws: %v", err) }
     defer c.Close()
 
-    // Send a view update to trigger region sync adds
+    // Send a view update to trigger region sync adds - spectators can do this
     vu := &pb.Msg{Payload: &pb.Msg_ViewUpdate{ViewUpdate: &pb.ViewUpdate{
         ChunkId: &pb.ChunkID{X: 0, Y: 0}, Cell: 0, WidthCells: 128, HeightCells: 128,
     }}}
@@ -116,57 +114,108 @@ func TestSpectatorReceivesChunkRegionSync(t *testing.T) {
     t.Fatalf("did not receive ChunkRegionSync")
 }
 
-// These tests are optional guards: set EXPECT_SINGLE_CONN=1 or EXPECT_NO_SPECTATE_WITH_PLAYER=1
-// to enforce stricter invariants and discover duplicate-connection issues.
-func TestDuplicateConnectionsGuards(t *testing.T) {
-    s, wsURL, spectateURL, cleanup := startTestServerWithSpectate(t)
+// TestFSMStateTransitions tests the new FSM: SPECTATOR -> PLAYER transitions
+func TestFSMStateTransitions(t *testing.T) {
+    _, wsURL, cleanup := startTestServerWithFSM(t)
     defer cleanup()
 
-    // 1) Duplicate /ws connections for the same token
+    // 1) Connect and start in SPECTATOR state
     c1, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
     if err != nil { t.Fatalf("dial ws1: %v", err) }
     defer c1.Close()
-    _ = writePB(c1, &pb.Msg{Payload: &pb.Msg_Hello{Hello: &pb.Hello{Name: "dup"}}})
-    m1, err := readPB(c1, 2*time.Second)
-    if err != nil || m1.GetWelcome() == nil { t.Fatalf("welcome1: %v", err) }
-    tok := m1.GetWelcome().SessionToken
 
+    // Send ViewUpdate - should work in spectator mode
+    vu := &pb.Msg{Payload: &pb.Msg_ViewUpdate{ViewUpdate: &pb.ViewUpdate{
+        ChunkId: &pb.ChunkID{X: 0, Y: 0}, Cell: 0, WidthCells: 64, HeightCells: 64,
+    }}}
+    if err := writePB(c1, vu); err != nil { t.Fatalf("write view as spectator: %v", err) }
+
+    // 2) Transition to PLAYER state via Join message
+    join := &pb.Msg{Payload: &pb.Msg_Join{Join: &pb.Join{Name: "testplayer", FlagID: 0}}}
+    if err := writePB(c1, join); err != nil { t.Fatalf("write join: %v", err) }
+
+    // Expect JoinAck response
+    deadline := time.Now().Add(2 * time.Second)
+    var joinSucceeded bool
+    for time.Now().Before(deadline) {
+        m, err := readPB(c1, 2*time.Second)
+        if err != nil { t.Fatalf("read: %v", err) }
+        if ack := m.GetJoinAck(); ack != nil {
+            if !ack.Ok {
+                t.Fatalf("join failed: %s", ack.Error)
+            }
+            joinSucceeded = true
+            break
+        }
+    }
+    if !joinSucceeded {
+        t.Fatalf("did not receive successful JoinAck")
+    }
+
+    // 3) Test that Reveal messages work in PLAYER state
+    reveal := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{
+        ChunkId: &pb.ChunkID{X: 0, Y: 0}, Cell: 0, RequestId: 12345,
+    }}}
+    if err := writePB(c1, reveal); err != nil { t.Fatalf("write reveal as player: %v", err) }
+
+    // Should receive RevealAck (server processes the reveal)
+    deadline = time.Now().Add(2 * time.Second)
+    for time.Now().Before(deadline) {
+        m, err := readPB(c1, 2*time.Second)
+        if err != nil { t.Fatalf("read reveal response: %v", err) }
+        if ack := m.GetRevealAck(); ack != nil {
+            return // success - reveal was processed
+        }
+    }
+    t.Fatalf("did not receive RevealAck for reveal command")
+}
+
+// TestNameValidation tests that duplicate names are properly rejected
+func TestNameValidation(t *testing.T) {
+    _, wsURL, cleanup := startTestServerWithFSM(t)
+    defer cleanup()
+
+    // 1) First player claims a name
+    c1, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+    if err != nil { t.Fatalf("dial ws1: %v", err) }
+    defer c1.Close()
+
+    join1 := &pb.Msg{Payload: &pb.Msg_Join{Join: &pb.Join{Name: "uniquename", FlagID: 0}}}
+    if err := writePB(c1, join1); err != nil { t.Fatalf("write join1: %v", err) }
+
+    // Wait for successful join
+    deadline := time.Now().Add(2 * time.Second)
+    for time.Now().Before(deadline) {
+        m, err := readPB(c1, 2*time.Second)
+        if err != nil { t.Fatalf("read join1 response: %v", err) }
+        if ack := m.GetJoinAck(); ack != nil && ack.Ok {
+            break
+        }
+    }
+
+    // 2) Second player tries to use the same name
     c2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
     if err != nil { t.Fatalf("dial ws2: %v", err) }
     defer c2.Close()
-    _ = writePB(c2, &pb.Msg{Payload: &pb.Msg_Hello{Hello: &pb.Hello{SessionToken: tok}}})
-    if _, err := readPB(c2, 2*time.Second); err != nil { t.Fatalf("welcome2: %v", err) }
 
-    // Count connections for that player
-    s.playersMu.RLock()
-    var pid uint32
-    for id, set := range s.players {
-        // Find the ID which has c1 or c2; heuristic: latest added often matches last welcome
-        if len(set) > 0 { pid = id }
+    join2 := &pb.Msg{Payload: &pb.Msg_Join{Join: &pb.Join{Name: "uniquename", FlagID: 1}}}
+    if err := writePB(c2, join2); err != nil { t.Fatalf("write join2: %v", err) }
+
+    // Should receive failed JoinAck
+    deadline = time.Now().Add(2 * time.Second)
+    for time.Now().Before(deadline) {
+        m, err := readPB(c2, 2*time.Second)
+        if err != nil { t.Fatalf("read join2 response: %v", err) }
+        if ack := m.GetJoinAck(); ack != nil {
+            if ack.Ok {
+                t.Fatalf("expected join to fail for duplicate name, but it succeeded")
+            }
+            if !strings.Contains(ack.Error, "taken") {
+                t.Fatalf("expected 'taken' error, got: %s", ack.Error)
+            }
+            return // success - duplicate name was properly rejected
+        }
     }
-    conns := len(s.players[pid])
-    s.playersMu.RUnlock()
-
-    if os.Getenv("EXPECT_SINGLE_CONN") == "1" && conns != 1 {
-        t.Fatalf("expected single connection per token; got %d", conns)
-    }
-
-    // 2) Spectator + player concurrent
-    cs, _, err := websocket.DefaultDialer.Dial(spectateURL, nil)
-    if err != nil { t.Fatalf("dial spectate: %v", err) }
-    defer cs.Close()
-    _ = writePB(cs, &pb.Msg{Payload: &pb.Msg_ViewUpdate{ViewUpdate: &pb.ViewUpdate{
-        ChunkId: &pb.ChunkID{X: 0, Y: 0}, Cell: 0, WidthCells: 64, HeightCells: 64,
-    }}})
-    time.Sleep(100 * time.Millisecond)
-
-    // Now check total connections across all players (includes spectator space)
-    s.playersMu.RLock()
-    total := 0
-    for _, set := range s.players { total += len(set) }
-    s.playersMu.RUnlock()
-    if os.Getenv("EXPECT_NO_SPECTATE_WITH_PLAYER") == "1" && total > 1 {
-        t.Fatalf("expected no concurrent spectator+player connections; found %d", total)
-    }
+    t.Fatalf("did not receive JoinAck for duplicate name attempt")
 }
 

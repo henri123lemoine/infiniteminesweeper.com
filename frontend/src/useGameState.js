@@ -150,6 +150,9 @@ export const useGameState = () => {
   const [scorePopups, setScorePopups] = useState([]);
   const [hintPopups, setHintPopups] = useState([]);
   const [tick, setTick] = useState(0);
+  const [updateError, setUpdateError] = useState("");
+  const [serverFlagID, setServerFlagID] = useState(null);
+  const [updateSuccess, setUpdateSuccess] = useState(false);
 
   // Minimap streaming store and helpers
   const minimapTilesRef = useRef(new Map()); // key "x,y" -> { version, data: Uint8Array, canvas }
@@ -619,64 +622,111 @@ export const useGameState = () => {
     [ws, connected, countAdjacentMines, countAdjacentFlags, canChord, username],
   );
 
-  const connectWs = useCallback(
-    (nameInput, flagID) => {
-      const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
-      const websocket = new WebSocket(wsUrl);
-      websocket.binaryType = "arraybuffer";
-      let didWelcome = false;
+  const connectWebSocket = useCallback(() => {
+    const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
+    const websocket = new WebSocket(wsUrl);
+    websocket.binaryType = "arraybuffer";
+    let didJoinAck = false;
 
-      websocket.onopen = () => {
-        // Always include a session token if present; if missing, the server will
-        // assign a unique username and issue a token.
-        const sessionToken = localStorage.getItem("session_token") || "";
-        websocket.send(encodeMsg({ hello: { sessionToken, name: nameInput, flagID } }));
-        setConnected(true);
-        setWs(websocket);
-        wsRef.current = websocket;
-        connectedRef.current = true;
-        // Kick an initial view update on the next frame once the DOM is ready
-        requestAnimationFrame(() => {
-          try {
-            // Use DOM-based helper to compute current viewport in world cells
-            const root = document.querySelector('#root')?.firstElementChild;
-            if (root) {
-              const width = root.clientWidth;
-              const height = root.clientHeight;
-              const worldWidthCells = Math.ceil(width / 1);
-              const worldHeightCells = Math.ceil(height / 1);
-              const centerWorldX = Math.floor((viewRef.current.x + width / 2) / 1);
-              const centerWorldY = Math.floor((viewRef.current.y + height / 2) / 1);
-              const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
-              sendViewUpdate.current(chunkX, chunkY, cell, worldWidthCells, worldHeightCells);
-            }
-          } catch {}
-        });
-      };
+    websocket.onopen = () => {
+      // Start in spectator mode - no initial message needed
+      // Connection starts as spectator automatically
+      setWs(websocket);
+      wsRef.current = websocket;
+      connectedRef.current = true;
+      // Note: setConnected(true) is only called after successful join
+      // Kick an initial view update on the next frame once the DOM is ready
+      requestAnimationFrame(() => {
+        try {
+          // Use DOM-based helper to compute current viewport in world cells
+          const root = document.querySelector('#root')?.firstElementChild;
+          if (root) {
+            const width = root.clientWidth;
+            const height = root.clientHeight;
+            const worldWidthCells = Math.ceil(width / 1);
+            const worldHeightCells = Math.ceil(height / 1);
+            const centerWorldX = Math.floor((viewRef.current.x + width / 2) / 1);
+            const centerWorldY = Math.floor((viewRef.current.y + height / 2) / 1);
+            const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
+            sendViewUpdate.current(chunkX, chunkY, cell, worldWidthCells, worldHeightCells);
+          }
+        } catch {}
+      });
+    };
 
-      websocket.onclose = () => {
-        setConnected(false);
-        setWs(null);
-        wsRef.current = null;
-        connectedRef.current = false;
-        optimisticActions.current.clear();
-        revealedCellsRef.current.clear();
-        flaggedCellsRef.current.clear();
-        playerFlagsRef.current.clear();
-        // If server rejected the handshake (e.g., invalid or taken username),
-        // reset username so the join dialog is shown again.
-        if (!didWelcome) {
-          setUsername("");
-        }
-      };
+    websocket.onclose = () => {
+      setConnected(false);
+      setWs(null);
+      wsRef.current = null;
+      connectedRef.current = false;
+      optimisticActions.current.clear();
+      revealedCellsRef.current.clear();
+      flaggedCellsRef.current.clear();
+      playerFlagsRef.current.clear();
+      // If server rejected the join (e.g., invalid or taken username),
+      // reset username so the join dialog is shown again.
+      if (!didJoinAck) {
+        setUsername("");
+      }
+    };
 
       websocket.onmessage = (event) => {
         const msg = decodeMsg(event.data);
         const type = activeKey(msg);
         const data = msg[type];
 
-        if (type === "welcome") {
-          didWelcome = true;
+        if (type === "joinAck") {
+          didJoinAck = true;
+          if (data.ok) {
+            // Successful join - transition to player mode
+            localStorage.setItem("session_token", data.sessionToken);
+            localStorage.setItem("username", data.name || "");
+            localStorage.setItem("score", String(data.score ?? 0));
+            localStorage.setItem("flagID", String(data.flagID));
+            playerFlagsRef.current.set(data.name, data.flagID);
+            setUsername(data.name || "");
+            setPlayerScore(data.score ?? 0);
+            setServerFlagID(data.flagID); // Sync server's authoritative flagID
+            setConnected(true); // Now we're fully connected as a player
+            
+            // Send a view update after successful join
+            requestAnimationFrame(() => {
+              try {
+                const root = document.querySelector('#root')?.firstElementChild;
+                if (root) {
+                  const width = root.clientWidth;
+                  const height = root.clientHeight;
+                  const worldWidthCells = Math.ceil(width / 1);
+                  const worldHeightCells = Math.ceil(height / 1);
+                  const centerWorldX = Math.floor((viewRef.current.x + width / 2) / 1);
+                  const centerWorldY = Math.floor((viewRef.current.y + height / 2) / 1);
+                  const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
+                  sendViewUpdate.current(chunkX, chunkY, cell, worldWidthCells, worldHeightCells);
+                }
+              } catch {}
+            });
+          } else {
+            // Join failed - stay in spectator mode but notify user
+            console.error("Join failed:", data.error);
+            // You could expose this error to the UI here
+          }
+        } else if (type === "updateAck") {
+          if (data.ok) {
+            // Profile update successful
+            localStorage.setItem("username", data.name || "");
+            localStorage.setItem("flagID", String(data.flagID));
+            setUsername(data.name || "");
+            playerFlagsRef.current.set(data.name, data.flagID);
+            setServerFlagID(data.flagID); // Sync server's authoritative flagID
+            setUpdateError(""); // Clear any previous errors
+            setUpdateSuccess(true); // Signal successful update
+          } else {
+            setUpdateError(data.error || "Profile update failed");
+            console.error("Profile update failed:", data.error);
+          }
+        } else if (type === "welcome") {
+          // Legacy welcome message support for backwards compatibility
+          didJoinAck = true;
           localStorage.setItem("session_token", data.sessionToken);
           localStorage.setItem("username", data.name || "");
           localStorage.setItem("score", String(data.score ?? 0));
@@ -684,7 +734,9 @@ export const useGameState = () => {
           playerFlagsRef.current.set(data.name, data.flagID);
           setUsername(data.name || "");
           setPlayerScore(data.score ?? 0);
-          // Send a view update after processing welcome
+          setServerFlagID(data.flagID); // Sync server's authoritative flagID
+          setConnected(true);
+          // Send a view update after processing legacy welcome
           requestAnimationFrame(() => {
             try {
               const root = document.querySelector('#root')?.firstElementChild;
@@ -932,98 +984,42 @@ export const useGameState = () => {
         }
       };
 
-      return () => websocket.close();
-    },
-    [countAdjacentMines, username],
-  );
+    return () => websocket.close();
+  }, [countAdjacentMines]);
 
-  // Passive spectate connection: no Hello, only view-based sync.
-  const connectSpectate = useCallback(() => {
-    const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/spectate`;
-    const websocket = new WebSocket(wsUrl);
-    websocket.binaryType = "arraybuffer";
+  // Join the game by sending a Join message (transitions from SPECTATOR to PLAYER)
+  const joinGame = useCallback((nameInput, flagID) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      console.error("Cannot join: WebSocket not connected");
+      return;
+    }
+    
+    const sessionToken = localStorage.getItem("session_token") || "";
+    ws.send(encodeMsg({ 
+      join: { 
+        sessionToken, 
+        name: nameInput, 
+        flagID 
+      } 
+    }));
+  }, [ws]);
 
-    websocket.onopen = () => {
-      // Treat as transport-ready for viewUpdate sending, but keep gameplay disabled.
-      setWs(websocket);
-      wsRef.current = websocket;
-      connectedRef.current = true;
-      // Do not set `connected` to true so clicks remain disabled pre-join.
-      requestAnimationFrame(() => {
-        try {
-          // Prefer DOM dimensions, but fall back to a conservative default.
-          const root = document.querySelector('#root')?.firstElementChild;
-          const width = root?.clientWidth || window.innerWidth || 800;
-          const height = root?.clientHeight || window.innerHeight || 600;
-          const worldWidthCells = Math.ceil(width / 1);
-          const worldHeightCells = Math.ceil(height / 1);
-          const centerWorldX = Math.floor((viewRef.current.x + width / 2) / 1);
-          const centerWorldY = Math.floor((viewRef.current.y + height / 2) / 1);
-          const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
-          sendViewUpdate.current(chunkX, chunkY, cell, worldWidthCells, worldHeightCells);
-        } catch {}
-      });
-    };
-
-    websocket.onclose = () => {
-      if (wsRef.current === websocket) {
-        wsRef.current = null;
-        setWs(null);
-        connectedRef.current = false;
-      }
-    };
-
-    websocket.onmessage = (event) => {
-      const msg = decodeMsg(event.data);
-      const type = activeKey(msg);
-      const data = msg[type];
-      if (type === "chunkSync") {
-        applyChunkSync(data);
-        setTick((t) => t + 1);
-      } else if (type === "chunkRegionSync") {
-        const region = PB.ChunkRegion.toObject(PB.ChunkRegion.decode(data.chunks), { defaults: false });
-        for (const cs of region.chunks || []) applyChunkSync(cs);
-        setTick((t) => t + 1);
-      } else if (type === "chunkUpdateBroadcast") {
-        // Reuse the same reconciliation path as in main connection
-        const { chunkId } = data;
-        const { X, Y } = normalizeChunkId(chunkId);
-        const chunkKey = `${X},${Y}`;
-        const updateType = data.revealedCells ? "revealedCells" : data.flaggedCell ? "flaggedCell" : null;
-        if (!updateType) return;
-        const updateData = data[updateType];
-        if (updateType === "revealedCells") {
-          const cells = Array.isArray(updateData.cells) ? updateData.cells : [];
-          for (const cell of cells) {
-            const cellKey = `${chunkKey},${cell}`;
-            const seed = seedCache.current.get(chunkKey);
-            const d = densityCache.current.get(chunkKey);
-            const isMineVal = seed && d != null ? isMineWith(seed, d, cell) : false;
-            const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
-            revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent });
-          }
-          bumpChunkVersion(X, Y);
-        } else if (updateType === "flaggedCell") {
-          const cellIdx = (updateData && typeof updateData === "object" && Number.isFinite(updateData.cell)) ? updateData.cell : updateData;
-          const lx = cellIdx % CHUNK;
-          const ly = Math.floor(cellIdx / CHUNK);
-          const worldX = X * CHUNK + lx;
-          const worldY = Y * CHUNK + ly;
-          const flagID = (updateData && typeof updateData === "object" && Number.isFinite(updateData.flagID)) ? updateData.flagID : 0;
-          flaggedCellsRef.current.set(`${worldX},${worldY}`, flagID);
-          // Mark as revealed to maintain continuity
-          const cellKey = `${chunkKey},${cellIdx}`;
-          revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: 0, isFlagged: true });
-          bumpChunkVersion(X, Y);
-        }
-        setTick((t) => t + 1);
-      }
-    };
-
-    return () => {
-      try { websocket.close(); } catch {}
-    };
-  }, [worldToChunk, applyChunkSync, bumpChunkVersion, setTick]);
+  // Update profile while in PLAYER state
+  const updateProfile = useCallback((nameInput, flagID) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !connected) {
+      console.error("Cannot update profile: not connected as player");
+      return;
+    }
+    
+    setUpdateError(""); // Clear any previous errors
+    setUpdateSuccess(false); // Clear any previous success
+    ws.send(encodeMsg({ 
+      updateProfile: { 
+        name: nameInput, 
+        flagID 
+      } 
+    }));
+  }, [ws, connected]);
 
   const disconnect = useCallback(() => {
     try {
@@ -1052,8 +1048,12 @@ export const useGameState = () => {
     playerFlagsRef,
     chunkVersionRef,
     handleCellClick,
-    connectWs,
-    connectSpectate,
+    connectWebSocket,
+    joinGame,
+    updateProfile,
+    updateError,
+    updateSuccess,
+    serverFlagID,
     disconnect,
     worldToChunk,
     // expose caches for minimap and other consumers
