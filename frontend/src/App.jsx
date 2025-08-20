@@ -26,6 +26,7 @@ function App() {
   const [lbFollowMe, setLbFollowMe] = useState(true);
   const myLbRowRef = useRef(null);
   const [joinError, setJoinError] = useState("");
+  const [isRenameAttempt, setIsRenameAttempt] = useState(false);
 
   const {
     connected,
@@ -33,7 +34,12 @@ function App() {
     userRank,
     username,
     setUsername,
-    connectSpectate,
+    connectWebSocket,
+    joinGame,
+    updateProfile,
+    updateError,
+    updateSuccess,
+    serverFlagID,
     disconnect,
     leaderboard,
     scorePopups,
@@ -46,7 +52,6 @@ function App() {
     playerFlagsRef,
     chunkVersionRef,
     handleCellClick,
-    connectWs,
     worldToChunk,
     densityCache,
     sendViewUpdateRef,
@@ -718,11 +723,48 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [CELL_SIZE, scheduleViewUpdate, connected]);
 
+  // Single WebSocket connection that starts in spectator mode
   useEffect(() => {
-    if (!username) return;
-    const cleanup = connectWs(username, Number(flagID));
+    const cleanup = connectWebSocket();
     return cleanup;
-  }, [username, flagID, connectWs]);
+  }, [connectWebSocket]);
+
+  // Auto-join when username is set (triggered by joinGame)
+  useEffect(() => {
+    if (username && !connected) {
+      // This happens when username is set but we haven't successfully joined yet
+      // The join will happen via the joinGame function call
+    }
+  }, [username, connected]);
+
+  // Initialize nameInput with current username when first connecting
+  useEffect(() => {
+    if (connected && username && nameInput === "") {
+      setNameInput(username);
+    }
+  }, [connected, username]);
+
+  // Sync flagID with server's authoritative flagID when it changes
+  useEffect(() => {
+    if (serverFlagID !== null && flagID !== serverFlagID) {
+      setFlagID(serverFlagID);
+    }
+  }, [serverFlagID, flagID]);
+
+  // Close home overlay when rename attempt succeeds
+  useEffect(() => {
+    if (updateSuccess && isRenameAttempt) {
+      setShowHomeOverlay(false);
+      setIsRenameAttempt(false); // Reset the flag
+    }
+  }, [updateSuccess, isRenameAttempt]);
+
+  // Reset rename attempt flag when there's an error
+  useEffect(() => {
+    if (updateError && isRenameAttempt) {
+      setIsRenameAttempt(false); // Reset the flag so user can try again
+    }
+  }, [updateError, isRenameAttempt]);
 
   // Send view-based updates when view changes
   useEffect(() => {
@@ -856,20 +898,7 @@ function App() {
     }
   }, [fullLeaderboard, showHomeOverlay, activeTab, lbFollowMe]);
 
-  // Open a passive spectator WebSocket until the user joins (no identity).
-  useEffect(() => {
-    if (username) {
-      // If transitioning from guest → player, ensure guest connection is closed
-      if (guestCleanupRef.current) {
-        try { guestCleanupRef.current(); } catch {}
-        guestCleanupRef.current = null;
-      }
-      return;
-    }
-    const cleanup = connectSpectate();
-    guestCleanupRef.current = cleanup;
-    return cleanup;
-  }, [username, connectSpectate]);
+  // No separate spectator connection needed - unified connection starts in spectator mode
 
   // Handle window resize
   useEffect(() => {
@@ -898,7 +927,7 @@ function App() {
   );
   const centerDensity = densityCache.current.get(`${centerChunkX},${centerChunkY}`);
 
-  const joinGame = useCallback(() => {
+  const handleJoinGame = useCallback(() => {
     setJoinError("");
     const trimmedName = (nameInput || "").trim();
     const valid = /^[A-Za-z0-9_-]{1,20}$/.test(trimmedName);
@@ -906,51 +935,18 @@ function App() {
       setJoinError("Enter 1-20 characters: letters, numbers, _ or -");
       return;
     }
-    const chosen = trimmedName;
-    const token = localStorage.getItem("session_token");
-
-    if (token) {
-      // Ensure spectator WS is closed before promoting to player
-      if (guestCleanupRef.current) {
-        try { guestCleanupRef.current(); } catch {}
-        guestCleanupRef.current = null;
-      }
-      fetch("/profile/update", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Session-Token": token,
-        },
-        body: JSON.stringify({ name: chosen }),
-      })
-        .then((r) => (r.ok ? r.json() : Promise.reject(r)))
-         .then((r) => {
-           if (!r || r.ok === false) throw new Error("update failed");
-           localStorage.setItem("username", chosen);
-           setUsername(chosen);
-         })
-         .catch(async (err) => {
-           try {
-             const text = await err.text?.();
-             if (text && text.includes("username taken")) {
-               setJoinError("That username is taken. Try another.");
-               return;
-             }
-           } catch {}
-           // Fall back to joining without profile update
-           setUsername(chosen);
-         })
-        .finally(() => setShowHomeOverlay(false));
-      return;
+    
+    if (connected) {
+      // For connected users: this is a rename request - wait for server response
+      setIsRenameAttempt(true);
+      updateProfile(trimmedName, Number(flagID));
+      // Don't close overlay yet - wait for updateAck response
+    } else {
+      // For new users: this is a join request
+      joinGame(trimmedName, Number(flagID));
+      setShowHomeOverlay(false);
     }
-
-    if (guestCleanupRef.current) {
-      try { guestCleanupRef.current(); } catch {}
-      guestCleanupRef.current = null;
-    }
-    setUsername(chosen);
-    setShowHomeOverlay(false);
-  }, [nameInput, setUsername]);
+  }, [nameInput, flagID, connected, joinGame, updateProfile]);
 
   return (
     <div className="game-container">
@@ -1099,7 +1095,7 @@ function App() {
 
             {activeTab === "play" && (
               <>
-                <h3>Choose a name to join</h3>
+                <h3>{connected ? "Change your name" : "Choose a name to join"}</h3>
                 <input
                   value={nameInput}
                   onChange={(e) => setNameInput(e.target.value)}
@@ -1116,7 +1112,7 @@ function App() {
                   title="Use 1-20 characters: letters, numbers, underscores, or hyphens"
                 />
                 <button
-                  onClick={joinGame}
+                  onClick={handleJoinGame}
                   style={{
                     padding: "10px 20px",
                     backgroundColor: "#4CAF50",
@@ -1127,35 +1123,33 @@ function App() {
                     fontSize: 16,
                   }}
                 >
-                  Join Game
+                  {connected ? "Update Name" : "Join Game"}
                 </button>
                 <div style={{ margin: "15px 0" }}>
                   <div style={{ marginBottom: "10px", fontWeight: "bold" }}>Choose your flag:</div>
                   <FlagSelector
                     value={flagID}
-                    onChange={async (id) => {
+                    onChange={(id) => {
                       setFlagID(id);
                       localStorage.setItem("flagID", id);
-                      const token = localStorage.getItem("session_token");
-                      if (token) {
-                        try {
-                          await fetch("/profile/update", {
-                            method: "POST",
-                            headers: {
-                              "Content-Type": "application/json",
-                              "X-Session-Token": token,
-                            },
-                            body: JSON.stringify({ flagID: id }),
-                          });
-                        } catch {}
+                      // If connected as player, update profile on server
+                      if (connected && username) {
+                        updateProfile(username, id);
                       }
                     }}
                   />
                 </div>
-                {joinError && (
-                  <div style={{ color: "#c00", marginTop: 8 }}>{joinError}</div>
+                {connected && (
+                  <div style={{ fontSize: 12, color: "#777", marginBottom: 10 }}>Score: {playerScore}</div>
                 )}
-                <div style={{ fontSize: 12, color: "#777" }}>You can pan and zoom to explore even before joining.</div>
+                {(joinError || updateError) && (
+                  <div style={{ color: "#c00", marginTop: 8 }}>
+                    {connected ? updateError : joinError}
+                  </div>
+                )}
+                {!connected && (
+                  <div style={{ fontSize: 12, color: "#777" }}>You can pan and zoom to explore even before joining.</div>
+                )}
               </>
             )}
 

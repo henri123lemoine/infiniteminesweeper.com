@@ -65,7 +65,6 @@ func main() {
 	}
 
 	http.HandleFunc("/ws", server.handleWebSocket)
-	http.HandleFunc("/spectate", server.handleSpectateWebSocket)
 	http.HandleFunc("/hotspot", server.handleHotspot)
 	http.HandleFunc("/leaderboard", server.handleLeaderboardHTTP)
 	http.HandleFunc("/profile/update", server.handleProfileUpdate)

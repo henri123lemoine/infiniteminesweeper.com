@@ -27,6 +27,12 @@ func debugLogMessage(msg *pb.Msg, playerID uint32) {
 	case *pb.Msg_Hello:
 		log.Printf("[DEBUG] Player %d -> Hello: Name=%s, SessionToken=%s",
 			playerID, payload.Hello.Name, payload.Hello.SessionToken)
+	case *pb.Msg_Join:
+		log.Printf("[DEBUG] Player %d -> Join: Name=%s, FlagID=%d, SessionToken=%s",
+			playerID, payload.Join.Name, payload.Join.FlagID, payload.Join.SessionToken)
+	case *pb.Msg_UpdateProfile:
+		log.Printf("[DEBUG] Player %d -> UpdateProfile: Name=%s, FlagID=%d",
+			playerID, payload.UpdateProfile.Name, payload.UpdateProfile.FlagID)
 	case *pb.Msg_Reveal:
 		log.Printf("[DEBUG] Player %d -> Reveal: ChunkId=(%d,%d), Cell=%d, IsRightClick=%t, IsChord=%t",
 			playerID, payload.Reveal.ChunkId.X, payload.Reveal.ChunkId.Y, payload.Reveal.Cell, payload.Reveal.IsRightClick, payload.Reveal.IsChord)
@@ -112,49 +118,69 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	// 1. Receive and Decode the Hello Message
-	_, data, err := conn.ReadMessage()
-	if err != nil {
-		conn.Close()
-		return
-	}
-
-	gz, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		conn.Close()
-		return
-	}
-	pbBytes, err := io.ReadAll(gz)
-	gz.Close()
-	if err != nil {
-		conn.Close()
-		return
-	}
-
-	var msg pb.Msg
-	if err := proto.Unmarshal(pbBytes, &msg); err != nil {
-		conn.Close()
-		return
-	}
-	debugLogMessage(&msg, 0) // PlayerID is not known yet
-
-	hello := msg.GetHello()
-	if hello == nil {
-		conn.Close()
-		return
-	}
-
-	// 2. Execute Authentication Logic from the Spec
+	// All connections start in SPECTATOR state
 	s.stateMu.Lock()
+	// Allocate spectator ID using the high bit to avoid collisions with player IDs
+	const baseSpectatorID = uint32(1 << 31)
+	sid := baseSpectatorID + s.nextSpectatorID
+	s.nextSpectatorID++
+	s.stateMu.Unlock()
+
+	// Create player in SPECTATOR state (no identity, view-only access)
+	s.playersMu.Lock()
+	if s.players[sid] == nil {
+		s.players[sid] = make(map[*Player]struct{})
+	}
+	player := &Player{
+		ID:          sid,
+		Conn:        conn,
+		Send:        make(chan []byte, SendBufSize),
+		Mailbox:     make(chan func(*Player), 64),
+		TokenBucket: TokenBucket{tokens: 200},
+		Name:        "", // no identity in spectator mode
+		FlagID:      0,
+		Score:       0,
+		State:       ClientStateSpectator, // FSM: start in spectator state
+		done:        make(chan struct{}),
+	}
+	s.players[sid][player] = struct{}{}
+	s.playersMu.Unlock()
+
+	go func(p *Player) {
+		for fn := range p.Mailbox {
+			fn(p)
+		}
+	}(player)
+
+	go s.writePump(player)
+
+	// Use unified readPump that handles both spectator and player messages based on state
+	go s.readPump(player)
+
+	log.Printf("Client %d connected in SPECTATOR state", sid)
+}
+
+// handleJoin processes a Join message, transitioning client from SPECTATOR to PLAYER state
+func (s *Server) handleJoin(player *Player, join *pb.Join) {
+	if player.State != ClientStateSpectator {
+		// Already a player or invalid state - ignore
+		return
+	}
+
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
 	var playerID uint32
 	var sessionToken string
-	isNewPlayer := false
+	var isNewPlayer bool
 
-	if hello.SessionToken != "" {
-		pid, ok := s.sessionTokens[hello.SessionToken]
+	if join.SessionToken != "" {
+		// Try to reconnect to existing identity
+		pid, ok := s.sessionTokens[join.SessionToken]
 		if ok {
 			playerID = pid
-			sessionToken = hello.SessionToken
+			sessionToken = join.SessionToken
+			isNewPlayer = false
 		} else {
 			// Invalid or expired token; treat as a new player
 			isNewPlayer = true
@@ -164,12 +190,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		isNewPlayer = true
 	}
 
-	// Handle identity: create new or update existing (name/flag)
+	var chosenName string
+	var errorMsg string
+
 	if isNewPlayer {
-		// If name is missing/invalid, auto-assign a unique default.
-		chosenName := hello.Name
+		// Validate and assign name for new player
+		chosenName = join.Name
 		if !isValidUsername(chosenName) {
-			// Use nextPlayerID and current time to craft a likely-unique default, then ensure uniqueness.
+			// Auto-assign a unique default name
 			for {
 				candidate := fmt.Sprintf("User%05d", s.nextPlayerID)
 				if _, ok := s.nameToPlayerID[candidate]; !ok {
@@ -183,10 +211,165 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		} else {
-			// Valid name provided by client: reject if taken by someone else.
+			// Valid name provided by client: reject if taken by someone else
 			if _, ok := s.nameToPlayerID[chosenName]; ok {
-				s.stateMu.Unlock()
-				conn.Close()
+				errorMsg = "Username already taken"
+			}
+		}
+
+		if errorMsg == "" {
+			// Create a brand new identity
+			playerID = s.nextPlayerID
+			s.nextPlayerID++
+			sessionToken = generateSessionToken()
+			s.sessionTokens[sessionToken] = playerID
+			s.playerNames[playerID] = chosenName
+			s.nameToPlayerID[chosenName] = playerID
+			s.playerFlags[playerID] = join.FlagID
+			s.scores[playerID] = 0 // New players always start with a score of 0
+			log.Printf("New player identity created: ID=%d, Name=%s", playerID, chosenName)
+		}
+	} else {
+		// Existing player via valid session token. Allow updating name/flag if provided.
+		chosenName = s.playerNames[playerID]
+		if join.Name != "" && isValidUsername(join.Name) {
+			currentName := s.playerNames[playerID]
+			newName := join.Name
+			if newName != currentName {
+				if other, exists := s.nameToPlayerID[newName]; !exists || other == playerID {
+					if currentName != "" {
+						delete(s.nameToPlayerID, currentName)
+					}
+					s.nameToPlayerID[newName] = playerID
+					s.playerNames[playerID] = newName
+					chosenName = newName
+					s.lbDirty = true
+				} else {
+					errorMsg = "Username already taken"
+				}
+			}
+		}
+		// Update flag (allow zero) if different
+		if s.playerFlags[playerID] != join.FlagID {
+			s.playerFlags[playerID] = join.FlagID
+			s.lbDirty = true
+		}
+	}
+
+	// Send response
+	if errorMsg != "" {
+		// Join failed
+		ackMsg := &pb.Msg{Payload: &pb.Msg_JoinAck{JoinAck: &pb.JoinAck{
+			Ok:       false,
+			Error:    errorMsg,
+			NewState: ClientStateSpectator.ToPB(),
+		}}}
+		s.sendToPlayer(player.ID, mustProto(ackMsg))
+		return
+	}
+
+	// Join succeeded - transition to PLAYER state
+	// Update player identity and state
+	player.Name = chosenName
+	player.FlagID = s.playerFlags[playerID]
+	player.Score = s.scores[playerID]
+	player.State = ClientStatePlayer
+
+	// Move player from spectator ID space to player ID space
+	s.playersMu.Lock()
+	// Remove from old ID
+	if playerSet, exists := s.players[player.ID]; exists {
+		delete(playerSet, player)
+		if len(playerSet) == 0 {
+			delete(s.players, player.ID)
+		}
+	}
+	// Add to new player ID
+	if s.players[playerID] == nil {
+		s.players[playerID] = make(map[*Player]struct{})
+	}
+	s.players[playerID][player] = struct{}{}
+	player.ID = playerID // Update the player's ID
+	s.playersMu.Unlock()
+
+	s.lbDirty = true
+
+	// Send successful join response
+	ackMsg := &pb.Msg{Payload: &pb.Msg_JoinAck{JoinAck: &pb.JoinAck{
+		Ok:           true,
+		SessionToken: sessionToken,
+		Name:         chosenName,
+		Score:        player.Score,
+		FlagID:       player.FlagID,
+		NewState:     ClientStatePlayer.ToPB(),
+	}}}
+	s.sendToPlayer(playerID, mustProto(ackMsg))
+
+	// Send initial leaderboard state
+	lbBytes := s.lbProto
+	lbVer := s.lbVersion
+	if lbBytes != nil {
+		s.sendToPlayer(playerID, lbBytes)
+		player.LastLBVersion = lbVer
+	}
+
+	log.Printf("Client %d transitioned to PLAYER state: ID=%d, Name=%s", player.ID, playerID, chosenName)
+}
+
+// handleLegacyHello processes deprecated Hello messages with legacy Welcome response
+func (s *Server) handleLegacyHello(player *Player, hello *pb.Hello) {
+	if player.State != ClientStateSpectator {
+		// Already a player or invalid state - ignore
+		return
+	}
+
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	var playerID uint32
+	var sessionToken string
+	var isNewPlayer bool
+
+	if hello.SessionToken != "" {
+		// Try to reconnect to existing identity
+		pid, ok := s.sessionTokens[hello.SessionToken]
+		if ok {
+			playerID = pid
+			sessionToken = hello.SessionToken
+			isNewPlayer = false
+		} else {
+			// Invalid or expired token; treat as a new player
+			isNewPlayer = true
+		}
+	} else {
+		// No token provided; treat as a new player
+		isNewPlayer = true
+	}
+
+	var chosenName string
+
+	if isNewPlayer {
+		// Validate and assign name for new player
+		chosenName = hello.Name
+		if !isValidUsername(chosenName) {
+			// Auto-assign a unique default name
+			for {
+				candidate := fmt.Sprintf("User%05d", s.nextPlayerID)
+				if _, ok := s.nameToPlayerID[candidate]; !ok {
+					chosenName = candidate
+					break
+				}
+				candidate = fmt.Sprintf("User%05d", time.Now().UnixNano()%100000)
+				if _, ok := s.nameToPlayerID[candidate]; !ok {
+					chosenName = candidate
+					break
+				}
+			}
+		} else {
+			// Valid name provided by client: reject if taken by someone else
+			if _, ok := s.nameToPlayerID[chosenName]; ok {
+				// For legacy compatibility, just close the connection on name conflict
+				player.Conn.Close()
 				return
 			}
 		}
@@ -203,6 +386,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		log.Printf("New player identity created: ID=%d, Name=%s", playerID, chosenName)
 	} else {
 		// Existing player via valid session token. Allow updating name/flag if provided.
+		chosenName = s.playerNames[playerID]
 		if hello.Name != "" && isValidUsername(hello.Name) {
 			currentName := s.playerNames[playerID]
 			newName := hello.Name
@@ -213,7 +397,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 					}
 					s.nameToPlayerID[newName] = playerID
 					s.playerNames[playerID] = newName
+					chosenName = newName
 					s.lbDirty = true
+				} else {
+					// For legacy compatibility, just close the connection on name conflict
+					player.Conn.Close()
+					return
 				}
 			}
 		}
@@ -224,276 +413,107 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Read player state while still under the lock
-	playerName := s.playerNames[playerID]
-	playerFlag := s.playerFlags[playerID]
-	initScore := s.scores[playerID]
-	s.lbDirty = true
-	s.stateMu.Unlock()
+	// Transition to PLAYER state
+	// Update player identity and state
+	player.Name = chosenName
+	player.FlagID = s.playerFlags[playerID]
+	player.Score = s.scores[playerID]
+	player.State = ClientStatePlayer
 
-	// 3. Create the Player Actor and Register its Connection
+	// Move player from spectator ID space to player ID space
 	s.playersMu.Lock()
+	// Remove from old ID
+	if playerSet, exists := s.players[player.ID]; exists {
+		delete(playerSet, player)
+		if len(playerSet) == 0 {
+			delete(s.players, player.ID)
+		}
+	}
+	// Add to new player ID
 	if s.players[playerID] == nil {
 		s.players[playerID] = make(map[*Player]struct{})
 	}
-	player := &Player{
-		ID:          playerID,
-		Conn:        conn,
-		Send:        make(chan []byte, SendBufSize),
-		Mailbox:     make(chan func(*Player), 64),
-		TokenBucket: TokenBucket{tokens: 200},
-		Name:        playerName,
-		FlagID:      playerFlag,
-		Score:       initScore,
-		done:        make(chan struct{}),
-	}
 	s.players[playerID][player] = struct{}{}
+	player.ID = playerID // Update the player's ID
 	s.playersMu.Unlock()
 
-	go func(p *Player) {
-		for fn := range p.Mailbox {
-			fn(p)
-		}
-	}(player)
+	s.lbDirty = true
 
-	go s.writePump(player)
-	go s.readPump(player)
-
-	// 4. Send the Welcome Message with the Authoritative Session Token
+	// Send legacy Welcome response for backward compatibility
 	welcomeMsg := &pb.Msg{Payload: &pb.Msg_Welcome{Welcome: &pb.Welcome{
 		SessionToken: sessionToken,
-		Name:         playerName,
-		Score:        initScore,
-		FlagID:       playerFlag,
+		Name:         chosenName,
+		Score:        player.Score,
+		FlagID:       player.FlagID,
 	}}}
 	s.sendToPlayer(playerID, mustProto(welcomeMsg))
 
-	// 5. Send Initial Leaderboard State
-	s.stateMu.RLock()
+	// Send initial leaderboard state
 	lbBytes := s.lbProto
 	lbVer := s.lbVersion
-	s.stateMu.RUnlock()
-
 	if lbBytes != nil {
 		s.sendToPlayer(playerID, lbBytes)
 		player.LastLBVersion = lbVer
 	}
 
-	log.Printf("Player %d (%s) connected.", playerID, playerName)
+	log.Printf("Client %d transitioned to PLAYER state: ID=%d, Name=%s", player.ID, playerID, chosenName)
 }
 
-// handleSpectateWebSocket establishes a passive WebSocket connection that does not
-// authenticate or create a persisted player identity. It only accepts ViewUpdate
-// messages (and will manage per-connection subscriptions) and streams ChunkRegionSync
-// plus ChunkUpdateBroadcast messages for the subscribed chunks.
-func (s *Server) handleSpectateWebSocket(w http.ResponseWriter, r *http.Request) {
-    conn, err := s.upgrader.Upgrade(w, r, nil)
-    if err != nil {
-        log.Printf("Spectate WebSocket upgrade error: %v", err)
-        return
-    }
+// handleUpdateProfile processes an UpdateProfile message from a PLAYER state client
+func (s *Server) handleUpdateProfile(player *Player, update *pb.UpdateProfile) {
+	if player.State != ClientStatePlayer {
+		// Not a player - ignore
+		return
+	}
 
-    // Connection hygiene
-    conn.SetReadLimit(1 << 20)
-    conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-    conn.SetPongHandler(func(string) error {
-        conn.SetReadDeadline(time.Now().Add(35 * time.Second))
-        return nil
-    })
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 
-    // Allocate an ephemeral spectator ID in a disjoint range to avoid collisions.
-    // We use the high bit to mark spectators.
-    const baseSpectatorID = uint32(1 << 31)
+	var errorMsg string
+	playerID := player.ID
 
-    s.stateMu.Lock()
-    sid := baseSpectatorID + s.nextSpectatorID
-    s.nextSpectatorID++
-    s.stateMu.Unlock()
+	// Update name if provided
+	if update.Name != "" && isValidUsername(update.Name) {
+		currentName := s.playerNames[playerID]
+		newName := update.Name
+		if newName != currentName {
+			if other, exists := s.nameToPlayerID[newName]; !exists || other == playerID {
+				if currentName != "" {
+					delete(s.nameToPlayerID, currentName)
+				}
+				s.nameToPlayerID[newName] = playerID
+				s.playerNames[playerID] = newName
+				player.Name = newName
+				s.lbDirty = true
+			} else {
+				errorMsg = "Username already taken"
+			}
+		}
+	}
 
-    // Register a lightweight Player to reuse existing infra (send queues, subs, broadcasts).
-    s.playersMu.Lock()
-    if s.players[sid] == nil {
-        s.players[sid] = make(map[*Player]struct{})
-    }
-    player := &Player{
-        ID:          sid,
-        Conn:        conn,
-        Send:        make(chan []byte, SendBufSize),
-        Mailbox:     make(chan func(*Player), 64),
-        TokenBucket: TokenBucket{tokens: 200},
-        Name:        "", // no identity
-        FlagID:      0,
-        Score:       0,
-        done:        make(chan struct{}),
-    }
-    s.players[sid][player] = struct{}{}
-    s.playersMu.Unlock()
+	// Update flag if different
+	if s.playerFlags[playerID] != update.FlagID {
+		s.playerFlags[playerID] = update.FlagID
+		player.FlagID = update.FlagID
+		s.lbDirty = true
+	}
 
-    // Start pumps; spectator read loop only handles ViewUpdate.
-    go s.writePump(player)
-    go s.readPumpSpectator(player)
+	// Send response
+	ackMsg := &pb.Msg{Payload: &pb.Msg_UpdateAck{UpdateAck: &pb.UpdateAck{
+		Ok:     errorMsg == "",
+		Error:  errorMsg,
+		Name:   player.Name,
+		FlagID: player.FlagID,
+		Score:  player.Score,
+	}}}
+	s.sendToPlayer(playerID, mustProto(ackMsg))
 
-    log.Printf("Spectator %d connected.", sid)
+	if errorMsg == "" {
+		log.Printf("Player %d (%s) updated profile", playerID, player.Name)
+	}
 }
 
-// readPumpSpectator handles only view-based subscription updates for spectator connections.
-func (s *Server) readPumpSpectator(player *Player) {
-    defer func() {
-        s.removePlayer(player)
-        player.Conn.Close()
-    }()
-
-    // The connection is now established; reset the read deadline.
-    player.Conn.SetReadDeadline(time.Time{})
-
-    for {
-        _, data, err := player.Conn.ReadMessage()
-        if err != nil {
-            break
-        }
-
-        gz, err := gzip.NewReader(bytes.NewReader(data))
-        if err != nil {
-            continue
-        }
-        pbData, err := io.ReadAll(gz)
-        gz.Close()
-        if err != nil {
-            continue
-        }
-
-        var msg pb.Msg
-        if err := proto.Unmarshal(pbData, &msg); err != nil {
-            continue
-        }
-
-        // Only honor view updates and ignore any attempts at gameplay.
-        switch t := msg.Payload.(type) {
-        case *pb.Msg_ViewUpdate:
-            vu := t.ViewUpdate
-            if vu.ChunkId == nil {
-                continue
-            }
-
-            // Record spectator view center
-            view := PlayerView{Chunk: ChunkID{X: vu.ChunkId.X, Y: vu.ChunkId.Y}, Cell: vu.Cell}
-            s.stateMu.Lock()
-            s.playerViews[player.ID] = view
-            s.stateMu.Unlock()
-
-            // Compute proportional region around viewport, identical to player handling
-            widthCells := int(vu.WidthCells)
-            heightCells := int(vu.HeightCells)
-            if widthCells <= 0 || heightCells <= 0 {
-                widthCells, heightCells = ChunkSize*3, ChunkSize*3
-            }
-            chunksWide := (widthCells + ChunkSize - 1) / ChunkSize
-            chunksHigh := (heightCells + ChunkSize - 1) / ChunkSize
-            chunksWide += 2
-            chunksHigh += 2
-
-            // Use the chunk coordinates directly from the frontend
-            centerChunkX := int64(vu.ChunkId.X)
-            centerChunkY := int64(vu.ChunkId.Y)
-
-            halfW := chunksWide / 2
-            halfH := chunksHigh / 2
-            startX := centerChunkX - int64(halfW)
-            startY := centerChunkY - int64(halfH)
-            endX := startX + int64(chunksWide) - 1
-            endY := startY + int64(chunksHigh) - 1
-
-            newSet := make(map[ChunkID]struct{}, chunksWide*chunksHigh)
-            for cy := startY; cy <= endY; cy++ {
-                for cx := startX; cx <= endX; cx++ {
-                    newSet[ChunkID{X: cx, Y: cy}] = struct{}{}
-                }
-            }
-
-            s.stateMu.Lock()
-            current := s.playerSubs[player.ID]
-            if current == nil {
-                current = make(map[ChunkID]struct{})
-                s.playerSubs[player.ID] = current
-            }
-            lastSeen := s.playerSubLastSeen[player.ID]
-            if lastSeen == nil {
-                lastSeen = make(map[ChunkID]uint64)
-                s.playerSubLastSeen[player.ID] = lastSeen
-            }
-
-            adds := make([]ChunkID, 0)
-            for cid := range newSet {
-                if _, ok := current[cid]; !ok {
-                    if s.subs[cid] == nil {
-                        s.subs[cid] = make(map[uint32]struct{})
-                    }
-                    s.subs[cid][player.ID] = struct{}{}
-                    current[cid] = struct{}{}
-                    adds = append(adds, cid)
-                }
-                s.subTick++
-                lastSeen[cid] = s.subTick
-            }
-
-            // Evict using same LRU policy and capacity as players
-            over := len(current) - s.maxPlayerSubs
-            if over > 0 {
-                type pair struct{ id ChunkID; t uint64 }
-                candidates := make([]pair, 0)
-                for cid := range current {
-                    if _, inView := newSet[cid]; inView {
-                        continue
-                    }
-                    candidates = append(candidates, pair{id: cid, t: lastSeen[cid]})
-                }
-                sort.Slice(candidates, func(i, j int) bool { return candidates[i].t < candidates[j].t })
-                for i := 0; i < len(candidates) && over > 0; i++ {
-                    cid := candidates[i].id
-                    if subs, ok := s.subs[cid]; ok {
-                        delete(subs, player.ID)
-                        if len(subs) == 0 {
-                            delete(s.subs, cid)
-                        }
-                    }
-                    delete(current, cid)
-                    delete(lastSeen, cid)
-                    over--
-                }
-                if over > 0 {
-                    any := make([]pair, 0, len(current))
-                    for cid := range current {
-                        any = append(any, pair{id: cid, t: lastSeen[cid]})
-                    }
-                    sort.Slice(any, func(i, j int) bool { return any[i].t < any[j].t })
-                    for i := 0; i < len(any) && over > 0; i++ {
-                        cid := any[i].id
-                        if subs, ok := s.subs[cid]; ok {
-                            delete(subs, player.ID)
-                            if len(subs) == 0 {
-                                delete(s.subs, cid)
-                            }
-                        }
-                        delete(current, cid)
-                        delete(lastSeen, cid)
-                        over--
-                    }
-                }
-            }
-            chunkIDs := adds
-            s.stateMu.Unlock()
-
-            if len(chunkIDs) > 0 {
-                if os.Getenv("MODE") == "development" {
-                    log.Printf("[DEBUG] Spectator %d <- ChunkRegionSync add %d chunks (rect %dx%d)", player.ID, len(chunkIDs), chunksWide, chunksHigh)
-                }
-                s.sendChunkRegionSync(player.ID, chunkIDs)
-            }
-        default:
-            // ignore all other messages for spectators
-        }
-    }
-}
+// Deprecated functions removed - now using unified FSM approach
 
 func (s *Server) readPump(player *Player) {
 	defer func() {
@@ -528,7 +548,19 @@ func (s *Server) readPump(player *Player) {
 		debugLogMessage(&msg, player.ID)
 
 		switch t := msg.Payload.(type) {
+		case *pb.Msg_Join:
+			// FSM: SPECTATOR -> PLAYER transition
+			s.handleJoin(player, t.Join)
+
+		case *pb.Msg_UpdateProfile:
+			// FSM: Update profile while PLAYER
+			s.handleUpdateProfile(player, t.UpdateProfile)
+
 		case *pb.Msg_Reveal:
+			// FSM: Only PLAYER state can send Reveal messages
+			if player.State != ClientStatePlayer {
+				continue
+			}
 			r := t.Reveal
 			if r.ChunkId == nil {
 				continue

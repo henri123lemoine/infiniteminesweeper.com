@@ -4,6 +4,12 @@ option go_package = "github.com/henri123lemoine/infiniteminesweeper.com/proto";
 
 // ---- Core Data Structures ----
 
+// Client state in the finite state machine
+enum ClientState {
+  SPECTATOR = 0; // Can only view, no game actions
+  PLAYER = 1;    // Full game capabilities
+}
+
 message ChunkID {
   sint64 X = 1;
   sint64 Y = 2;
@@ -66,6 +72,21 @@ message ViewUpdate {
   // can scale the region proportionally to the user's viewport.
   uint32 widthCells = 3;
   uint32 heightCells = 4;
+}
+
+// Transition from SPECTATOR to PLAYER state by joining the game.
+message Join {
+  // The player's chosen name and flag style.
+  string name = 1;
+  uint32 flagID = 2;
+  // Optional session token for reconnecting to existing identity
+  string sessionToken = 3;
+}
+
+// Update player profile (name/flag) while remaining in PLAYER state.
+message UpdateProfile {
+  string name = 1;
+  uint32 flagID = 2;
 }
 
 // ---- Server -> Client Messages ----
@@ -158,23 +179,49 @@ message Leaderboard {
   repeated LeaderboardEntry entries = 2;
 }
 
+// Response to Join message indicating success or failure
+message JoinAck {
+  bool ok = 1;
+  string error = 2; // Set if ok=false, describes why join failed
+  // If ok=true, provides the player's identity and session info
+  string sessionToken = 3;
+  string name = 4;
+  sint32 score = 5;
+  uint32 flagID = 6;
+  ClientState newState = 7; // Should be PLAYER if ok=true
+}
+
+// Response to UpdateProfile message
+message UpdateAck {
+  bool ok = 1;
+  string error = 2; // Set if ok=false, describes why update failed
+  // Current profile values after update attempt
+  string name = 3;
+  uint32 flagID = 4;
+  sint32 score = 5;
+}
+
 // Wrapper for all possible messages.
 message Msg {
   oneof payload {
     // Client -> Server
-    Hello hello = 1;
+    Hello hello = 1; // Deprecated: use Join instead
     Subscribe subscribe = 2;
     Unsubscribe unsubscribe = 3;
     Reveal reveal = 4;
     ViewUpdate viewUpdate = 5;
+    Join join = 17; // FSM: SPECTATOR -> PLAYER transition
+    UpdateProfile updateProfile = 18; // FSM: Update profile while PLAYER
 
     // Server -> Client
-    Welcome welcome = 6;
+    Welcome welcome = 6; // Deprecated: use JoinAck instead
     ChunkSync chunkSync = 7;
     RevealAck revealAck = 8;
     ChunkUpdateBroadcast chunkUpdateBroadcast = 9;
     Leaderboard leaderboard = 10;
     ChunkRegionSync chunkRegionSync = 11;
+    JoinAck joinAck = 19; // FSM: Response to Join
+    UpdateAck updateAck = 20; // FSM: Response to UpdateProfile
 
     // Minimap streaming (client -> server)
     SubscribeTiles minimapSubscribe = 12;
