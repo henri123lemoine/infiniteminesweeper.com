@@ -724,34 +724,6 @@ export const useGameState = () => {
             setUpdateError(data.error || "Profile update failed");
             console.error("Profile update failed:", data.error);
           }
-        } else if (type === "welcome") {
-          // Legacy welcome message support for backwards compatibility
-          didJoinAck = true;
-          localStorage.setItem("session_token", data.sessionToken);
-          localStorage.setItem("username", data.name || "");
-          localStorage.setItem("score", String(data.score ?? 0));
-          localStorage.setItem("flagID", String(data.flagID));
-          playerFlagsRef.current.set(data.name, data.flagID);
-          setUsername(data.name || "");
-          setPlayerScore(data.score ?? 0);
-          setServerFlagID(data.flagID); // Sync server's authoritative flagID
-          setConnected(true);
-          // Send a view update after processing legacy welcome
-          requestAnimationFrame(() => {
-            try {
-              const root = document.querySelector('#root')?.firstElementChild;
-              if (root) {
-                const width = root.clientWidth;
-                const height = root.clientHeight;
-                const worldWidthCells = Math.ceil(width / 1);
-                const worldHeightCells = Math.ceil(height / 1);
-                const centerWorldX = Math.floor((viewRef.current.x + width / 2) / 1);
-                const centerWorldY = Math.floor((viewRef.current.y + height / 2) / 1);
-                const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
-                sendViewUpdate.current(chunkX, chunkY, cell, worldWidthCells, worldHeightCells);
-              }
-            } catch {}
-          });
         } else if (type === "chunkSync") {
           applyChunkSync(data);
           setTick(t => t + 1);

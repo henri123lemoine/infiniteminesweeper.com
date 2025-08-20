@@ -307,21 +307,21 @@ func TestFullStackIntegration(t *testing.T) {
 		}
 		conns[i] = conn
 
-		hello := &pb.Msg{Payload: &pb.Msg_Hello{Hello: &pb.Hello{Name: fmt.Sprintf("p%d", i)}}}
-		if err := conn.WriteMessage(websocket.BinaryMessage, encodeMsg(hello)); err != nil {
-			t.Fatalf("hello %d: %v", i, err)
+		join := &pb.Msg{Payload: &pb.Msg_Join{Join: &pb.Join{Name: fmt.Sprintf("p%d", i)}}}
+		if err := conn.WriteMessage(websocket.BinaryMessage, encodeMsg(join)); err != nil {
+			t.Fatalf("join %d: %v", i, err)
 		}
 
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			t.Fatalf("welcome %d: %v", i, err)
+			t.Fatalf("joinAck %d: %v", i, err)
 		}
 		m, err := decodeMsg(data)
 		if err != nil {
-			t.Fatalf("decode welcome %d: %v", i, err)
+			t.Fatalf("decode joinAck %d: %v", i, err)
 		}
-		if m.GetWelcome() == nil {
-			t.Fatalf("unexpected welcome %d", i)
+		if m.GetJoinAck() == nil {
+			t.Fatalf("unexpected joinAck %d", i)
 		}
 
 		// drain first leaderboard so it doesn't confuse later reads

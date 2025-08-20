@@ -24,9 +24,6 @@ func debugLogMessage(msg *pb.Msg, playerID uint32) {
 	}
 
 	switch payload := msg.Payload.(type) {
-	case *pb.Msg_Hello:
-		log.Printf("[DEBUG] Player %d -> Hello: Name=%s, SessionToken=%s",
-			playerID, payload.Hello.Name, payload.Hello.SessionToken)
 	case *pb.Msg_Join:
 		log.Printf("[DEBUG] Player %d -> Join: Name=%s, FlagID=%d, SessionToken=%s",
 			playerID, payload.Join.Name, payload.Join.FlagID, payload.Join.SessionToken)
@@ -316,149 +313,6 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	log.Printf("Client %d transitioned to PLAYER state: ID=%d, Name=%s", player.ID, playerID, chosenName)
 }
 
-// handleLegacyHello processes deprecated Hello messages with legacy Welcome response
-func (s *Server) handleLegacyHello(player *Player, hello *pb.Hello) {
-	if player.State != ClientStateSpectator {
-		// Already a player or invalid state - ignore
-		return
-	}
-
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-
-	var playerID uint32
-	var sessionToken string
-	var isNewPlayer bool
-
-	if hello.SessionToken != "" {
-		// Try to reconnect to existing identity
-		pid, ok := s.sessionTokens[hello.SessionToken]
-		if ok {
-			playerID = pid
-			sessionToken = hello.SessionToken
-			isNewPlayer = false
-		} else {
-			// Invalid or expired token; treat as a new player
-			isNewPlayer = true
-		}
-	} else {
-		// No token provided; treat as a new player
-		isNewPlayer = true
-	}
-
-	var chosenName string
-
-	if isNewPlayer {
-		// Validate and assign name for new player
-		chosenName = hello.Name
-		if !isValidUsername(chosenName) {
-			// Auto-assign a unique default name
-			for {
-				candidate := fmt.Sprintf("User%05d", s.nextPlayerID)
-				if _, ok := s.nameToPlayerID[candidate]; !ok {
-					chosenName = candidate
-					break
-				}
-				candidate = fmt.Sprintf("User%05d", time.Now().UnixNano()%100000)
-				if _, ok := s.nameToPlayerID[candidate]; !ok {
-					chosenName = candidate
-					break
-				}
-			}
-		} else {
-			// Valid name provided by client: reject if taken by someone else
-			if _, ok := s.nameToPlayerID[chosenName]; ok {
-				// For legacy compatibility, just close the connection on name conflict
-				player.Conn.Close()
-				return
-			}
-		}
-
-		// Create a brand new identity
-		playerID = s.nextPlayerID
-		s.nextPlayerID++
-		sessionToken = generateSessionToken()
-		s.sessionTokens[sessionToken] = playerID
-		s.playerNames[playerID] = chosenName
-		s.nameToPlayerID[chosenName] = playerID
-		s.playerFlags[playerID] = hello.FlagID
-		s.scores[playerID] = 0 // New players always start with a score of 0
-		log.Printf("New player identity created: ID=%d, Name=%s", playerID, chosenName)
-	} else {
-		// Existing player via valid session token. Allow updating name/flag if provided.
-		chosenName = s.playerNames[playerID]
-		if hello.Name != "" && isValidUsername(hello.Name) {
-			currentName := s.playerNames[playerID]
-			newName := hello.Name
-			if newName != currentName {
-				if other, exists := s.nameToPlayerID[newName]; !exists || other == playerID {
-					if currentName != "" {
-						delete(s.nameToPlayerID, currentName)
-					}
-					s.nameToPlayerID[newName] = playerID
-					s.playerNames[playerID] = newName
-					chosenName = newName
-					s.lbDirty = true
-				} else {
-					// For legacy compatibility, just close the connection on name conflict
-					player.Conn.Close()
-					return
-				}
-			}
-		}
-		// Update flag (allow zero) if different
-		if s.playerFlags[playerID] != hello.FlagID {
-			s.playerFlags[playerID] = hello.FlagID
-			s.lbDirty = true
-		}
-	}
-
-	// Transition to PLAYER state
-	// Update player identity and state
-	player.Name = chosenName
-	player.FlagID = s.playerFlags[playerID]
-	player.Score = s.scores[playerID]
-	player.State = ClientStatePlayer
-
-	// Move player from spectator ID space to player ID space
-	s.playersMu.Lock()
-	// Remove from old ID
-	if playerSet, exists := s.players[player.ID]; exists {
-		delete(playerSet, player)
-		if len(playerSet) == 0 {
-			delete(s.players, player.ID)
-		}
-	}
-	// Add to new player ID
-	if s.players[playerID] == nil {
-		s.players[playerID] = make(map[*Player]struct{})
-	}
-	s.players[playerID][player] = struct{}{}
-	player.ID = playerID // Update the player's ID
-	s.playersMu.Unlock()
-
-	s.lbDirty = true
-
-	// Send legacy Welcome response for backward compatibility
-	welcomeMsg := &pb.Msg{Payload: &pb.Msg_Welcome{Welcome: &pb.Welcome{
-		SessionToken: sessionToken,
-		Name:         chosenName,
-		Score:        player.Score,
-		FlagID:       player.FlagID,
-	}}}
-	s.sendToPlayer(playerID, mustProto(welcomeMsg))
-
-	// Send initial leaderboard state
-	lbBytes := s.lbProto
-	lbVer := s.lbVersion
-	if lbBytes != nil {
-		s.sendToPlayer(playerID, lbBytes)
-		player.LastLBVersion = lbVer
-	}
-
-	log.Printf("Client %d transitioned to PLAYER state: ID=%d, Name=%s", player.ID, playerID, chosenName)
-}
-
 // handleUpdateProfile processes an UpdateProfile message from a PLAYER state client
 func (s *Server) handleUpdateProfile(player *Player, update *pb.UpdateProfile) {
 	if player.State != ClientStatePlayer {
@@ -512,8 +366,6 @@ func (s *Server) handleUpdateProfile(player *Player, update *pb.UpdateProfile) {
 		log.Printf("Player %d (%s) updated profile", playerID, player.Name)
 	}
 }
-
-// Deprecated functions removed - now using unified FSM approach
 
 func (s *Server) readPump(player *Player) {
 	defer func() {
