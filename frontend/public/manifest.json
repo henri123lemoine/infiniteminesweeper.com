@@ -1,0 +1,21 @@
+{
+  "name": "Infinite Minesweeper",
+  "short_name": "Minesweeper",
+  "description": "Play infinite minesweeper online - an endless multiplayer minesweeper game",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#333333",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}
