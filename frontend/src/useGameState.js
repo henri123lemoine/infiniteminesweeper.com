@@ -160,7 +160,7 @@ export const useGameState = () => {
   // 0..9: board background, mines, numbers; 10..19: 10 flag colors
   const minimapPalette = new Uint32Array(256);
   // base board colors
-  minimapPalette[0] = 0xff808080; // unseen
+  minimapPalette[0] = 0xffc0c0c0; // unseen
   // Use very dark gray for mines so pure black can be reserved for a flag color
   minimapPalette[1] = 0xff202020; // mine (dark gray)
   minimapPalette[2] = 0xffe0e0e0; // empty

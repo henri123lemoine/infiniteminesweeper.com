@@ -5,8 +5,7 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
-import MinimapHUD from "./MinimapHUD.jsx";
-import MinimapOverlay from "./MinimapOverlay.jsx";
+import Minimap from "./Minimap.jsx";
 import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
@@ -1005,7 +1004,14 @@ function App() {
           <div style={{ position: "absolute", top: 8, right: 8, zIndex: 31 }}>
             <button onClick={() => setShowMinimapOverlay(false)} style={{ padding: "6px 10px" }}>Close</button>
           </div>
-          <MinimapOverlay
+          <Minimap
+            mode="overlay"
+            CELL_SIZE={CELL_SIZE}
+            zoom={zoom}
+            viewX={viewX}
+            viewY={viewY}
+            containerRef={containerRef}
+            mainViewMoveToken={mainViewMoveToken}
             updateMinimapSubscriptions={updateMinimapSubscriptions}
             clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
             minimapTilesRef={minimapTilesRef}
@@ -1231,7 +1237,14 @@ function App() {
 
             {activeTab === "minimap" && (
               <div style={{ width: "100%", height: "72vh" }}>
-                <MinimapOverlay
+                <Minimap
+                  mode="overlay"
+                  CELL_SIZE={CELL_SIZE}
+                  zoom={zoom}
+                  viewX={viewX}
+                  viewY={viewY}
+                  containerRef={containerRef}
+                  mainViewMoveToken={mainViewMoveToken}
                   updateMinimapSubscriptions={updateMinimapSubscriptions}
                   clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
                   minimapTilesRef={minimapTilesRef}
@@ -1359,7 +1372,8 @@ function App() {
         </div>
       </div>
 
-      <MinimapHUD
+      <Minimap
+        mode="hud"
         CHUNK={CHUNK}
         CELL_SIZE={CELL_SIZE}
         MINIMAP_SIZE={MINIMAP_SIZE}
