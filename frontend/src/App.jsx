@@ -11,9 +11,6 @@ import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
 import meta from "./assets/spritesheet.json";
 
-if (__DEV__) console.log("dev mode!");
-else console.log("production mode!");
-
 function App() {
   const storedName = localStorage.getItem("username") || "";
   const [nameInput, setNameInput] = useState(storedName);
