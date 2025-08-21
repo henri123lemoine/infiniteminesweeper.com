@@ -193,26 +193,26 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	if isNewPlayer {
 		// Validate and assign name for new player
 		chosenName = join.Name
-		if !isValidUsername(chosenName) {
-			// Auto-assign a unique default name
+		errorMsg = s.validateUsername(chosenName, 0) // Use 0 for new players since they don't have an ID yet
+
+		if errorMsg != "" && errorMsg == "Invalid username" {
+			// Auto-assign a unique default name for invalid usernames only
 			for {
 				candidate := fmt.Sprintf("User%05d", s.nextPlayerID)
 				if _, ok := s.nameToPlayerID[candidate]; !ok {
 					chosenName = candidate
+					errorMsg = "" // Clear error since we found a valid auto-assigned name
 					break
 				}
-				candidate = fmt.Sprintf("User%05d", time.Now().UnixNano()%100000)
-				if _, ok := s.nameToPlayerID[candidate]; !ok {
-					chosenName = candidate
+				candidate2 := fmt.Sprintf("User%05d", time.Now().UnixNano()%100000)
+				if _, ok := s.nameToPlayerID[candidate2]; !ok {
+					chosenName = candidate2
+					errorMsg = "" // Clear error since we found a valid auto-assigned name
 					break
 				}
-			}
-		} else {
-			// Valid name provided by client: reject if taken by someone else
-			if _, ok := s.nameToPlayerID[chosenName]; ok {
-				errorMsg = "Username already taken"
 			}
 		}
+		// If username taken errorMsg, we keep the error and reject the join
 
 		if errorMsg == "" {
 			// Create a brand new identity
@@ -229,11 +229,12 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	} else {
 		// Existing player via valid session token. Allow updating name/flag if provided.
 		chosenName = s.playerNames[playerID]
-		if join.Name != "" && isValidUsername(join.Name) {
+		if join.Name != "" {
 			currentName := s.playerNames[playerID]
 			newName := join.Name
 			if newName != currentName {
-				if other, exists := s.nameToPlayerID[newName]; !exists || other == playerID {
+				errorMsg = s.validateUsername(newName, playerID)
+				if errorMsg == "" {
 					if currentName != "" {
 						delete(s.nameToPlayerID, currentName)
 					}
@@ -241,8 +242,6 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 					s.playerNames[playerID] = newName
 					chosenName = newName
 					s.lbDirty = true
-				} else {
-					errorMsg = "Username already taken"
 				}
 			}
 		}
@@ -327,11 +326,13 @@ func (s *Server) handleUpdateProfile(player *Player, update *pb.UpdateProfile) {
 	playerID := player.ID
 
 	// Update name if provided
-	if update.Name != "" && isValidUsername(update.Name) {
+	if update.Name != "" {
 		currentName := s.playerNames[playerID]
 		newName := update.Name
 		if newName != currentName {
-			if other, exists := s.nameToPlayerID[newName]; !exists || other == playerID {
+			if validationError := s.validateUsername(newName, playerID); validationError != "" {
+				errorMsg = validationError
+			} else {
 				if currentName != "" {
 					delete(s.nameToPlayerID, currentName)
 				}
@@ -339,8 +340,6 @@ func (s *Server) handleUpdateProfile(player *Player, update *pb.UpdateProfile) {
 				s.playerNames[playerID] = newName
 				player.Name = newName
 				s.lbDirty = true
-			} else {
-				errorMsg = "Username already taken"
 			}
 		}
 	}

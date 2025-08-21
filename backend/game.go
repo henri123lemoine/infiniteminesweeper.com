@@ -65,21 +65,21 @@ func (s *Server) applyScore(playerID uint32, delta int32) int32 {
 
 // isMine determines if a cell contains a mine using the chunk's seed and density.
 func (s *Server) isMine(chunkID ChunkID, cell uint32) bool {
-    seed := s.generateChunkSeed(chunkID)
-    cellSeed := splitmix64(seed + uint64(cell))
-    // Use per-chunk density mapped to 0..100 threshold.
-    // Quantize to float32 to match what is sent to the client and used for its calculations.
-    d32 := float32(s.getChunkDensity(chunkID)) // [0,1] as float32 like on the wire
-    if d32 < 0 {
-        d32 = 0
-    } else if d32 > 1 {
-        d32 = 1
-    }
-    threshold := uint64(math.Floor(float64(d32 * 100.0)))
-    if threshold > 100 {
-        threshold = 100
-    }
-    return (cellSeed % 100) < threshold
+	seed := s.generateChunkSeed(chunkID)
+	cellSeed := splitmix64(seed + uint64(cell))
+	// Use per-chunk density mapped to 0..100 threshold.
+	// Quantize to float32 to match what is sent to the client and used for its calculations.
+	d32 := float32(s.getChunkDensity(chunkID)) // [0,1] as float32 like on the wire
+	if d32 < 0 {
+		d32 = 0
+	} else if d32 > 1 {
+		d32 = 1
+	}
+	threshold := uint64(math.Floor(float64(d32 * 100.0)))
+	if threshold > 100 {
+		threshold = 100
+	}
+	return (cellSeed % 100) < threshold
 }
 
 func (s *Server) countAdjacentMines(chunkID ChunkID, cell uint32) int {
@@ -112,6 +112,20 @@ var usernameRegex = regexp.MustCompile(`^[A-Za-z0-9_-]{1,20}$`)
 
 func isValidUsername(name string) bool {
 	return usernameRegex.MatchString(name)
+}
+
+// validateUsername checks if a username is valid and available for the given player
+// Returns empty string on success, or error message on failure
+func (s *Server) validateUsername(name string, currentPlayerID uint32) string {
+	if !isValidUsername(name) {
+		return "Invalid username"
+	}
+
+	if existingPlayerID, exists := s.nameToPlayerID[name]; exists && existingPlayerID != currentPlayerID {
+		return "Username already taken"
+	}
+
+	return ""
 }
 
 // Unified reveal / flag / chord handler
