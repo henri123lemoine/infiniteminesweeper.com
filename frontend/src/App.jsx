@@ -25,7 +25,7 @@ function App() {
   const lbLoadingRef = useRef(false);
   const [lbFollowMe, setLbFollowMe] = useState(true);
   const myLbRowRef = useRef(null);
-  const [joinError, setJoinError] = useState("");
+  const [validationError, setValidationError] = useState("");
   const [isRenameAttempt, setIsRenameAttempt] = useState(false);
 
   const {
@@ -39,6 +39,7 @@ function App() {
     updateProfile,
     updateError,
     updateSuccess,
+    joinError,
     serverFlagID,
     disconnect,
     leaderboard,
@@ -759,6 +760,20 @@ function App() {
     }
   }, [updateSuccess, isRenameAttempt]);
 
+  // Close home overlay when join succeeds (connected becomes true)
+  useEffect(() => {
+    if (connected) {
+      setShowHomeOverlay(false);
+    }
+  }, [connected]);
+
+  // Ensure overlay is shown when join fails
+  useEffect(() => {
+    if (joinError && !connected) {
+      setShowHomeOverlay(true);
+    }
+  }, [joinError, connected]);
+
   // Reset rename attempt flag when there's an error
   useEffect(() => {
     if (updateError && isRenameAttempt) {
@@ -928,11 +943,11 @@ function App() {
   const centerDensity = densityCache.current.get(`${centerChunkX},${centerChunkY}`);
 
   const handleJoinGame = useCallback(() => {
-    setJoinError("");
+    setValidationError("");
     const trimmedName = (nameInput || "").trim();
     const valid = /^[A-Za-z0-9_-]{1,20}$/.test(trimmedName);
     if (!valid) {
-      setJoinError("Enter 1-20 characters: letters, numbers, _ or -");
+      setValidationError("Enter 1-20 characters: letters, numbers, _ or -");
       return;
     }
     
@@ -942,9 +957,8 @@ function App() {
       updateProfile(trimmedName, Number(flagID));
       // Don't close overlay yet - wait for updateAck response
     } else {
-      // For new users: this is a join request
+      // For new users: this is a join request - wait for server confirmation before hiding overlay
       joinGame(trimmedName, Number(flagID));
-      setShowHomeOverlay(false);
     }
   }, [nameInput, flagID, connected, joinGame, updateProfile]);
 
@@ -1142,13 +1156,10 @@ function App() {
                 {connected && (
                   <div style={{ fontSize: 12, color: "#777", marginBottom: 10 }}>Score: {playerScore}</div>
                 )}
-                {(joinError || updateError) && (
+                {(validationError || joinError || updateError) && (
                   <div style={{ color: "#c00", marginTop: 8 }}>
-                    {connected ? updateError : joinError}
+                    {validationError || (connected ? updateError : joinError)}
                   </div>
-                )}
-                {!connected && (
-                  <div style={{ fontSize: 12, color: "#777" }}>You can pan and zoom to explore even before joining.</div>
                 )}
               </>
             )}

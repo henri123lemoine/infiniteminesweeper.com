@@ -151,6 +151,7 @@ export const useGameState = () => {
   const [hintPopups, setHintPopups] = useState([]);
   const [tick, setTick] = useState(0);
   const [updateError, setUpdateError] = useState("");
+  const [joinError, setJoinError] = useState("");
   const [serverFlagID, setServerFlagID] = useState(null);
   const [updateSuccess, setUpdateSuccess] = useState(false);
 
@@ -687,6 +688,7 @@ export const useGameState = () => {
             setUsername(data.name || "");
             setPlayerScore(data.score ?? 0);
             setServerFlagID(data.flagID); // Sync server's authoritative flagID
+            setJoinError(""); // Clear any previous join errors
             setConnected(true); // Now we're fully connected as a player
             
             // Send a view update after successful join
@@ -708,7 +710,11 @@ export const useGameState = () => {
           } else {
             // Join failed - stay in spectator mode but notify user
             console.error("Join failed:", data.error);
-            // You could expose this error to the UI here
+            setJoinError(data.error || "Join failed");
+            // Clear username to force UI back to join dialog
+            setUsername("");
+            localStorage.removeItem("username");
+            localStorage.removeItem("session_token"); // Also clear invalid session
           }
         } else if (type === "updateAck") {
           if (data.ok) {
@@ -1025,6 +1031,7 @@ export const useGameState = () => {
     updateProfile,
     updateError,
     updateSuccess,
+    joinError,
     serverFlagID,
     disconnect,
     worldToChunk,
