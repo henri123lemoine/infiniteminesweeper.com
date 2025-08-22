@@ -211,18 +211,24 @@ export class CanvasRenderer {
           }
         }
         if (isFlagged) {
-          // compact placeholder; main pass may overlay sprite when zoomed in
           const flagKey = `${wx},${wy}`;
           const flagData = flaggedCellsRef.current.get(flagKey);
           
-          // Use the flag's actual color from sprite metadata
-          let flagColor = "#202020"; // fallback
+          // For cached chunks, make flags more prominent with better contrast
+          let flagColor = "#ff4444"; // bright default for visibility
           if (flagData && CanvasRenderer.#frames[flagData]?.hex) {
             flagColor = CanvasRenderer.#frames[flagData].hex;
           }
           
+          // Make flags larger and more visible in cached chunks
+          const flagPadding = Math.max(0, size * 0.1);
           ctx.fillStyle = flagColor;
-          ctx.fillRect(dx + 1, dy + 1, size - 2, size - 2);
+          ctx.fillRect(dx + flagPadding, dy + flagPadding, size - 2 * flagPadding, size - 2 * flagPadding);
+          
+          // Add a subtle border for better definition
+          ctx.strokeStyle = "rgba(0, 0, 0, 0.3)";
+          ctx.lineWidth = Math.max(0.5, size * 0.05);
+          ctx.strokeRect(dx + flagPadding, dy + flagPadding, size - 2 * flagPadding, size - 2 * flagPadding);
         }
       }
     }
@@ -345,9 +351,15 @@ export class CanvasRenderer {
     // Apply zoom and DPR scaling
     ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, 0, 0);
 
-    // Level of detail based on effective pixels per cell
     const effPx = CELL_SIZE * zoom * dpr;
-    const LOD = effPx < 8 ? 2 : effPx < 16 ? 1 : 0; // 0=full, 1=simple, 2=ultra-simple
+    
+    // Thresholds are in effective pixels per cell
+    const MINIMAL_RENDERING_THRESHOLD = 5;   // below this: minimal cached chunks
+    const FULL_QUALITY_THRESHOLD = 20;       // above this: per-cell rendering
+    
+    const LOD = effPx < MINIMAL_RENDERING_THRESHOLD ? 2 
+              : effPx < FULL_QUALITY_THRESHOLD ? 1 
+              : 0;
 
     // Clear background
     ctx.fillStyle = "#c0c0c0";
@@ -442,22 +454,5 @@ export class CanvasRenderer {
       }
     }
 
-    // Overlay high-quality flag sprites when in mid LOD (LOD 1)
-    if (LOD === 1) {
-      const minX = startWorldX;
-      const minY = startWorldY;
-      const maxX = endWorldX;
-      const maxY = endWorldY;
-      flaggedCellsRef.current.forEach((flagForCell, key) => {
-        const comma = key.indexOf(",");
-        if (comma <= 0) return;
-        const wx = Number(key.slice(0, comma));
-        const wy = Number(key.slice(comma + 1));
-        if (wx < minX || wx >= maxX || wy < minY || wy >= maxY) return;
-        const screenX = wx * CELL_SIZE - viewRef.current.x;
-        const screenY = wy * CELL_SIZE - viewRef.current.y;
-        this.drawSprite(ctx, flagForCell, screenX, screenY, CELL_SIZE, CELL_SIZE);
-      });
-    }
   }
 }
