@@ -132,6 +132,7 @@ function App() {
       zoomRef.current = targetZoom;
       scheduleViewUpdate(newViewX, newViewY);
       setZoom(targetZoom);
+      bumpMainViewMove();
     },
     [containerRef, scheduleViewUpdate, bumpMainViewMove]
   );
@@ -311,27 +312,39 @@ function App() {
     });
   }, [tick, getNumberColor, worldToChunk, flagID]);
 
-  // Instead of per-chunk subscribes, send a viewUpdate proportional to viewport
+  // Compute current viewport center and size in world cells
+  const getViewportInfo = useCallback(() => {
+    const container = containerRef.current;
+    const width = container?.clientWidth || window.innerWidth || 0;
+    const height = container?.clientHeight || window.innerHeight || 0;
+    const z = zoomRef.current;
+    const worldWidthCells = Math.ceil(width / z / CELL_SIZE);
+    const worldHeightCells = Math.ceil(height / z / CELL_SIZE);
+    const centerWorldX = Math.floor((viewRef.current.x + (width / z) / 2) / CELL_SIZE);
+    const centerWorldY = Math.floor((viewRef.current.y + (height / z) / 2) / CELL_SIZE);
+    return { worldWidthCells, worldHeightCells, centerWorldX, centerWorldY };
+  }, [CELL_SIZE]);
+
+  // Send authoritative viewport update to the server (chunks for gameplay)
   const sendViewportUpdate = useCallback(() => {
     if (!connected && typeof sendViewUpdateRef?.current !== 'function') return;
     requestAnimationFrame(() => {
-      const container = containerRef.current;
-      const width = container?.clientWidth || window.innerWidth || 0;
-      const height = container?.clientHeight || window.innerHeight || 0;
-
-      const z = zoomRef.current;
-      const worldWidthCells = Math.ceil(width / z / CELL_SIZE);
-      const worldHeightCells = Math.ceil(height / z / CELL_SIZE);
-
-      const centerWorldX = Math.floor((viewRef.current.x + (width / z) / 2) / CELL_SIZE);
-      const centerWorldY = Math.floor((viewRef.current.y + (height / z) / 2) / CELL_SIZE);
+      const { worldWidthCells, worldHeightCells, centerWorldX, centerWorldY } = getViewportInfo();
       const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
-
       if (typeof sendViewUpdateRef?.current === 'function') {
         sendViewUpdateRef.current(chunkX, chunkY, cell, worldWidthCells, worldHeightCells);
       }
     });
-  }, [connected, CELL_SIZE, worldToChunk]);
+  }, [connected, worldToChunk, getViewportInfo]);
+
+  // Send minimap streaming subscriptions matching the current viewport
+  const sendMinimapViewportUpdate = useCallback(() => {
+    if (typeof updateMinimapSubscriptions !== 'function') return;
+    requestAnimationFrame(() => {
+      const { worldWidthCells, worldHeightCells, centerWorldX, centerWorldY } = getViewportInfo();
+      updateMinimapSubscriptions(centerWorldX, centerWorldY, worldWidthCells, worldHeightCells, 1, 'viewport');
+    });
+  }, [getViewportInfo, updateMinimapSubscriptions]);
 
   // Mouse event handlers
   const handleMouseDown = useCallback(
@@ -715,11 +728,12 @@ function App() {
       const dyPx = dyCells * CELL_SIZE;
       // ArrowRight increases viewX to move camera right; ArrowDown increases viewY
       scheduleViewUpdate(viewRef.current.x + dxPx, viewRef.current.y + dyPx);
+      bumpMainViewMove();
     };
 
     window.addEventListener("keydown", handleKeyDown, { passive: false });
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [CELL_SIZE, scheduleViewUpdate, connected]);
+  }, [CELL_SIZE, scheduleViewUpdate, connected, bumpMainViewMove]);
 
   // Single WebSocket connection that starts in spectator mode
   useEffect(() => {
@@ -781,21 +795,26 @@ function App() {
   // Send view-based updates when view changes
   useEffect(() => {
     sendViewportUpdate();
-  }, [sendViewportUpdate, viewX, viewY]);
+    sendMinimapViewportUpdate();
+  }, [sendViewportUpdate, sendMinimapViewportUpdate, viewX, viewY]);
 
   // Also send once on connect/zoom change and on resize
   useEffect(() => {
-    if (connected) sendViewportUpdate();
-  }, [connected, sendViewportUpdate, zoom]);
+    if (connected) {
+      sendViewportUpdate();
+      sendMinimapViewportUpdate();
+    }
+  }, [connected, sendViewportUpdate, sendMinimapViewportUpdate, zoom]);
 
   useEffect(() => {
     const onResize = () => {
       sendViewportUpdate();
+      sendMinimapViewportUpdate();
       setMINIMAP_SIZE(computeMinimapSize());
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, [sendViewportUpdate, computeMinimapSize]);
+  }, [sendViewportUpdate, sendMinimapViewportUpdate, computeMinimapSize]);
 
   // Sync viewRef to sessionStorage
   useEffect(() => {
@@ -814,6 +833,7 @@ function App() {
     if (seedCache.current && seedCache.current.size > 0) return;
     // Kick immediately and then retry a few times
     sendViewportUpdate();
+    sendMinimapViewportUpdate();
     let tries = 0;
     const id = setInterval(() => {
       if (seedCache.current && seedCache.current.size > 0) {
@@ -825,9 +845,19 @@ function App() {
         return;
       }
       sendViewportUpdate();
+      sendMinimapViewportUpdate();
     }, 500);
     return () => clearInterval(id);
-  }, [username, showHomeOverlay, sendViewportUpdate, seedCache]);
+  }, [username, showHomeOverlay, sendViewportUpdate, sendMinimapViewportUpdate, seedCache]);
+
+  // Clear viewport-based minimap subscriptions on unmount
+  useEffect(() => {
+    return () => {
+      if (typeof clearMinimapSubscriptionsFor === 'function') {
+        try { clearMinimapSubscriptionsFor('viewport'); } catch {}
+      }
+    };
+  }, [clearMinimapSubscriptionsFor]);
 
   // Cleanup RAF on unmount
   useEffect(() => {

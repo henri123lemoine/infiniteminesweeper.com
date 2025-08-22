@@ -209,7 +209,7 @@ export default function Minimap({
         hudViewRef.current = { cx: newCx, cy: newCy, cells: newCells };
         setHudView(hudViewRef.current);
         schedulePaint();
-        requestAnimationFrame(() => updateMinimapSubscriptions(newCx, newCy, newCells, newCells, 1, 'hud'));
+        requestAnimationFrame(() => updateMinimapSubscriptions(newCx, newCy, newCells, newCells, 2, 'hud'));
       } else {
         // Overlay wheel handling
         const rect = el.getBoundingClientRect();
@@ -404,7 +404,7 @@ export default function Minimap({
         
         if (mode === "hud") {
           const { cx, cy, cells } = hudViewRef.current;
-          requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 1, 'hud'));
+          requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 2, 'hud'));
         }
       } else if (remainingTouches === 1 && touchStateRef.current.touches.length === 2) {
         const remainingTouch = e.touches[0];
@@ -478,13 +478,34 @@ export default function Minimap({
     };
   }, [mode, effectiveContainerRef, containerRef, viewX, viewY, zoom, CELL_SIZE, updateMinimapSubscriptions, clearMinimapSubscriptionsFor, schedulePaint]);
 
+  // Initialize HUD minimap center to main view center (spectator-friendly)
+  useEffect(() => {
+    if (mode !== 'hud') return;
+    const container = containerRef?.current;
+    if (!container || !CELL_SIZE || !zoom) return;
+    const width = container.clientWidth || 0;
+    const height = container.clientHeight || 0;
+    const cwx = Math.floor((viewX + width / 2 / zoom) / CELL_SIZE);
+    const cwy = Math.floor((viewY + height / 2 / zoom) / CELL_SIZE);
+    // Only update if far from current to avoid fighting user interactions
+    const dx = Math.abs((hudViewRef.current?.cx ?? 0) - cwx);
+    const dy = Math.abs((hudViewRef.current?.cy ?? 0) - cwy);
+    if (dx > 1 || dy > 1) {
+      const next = { cx: cwx, cy: cwy, cells: hudViewRef.current?.cells || CHUNK * 3 };
+      hudViewRef.current = next;
+      setHudView(next);
+      schedulePaint();
+      updateMinimapSubscriptions(cwx, cwy, next.cells, next.cells, 2, 'hud');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, containerRef, viewX, viewY, zoom, CELL_SIZE]);
+
   // Keep streaming subscriptions in sync
   useEffect(() => {
     if (mode === "hud") {
-      const container = containerRef?.current;
-      if (!container) return;
+      // For HUD mode, we can subscribe based on hudViewRef alone; no container needed
       const { cx, cy, cells } = hudViewRef.current;
-      updateMinimapSubscriptions(cx, cy, cells, cells, 1, 'hud');
+      updateMinimapSubscriptions(cx, cy, cells, cells, 2, 'hud');
     } else {
       const el = effectiveContainerRef.current;
       if (!el) return;
@@ -497,7 +518,7 @@ export default function Minimap({
       const centerWorldY = Math.floor(y + heightCells / 2);
       updateMinimapSubscriptions(centerWorldX, centerWorldY, widthCells, heightCells, 1, 'overlay');
     }
-  }, [mode, hudView, overlayView, updateMinimapSubscriptions, containerRef, effectiveContainerRef]);
+  }, [mode, hudView, overlayView, updateMinimapSubscriptions, effectiveContainerRef]);
 
   // Auto-follow main view for both modes
   useEffect(() => {
@@ -518,7 +539,7 @@ export default function Minimap({
       setHudView(hudViewRef.current);
       schedulePaint();
       const { cells } = hudViewRef.current;
-      updateMinimapSubscriptions(cwx, cwy, cells, cells, 1, 'hud');
+      updateMinimapSubscriptions(cwx, cwy, cells, cells, 2, 'hud');
     } else if (mode === "overlay") {
       // Auto-follow for overlay mode too
       const el = effectiveContainerRef.current;
