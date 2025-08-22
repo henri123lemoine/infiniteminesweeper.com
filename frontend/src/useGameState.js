@@ -636,6 +636,26 @@ export const useGameState = () => {
       wsRef.current = websocket;
       connectedRef.current = true;
       // Note: setConnected(true) is only called after successful join
+      // On fresh connection, server has no minimap subs; clear local active set
+      try { minimapActiveSubsRef.current.clear(); } catch {}
+      // Reconcile any desired minimap subscriptions accumulated before open
+      const resubscribeAll = () => {
+        try {
+          const s = wsRef.current;
+          if (!s || s.readyState !== WebSocket.OPEN) return;
+          const union = new Set();
+          for (const set of minimapDesiredBySourceRef.current.values()) {
+            for (const k of set) union.add(k);
+          }
+          if (union.size) {
+            const tiles = Array.from(union).map(k => { const [x, y] = k.split(',').map(Number); return { x, y }; });
+            s.send(encodeMsg({ minimapSubscribe: { tiles } }));
+            minimapActiveSubsRef.current = new Set(union);
+          }
+        } catch {}
+      };
+      // Run after layout to also allow initial viewport computation
+      requestAnimationFrame(resubscribeAll);
       // Kick an initial view update on the next frame once the DOM is ready
       requestAnimationFrame(() => {
         try {
@@ -660,6 +680,7 @@ export const useGameState = () => {
       setWs(null);
       wsRef.current = null;
       connectedRef.current = false;
+      try { minimapActiveSubsRef.current.clear(); } catch {}
       optimisticActions.current.clear();
       revealedCellsRef.current.clear();
       flaggedCellsRef.current.clear();
@@ -1042,9 +1063,6 @@ export const useGameState = () => {
     // Minimap streaming
     minimapTilesRef,
     updateMinimapSubscriptions: useCallback((centerWorldX, centerWorldY, widthCells, heightCells, marginTiles = 1, sourceKey = 'default') => {
-      const s = wsRef.current;
-      if (!s || s.readyState !== WebSocket.OPEN) return;
-
       const tilesWide = Math.ceil(widthCells / CHUNK) + marginTiles * 2;
       const tilesHigh = Math.ceil(heightCells / CHUNK) + marginTiles * 2;
       const centerChunkX = Math.floor(centerWorldX / CHUNK);
@@ -1054,7 +1072,7 @@ export const useGameState = () => {
       const startX = centerChunkX - halfW;
       const startY = centerChunkY - halfH;
 
-      // Compute desired set for this source
+      // Compute desired set for this source (always, even if socket closed)
       const desiredForSource = new Set();
       for (let y = 0; y < tilesHigh; y++) {
         for (let x = 0; x < tilesWide; x++) {
@@ -1062,6 +1080,9 @@ export const useGameState = () => {
         }
       }
       minimapDesiredBySourceRef.current.set(sourceKey, desiredForSource);
+
+      const s = wsRef.current;
+      if (!s || s.readyState !== WebSocket.OPEN) return; // will reconcile on open or next call
 
       // Compute union of all sources
       const union = new Set();
@@ -1087,14 +1108,12 @@ export const useGameState = () => {
       }
     }, []),
     clearMinimapSubscriptionsFor: useCallback((sourceKey = 'default') => {
-      const s = wsRef.current;
-      if (!s || s.readyState !== WebSocket.OPEN) {
-        // Still clear local desired so next call recomputes union cleanly
-        minimapDesiredBySourceRef.current.delete(sourceKey);
-        return;
-      }
-      // Remove this source's desired set
+      // Remove this source's desired set locally first
       minimapDesiredBySourceRef.current.delete(sourceKey);
+
+      const s = wsRef.current;
+      if (!s || s.readyState !== WebSocket.OPEN) return; // will reconcile on next open/call
+
       // Recompute union
       const union = new Set();
       for (const set of minimapDesiredBySourceRef.current.values()) {
@@ -1111,4 +1130,3 @@ export const useGameState = () => {
     }, []),
   };
 };
-
