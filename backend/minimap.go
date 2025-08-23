@@ -41,39 +41,76 @@ func newMinimapTile(resolution uint32) *MinimapTile {
 	}
 }
 
-// Simple pixel averaging that preserves overall density and visual appearance
-// This maintains the intuitive look of the minimap at all scales
-func simplePixelAverage(fullData []byte, blockX, blockY, blockSize int) byte {
-	counts := make(map[byte]int)
-	totalPixels := 0
-	
-	// Count each palette index in this averaging block
-	for dy := 0; dy < blockSize; dy++ {
-		for dx := 0; dx < blockSize; dx++ {
-			srcX := blockX*blockSize + dx
-			srcY := blockY*blockSize + dy
-			if srcX >= ChunkSize || srcY >= ChunkSize {
-				continue
-			}
-			idx := fullData[srcY*ChunkSize + srcX]
-			counts[idx]++
-			totalPixels++
-		}
-	}
-	
-	// Return the most frequent palette index (mode)
-	// This preserves the overall density and visual character
-	maxCount := 0
-	var bestIdx byte = mmUnseen
-	
-	for idx, count := range counts {
-		if count > maxCount {
-			maxCount = count
-			bestIdx = idx
-		}
-	}
-	
-	return bestIdx
+// hash64 is a small 64-bit mixer (xorshift/murmur-inspired) for deterministic PRNG
+func hash64(x uint64) uint64 {
+    x ^= x >> 33
+    x *= 0xff51afd7ed558ccd
+    x ^= x >> 33
+    x *= 0xc4ceb9fe1a85ec53
+    x ^= x >> 33
+    return x
+}
+
+// probabilisticDownsample chooses a representative palette index for a lower-res pixel
+// by sampling from the per-block histogram with probability proportional to counts.
+// The RNG is deterministic per (chunk, blockX, blockY) so the image is stable over time.
+func probabilisticDownsample(cid ChunkID, fullData []byte, blockX, blockY, blockSize int) byte {
+    // Build histogram of palette indices in this block
+    var counts [256]uint32
+    total := uint32(0)
+    for dy := 0; dy < blockSize; dy++ {
+        sy := blockY*blockSize + dy
+        if sy >= ChunkSize {
+            continue
+        }
+        base := sy * ChunkSize
+        for dx := 0; dx < blockSize; dx++ {
+            sx := blockX*blockSize + dx
+            if sx >= ChunkSize {
+                continue
+            }
+            idx := fullData[base+sx]
+            counts[idx]++
+            total++
+        }
+    }
+    if total == 0 {
+        return mmUnseen
+    }
+
+    // Bayer 8x8 threshold matrix to decorrelate patterns across blocks (0..63)
+    var bayer8 = [64]uint8{
+        0, 32, 8, 40, 2, 34, 10, 42,
+        48, 16, 56, 24, 50, 18, 58, 26,
+        12, 44, 4, 36, 14, 46, 6, 38,
+        60, 28, 52, 20, 62, 30, 54, 22,
+        3, 35, 11, 43, 1, 33, 9, 41,
+        51, 19, 59, 27, 49, 17, 57, 25,
+        15, 47, 7, 39, 13, 45, 5, 37,
+        63, 31, 55, 23, 61, 29, 53, 21,
+    }
+
+    // Deterministic base in [0,total)
+    seed := hash64(uint64(cid.X)) ^ hash64((uint64(cid.Y) << 1)) ^ hash64((uint64(blockX) << 2)) ^ hash64((uint64(blockY) << 3))
+    base := uint32(seed % uint64(total))
+    // Deterministic offset from Bayer cell scaled to [0,total)
+    bn := bayer8[(blockY&7)*8+(blockX&7)]
+    offset := (uint32(bn) * total) >> 6 // divide by 64
+    r := (base + offset) % total
+
+    // Walk cumulative distribution to pick index proportionally to counts
+    cum := uint32(0)
+    for idx := 0; idx < len(counts); idx++ {
+        c := counts[idx]
+        if c == 0 {
+            continue
+        }
+        cum += c
+        if r < cum {
+            return byte(idx)
+        }
+    }
+    return mmUnseen
 }
 
 func minimapFlagBucket(flagID uint32) int {
@@ -188,20 +225,20 @@ func (s *Server) minimapRebuildTile(cid ChunkID, resolution uint32) *MinimapTile
 			t.Data[i] = idx
 			t.Dirty[i] = false
 		}
-	} else {
-		// Lower resolution - need to rebuild from full resolution
-		fullTile := s.minimapRebuildTile(cid, 64) // Ensure full resolution exists
-		blockSize := int(64 / resolution)        // 64/32=2, 64/16=4
-		
-		for y := 0; y < int(resolution); y++ {
-			for x := 0; x < int(resolution); x++ {
-				idx := simplePixelAverage(fullTile.Data, x, y, blockSize)
-				pos := y*int(resolution) + x
-				t.Data[pos] = idx
-				t.Dirty[pos] = false
-			}
-		}
-	}
+    } else {
+        // Lower resolution - rebuild from full resolution using probabilistic downsampling
+        fullTile := s.minimapRebuildTile(cid, 64) // Ensure full resolution exists
+        blockSize := int(64 / resolution)        // 64/32=2, 64/16=4
+
+        for y := 0; y < int(resolution); y++ {
+            for x := 0; x < int(resolution); x++ {
+                idx := probabilisticDownsample(cid, fullTile.Data, x, y, blockSize)
+                pos := y*int(resolution) + x
+                t.Data[pos] = idx
+                t.Dirty[pos] = false
+            }
+        }
+    }
 	return t
 }
 

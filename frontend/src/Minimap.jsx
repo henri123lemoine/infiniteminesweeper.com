@@ -61,14 +61,13 @@ export default function Minimap({
       chunksInView = (widthInCells / CHUNK) * (heightInCells / CHUNK);
     }
 
-    // Extremely conservative thresholds - prioritize visual correctness
-    // Only downsample at astronomical zoom levels where performance becomes critical
-    if (chunksInView < 2500) { // Less than 50x50 chunks (3.2 million cells)
-      return 64; // Full resolution - keep cells looking correct
-    } else if (chunksInView < 10000) { // Less than 100x100 chunks (12.8 million cells)
-      return 32; // Half resolution only for massive views
+    // Keep full-res up to ~70x70 chunks, then 32 up to ~150x150 chunks
+    if (chunksInView < 5000) { // < ~70x70 chunks
+      return 64;
+    } else if (chunksInView < 20000) { // < 150x150 chunks
+      return 32;
     } else {
-      return 16; // Quarter resolution only for absolutely enormous views (25M+ cells)
+      return 16;
     }
   }, [MINIMAP_SIZE, CHUNK]);
 
@@ -236,7 +235,7 @@ export default function Minimap({
         const scale = MINIMAP_SIZE / cells;
         const worldX = hudViewRef.current.cx - (MINIMAP_SIZE / 2 - mx) / scale;
         const worldY = hudViewRef.current.cy - (MINIMAP_SIZE / 2 - my) / scale;
-        const factor = Math.exp(-e.deltaY * 0.0006);
+        const factor = Math.exp(-e.deltaY * 0.00045);
         const newCells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, cells / factor));
         const newScale = MINIMAP_SIZE / newCells;
         const newCx = worldX + (MINIMAP_SIZE / 2 - mx) / newScale;
@@ -252,7 +251,7 @@ export default function Minimap({
         const mx = e.clientX - rect.left;
         const my = e.clientY - rect.top;
         const wz = overlayViewRef.current.zoom;
-        const factor = Math.exp(-e.deltaY * 0.0006);
+        const factor = Math.exp(-e.deltaY * 0.00045);
         const nz = Math.min(Math.max(wz * factor, 0.125), 8);
         const worldX = overlayViewRef.current.x + mx / wz;
         const worldY = overlayViewRef.current.y + my / wz;
