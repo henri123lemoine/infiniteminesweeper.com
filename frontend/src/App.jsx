@@ -9,7 +9,7 @@ import Minimap from "./Minimap.jsx";
 import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
-import meta from "./assets/spritesheet.json";
+import { initSprites, getFlagIds } from "./sprites/index.js";
 
 function App() {
   const storedName = localStorage.getItem("username") || "";
@@ -159,16 +159,7 @@ function App() {
   const lbRefreshTimerRef = useRef(null);
 
   // Build numeric sprite ID list for the 'flag' category only
-  const FLAG_IDS = useMemo(
-    () =>
-      Object.keys(meta.frames)
-        .filter(
-          (k) => !Number.isNaN(Number(k)) && meta.frames[k]?.category === "flag",
-        )
-        .map((k) => Number(k))
-        .sort((a, b) => a - b),
-    [],
-  );
+  const FLAG_IDS = useMemo(() => getFlagIds(), []);
 
   // Player flag state (migrate legacy index-based value → stable numeric ID)
   const [flagID, setFlagID] = useState(() => {
@@ -870,7 +861,7 @@ function App() {
 
   // Pre-load assets
   useEffect(() => {
-    CanvasRenderer.initSprites();
+    initSprites();
   }, []);
 
   // Trigger canvas redraw when the game OR the viewport changes
