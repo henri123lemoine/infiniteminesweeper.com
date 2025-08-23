@@ -1,6 +1,5 @@
-import meta from "./assets/spritesheet.json";
-import sheetUrl from "./assets/spritesheet.png?url";
 import { CHUNK } from "./useGameState.js";
+import { drawSprite, getHexForFlag } from "./sprites/index.js";
 
 export class CanvasRenderer {
   constructor() {
@@ -11,14 +10,6 @@ export class CanvasRenderer {
     this.baseCell = 16; // offscreen raster base size per cell
   }
 
-  // Fast numeric-ID -> key table (built once at module load-time)
-  static #idToKey = (() => {
-    const map = {};
-    for (const k of Object.keys(meta.frames)) {
-      if (!Number.isNaN(Number(k))) map[Number(k)] = k; // numeric keys only
-    }
-    return map;
-  })();
 
   // 3D Cell Drawing Functions
   draw3DCell(ctx, x, y, size, isRevealed) {
@@ -138,18 +129,6 @@ export class CanvasRenderer {
     ctx.shadowColor = "transparent";
   }
 
-  // Helper to draw a specific sprite from the sheet
-  static #sheetImg;
-  static #frames   = meta.frames;
-  static #frameKeys = Object.keys(meta.frames);
-  static #ready = false;
-
-  static initSprites() {
-    if (CanvasRenderer.#ready) return;
-    CanvasRenderer.#sheetImg = new Image();
-    CanvasRenderer.#sheetImg.onload = () => { CanvasRenderer.#ready = true; };
-    CanvasRenderer.#sheetImg.src = sheetUrl;
-  }
 
   // Simple LRU touch and evict helpers
   _touch(key) {
@@ -213,18 +192,18 @@ export class CanvasRenderer {
         if (isFlagged) {
           const flagKey = `${wx},${wy}`;
           const flagData = flaggedCellsRef.current.get(flagKey);
-          
-          // For cached chunks, make flags more prominent with better contrast
-          let flagColor = "#ff4444"; // bright default for visibility
-          if (flagData && CanvasRenderer.#frames[flagData]?.hex) {
-            flagColor = CanvasRenderer.#frames[flagData].hex;
+
+          // Use the flag's actual color from sprite metadata
+          let flagColor = "#202020"; // fallback
+          if (flagData) {
+            flagColor = getHexForFlag(flagData);
           }
-          
+
           // Make flags larger and more visible in cached chunks
           const flagPadding = Math.max(0, size * 0.1);
           ctx.fillStyle = flagColor;
           ctx.fillRect(dx + flagPadding, dy + flagPadding, size - 2 * flagPadding, size - 2 * flagPadding);
-          
+
           // Add a subtle border for better definition
           ctx.strokeStyle = "rgba(0, 0, 0, 0.3)";
           ctx.lineWidth = Math.max(0.5, size * 0.05);
@@ -240,25 +219,7 @@ export class CanvasRenderer {
    * @param {number|string} spriteID uint32 from server OR direct key/string
    */
   drawSprite(ctx, spriteID, dx, dy, dw, dh) {
-    if (!CanvasRenderer.#ready) return;
-    let key;
-    if (typeof spriteID === "string") {
-      key = spriteID;                           // direct string lookup
-    } else {
-      key = CanvasRenderer.#idToKey[spriteID];  // numeric-ID fast path
-      if (!key) {
-        // Fallback for legacy / out-of-range IDs
-        key =
-          CanvasRenderer.#frameKeys[
-            spriteID % CanvasRenderer.#frameKeys.length
-          ];
-      }
-    }
-
-    const frame = CanvasRenderer.#frames[key];
-    if (!frame) return;
-    const { x, y, w, h } = frame.frame;
-    ctx.drawImage(CanvasRenderer.#sheetImg, x, y, w, h, dx, dy, dw, dh);
+    drawSprite(ctx, spriteID, dx, dy, dw, dh);
   }
 
   // Cell Rendering Logic
@@ -352,13 +313,13 @@ export class CanvasRenderer {
     ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, 0, 0);
 
     const effPx = CELL_SIZE * zoom * dpr;
-    
+
     // Thresholds are in effective pixels per cell
     const MINIMAL_RENDERING_THRESHOLD = 5;   // below this: minimal cached chunks
     const FULL_QUALITY_THRESHOLD = 20;       // above this: per-cell rendering
-    
-    const LOD = effPx < MINIMAL_RENDERING_THRESHOLD ? 2 
-              : effPx < FULL_QUALITY_THRESHOLD ? 1 
+
+    const LOD = effPx < MINIMAL_RENDERING_THRESHOLD ? 2
+              : effPx < FULL_QUALITY_THRESHOLD ? 1
               : 0;
 
     // Clear background
