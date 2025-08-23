@@ -10,7 +10,7 @@ import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
 import { usePinchPanZoom } from "./hooks/usePinchPanZoom.js";
-import meta from "./assets/spritesheet.json";
+import { initSprites, getFlagIds } from "./sprites/index.js";
 
 function App() {
   const storedName = localStorage.getItem("username") || "";
@@ -115,16 +115,7 @@ function App() {
   const lbRefreshTimerRef = useRef(null);
 
   // Build numeric sprite ID list for the 'flag' category only
-  const FLAG_IDS = useMemo(
-    () =>
-      Object.keys(meta.frames)
-        .filter(
-          (k) => !Number.isNaN(Number(k)) && meta.frames[k]?.category === "flag",
-        )
-        .map((k) => Number(k))
-        .sort((a, b) => a - b),
-    [],
-  );
+  const FLAG_IDS = useMemo(() => getFlagIds(), []);
 
   // Player flag state (migrate legacy index-based value → stable numeric ID)
   const [flagID, setFlagID] = useState(() => {
@@ -491,7 +482,7 @@ function App() {
 
   // Pre-load assets
   useEffect(() => {
-    CanvasRenderer.initSprites();
+    initSprites();
   }, []);
 
   // Trigger canvas redraw when the game OR the viewport changes
@@ -536,10 +527,10 @@ function App() {
     onZoom: (zoomFactor, anchor, context) => {
       if (!connected) return;
       userMovedRef.current = true;
-      
+
       const MIN_ZOOM = 0.1;
       const MAX_ZOOM = 5;
-      
+
       if (context.targetZoom) {
         // Pinch zoom with pre-calculated values
         zoomRef.current = context.targetZoom;
@@ -549,28 +540,28 @@ function App() {
         // Wheel zoom
         const prevZoom = zoomRef.current;
         const targetZoom = Math.min(Math.max(prevZoom * zoomFactor, MIN_ZOOM), MAX_ZOOM);
-        
+
         const container = containerRef.current;
         if (!container) return;
         const rect = container.getBoundingClientRect();
         const mouseX = context.x;
         const mouseY = context.y;
-        
+
         const worldX = viewRef.current.x + mouseX / prevZoom;
         const worldY = viewRef.current.y + mouseY / prevZoom;
         const newViewX = worldX - mouseX / targetZoom;
         const newViewY = worldY - mouseY / targetZoom;
-        
+
         zoomRef.current = targetZoom;
         scheduleViewUpdate(newViewX, newViewY);
         setZoom(targetZoom);
       }
-      
+
       bumpMainViewMove();
     },
     onLongPress: (worldX, worldY, isLongPress) => {
       if (!connected) return;
-      
+
       if (isLongPress === false) {
         // This was a tap/click - reveal cell or chord
         const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
@@ -581,7 +572,7 @@ function App() {
         // This was a right-click or long press - place flag
         handleCellClick(worldX, worldY, true);
       }
-      
+
       // Commit final view
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);

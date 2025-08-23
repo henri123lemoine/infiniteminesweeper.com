@@ -1,44 +1,18 @@
 import React, { useState, useEffect, useMemo } from "react";
-import meta from "./assets/spritesheet.json";
-import sheetUrl from "./assets/spritesheet.png?url";
-
-let sheetImg;
-const frames = meta.frames;
+import { initSprites, getFlagIdsSortedByCost, drawSprite, frames } from "./sprites/index.js";
 
 export default function FlagSelector({ value, onChange }) {
   const [ready, setReady] = useState(false);
 
   // Pre‑load sprite sheet once
   useEffect(() => {
-    if (sheetImg) {
-      setReady(true);
-      return;
-    }
-    sheetImg = new Image();
-    sheetImg.onload = () => setReady(true);
-    sheetImg.src = sheetUrl;
+    initSprites().then(() => setReady(true));
   }, []);
 
-  // Use only stable numeric keys for sprites in the 'flag' category
-  const flagKeys = useMemo(
-    () =>
-      Object.keys(frames).filter(
-        (k) => !Number.isNaN(Number(k)) && frames[k]?.category === "flag",
-      ),
-    [],
-  );
-
-  // Sort by cost ascending, then numeric ID
+  // Get sorted flag IDs from centralized sprite system
   const sortedKeys = useMemo(() => {
-    return flagKeys
-      .slice()
-      .sort((a, b) => {
-        const ca = frames[a].cost ?? 0;
-        const cb = frames[b].cost ?? 0;
-        if (ca !== cb) return ca - cb;
-        return Number(a) - Number(b);
-      });
-  }, [flagKeys]);
+    return getFlagIdsSortedByCost().map(id => String(id));
+  }, []);
 
   if (!ready) return <p>Loading flags...</p>;
 
@@ -82,9 +56,8 @@ export default function FlagSelector({ value, onChange }) {
           ref={(c) => {
             if (!c) return;
             const ctx = c.getContext("2d");
-            const { x, y, w, h } = frames[id].frame;
             ctx.clearRect(0, 0, 32, 32);
-            ctx.drawImage(sheetImg, x, y, w, h, 0, 0, 32, 32);
+            drawSprite(ctx, id, 0, 0, 32, 32);
           }}
         />
         <span style={{ fontSize: 12, marginTop: 4 }}>🪙 {cost}</span>
