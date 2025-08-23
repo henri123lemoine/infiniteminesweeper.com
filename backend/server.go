@@ -82,9 +82,10 @@ type Server struct {
 	upgrader websocket.Upgrader
 
 	// Minimap streaming state
-	minimapTiles      map[ChunkID]*MinimapTile        // tile data + version + dirty
-	minimapSubs       map[ChunkID]map[uint32]struct{} // per-tile subscriber sets
-	minimapDirtyTiles map[ChunkID]struct{}            // tiles with pending dirties
+	minimapTiles         map[ChunkID]map[uint32]*MinimapTile // tile data by resolution (key: resolution, value: tile)
+	minimapSubs          map[ChunkID]map[uint32]struct{}     // per-tile subscriber sets
+	minimapPlayerRes     map[uint32]uint32                   // player resolution preferences (player ID -> resolution)
+	minimapDirtyTiles    map[ChunkID]struct{}                // tiles with pending dirties
 }
 
 func NewServer() *Server {
@@ -131,8 +132,9 @@ func NewServer() *Server {
 		},
 
 		// Minimap
-		minimapTiles:      make(map[ChunkID]*MinimapTile),
+		minimapTiles:      make(map[ChunkID]map[uint32]*MinimapTile),
 		minimapSubs:       make(map[ChunkID]map[uint32]struct{}),
+		minimapPlayerRes:  make(map[uint32]uint32),
 		minimapDirtyTiles: make(map[ChunkID]struct{}),
 	}
 }

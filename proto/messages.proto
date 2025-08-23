@@ -220,7 +220,10 @@ message TileRef {
 }
 
 // Client → Server
-message SubscribeTiles { repeated TileRef tiles = 1; }
+message SubscribeTiles { 
+  repeated TileRef tiles = 1; 
+  uint32 resolution = 2; // 16, 32, or 64 pixels per tile (defaults to 64)
+}
 message UnsubscribeTiles { repeated TileRef tiles = 1; }
 message ResendFull { TileRef tile = 1; }
 
@@ -228,14 +231,15 @@ message ResendFull { TileRef tile = 1; }
 message FullTile {
   TileRef tile = 1;
   uint32 version = 2; // monotonically increasing per tile
-  bytes data = 3;     // 64*64 palette indices (raw)
+  bytes data = 3;     // resolution*resolution palette indices (raw)
+  uint32 resolution = 4; // 16, 32, or 64 pixels per tile
 }
 
 message DeltaRect {
-  uint32 x = 1; // 0..63
-  uint32 y = 2; // 0..63
-  uint32 w = 3; // 1..64
-  uint32 h = 4; // 1..64
+  uint32 x = 1; // 0..resolution-1
+  uint32 y = 2; // 0..resolution-1
+  uint32 w = 3; // 1..resolution
+  uint32 h = 4; // 1..resolution
   bytes rows = 5; // concatenated rows of palette indices (no RLE initially)
 }
 
@@ -243,4 +247,5 @@ message TileDelta {
   TileRef tile = 1;
   uint32 version = 2; // version AFTER applying this delta
   repeated DeltaRect rects = 3;
+  uint32 resolution = 4; // 16, 32, or 64 pixels per tile
 }

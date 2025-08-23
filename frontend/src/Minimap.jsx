@@ -20,22 +20,22 @@ export default function Minimap({
   const canvasRef = useRef(null);
   const localContainerRef = useRef(null);
   const effectiveContainerRef = containerRef || localContainerRef;
-  
+
   // State management based on mode
   const [hudView, setHudView] = useState({ cx: 0, cy: 0, cells: CHUNK * 3 });
   const [overlayView, setOverlayView] = useState({ x: 0, y: 0, zoom: 2 });
-  
+
   const hudViewRef = useRef(hudView);
   const overlayViewRef = useRef(overlayView);
   const mainViewRef = useRef({ viewX: viewX || 0, viewY: viewY || 0, zoom: zoom || 1 });
-  
+
   // Interaction state
   const draggingRef = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
   const lastMmInteractionAtRef = useRef(0);
   const userHasDraggedRef = useRef(false);
   const rafRef = useRef(null);
-  
+
   // Touch state for pinch-to-zoom
   const touchStateRef = useRef({
     touches: [],
@@ -47,6 +47,31 @@ export default function Minimap({
     initialCenter: { cx: 0, cy: 0 },
   });
 
+  // Calculate appropriate minimap resolution based on zoom level
+  const calculateMinimapResolution = useCallback((mode, cells, overlayZoom, containerWidth = 0, containerHeight = 0) => {
+    let chunksInView;
+
+    if (mode === "hud") {
+      // HUD mode: calculate how many chunks are in view
+      chunksInView = (cells / CHUNK) * (cells / CHUNK);
+    } else {
+      // Overlay mode: calculate based on overlay zoom and container size
+      const widthInCells = containerWidth / overlayZoom;
+      const heightInCells = containerHeight / overlayZoom;
+      chunksInView = (widthInCells / CHUNK) * (heightInCells / CHUNK);
+    }
+
+    // Extremely conservative thresholds - prioritize visual correctness
+    // Only downsample at astronomical zoom levels where performance becomes critical
+    if (chunksInView < 2500) { // Less than 50x50 chunks (3.2 million cells)
+      return 64; // Full resolution - keep cells looking correct
+    } else if (chunksInView < 10000) { // Less than 100x100 chunks (12.8 million cells)
+      return 32; // Half resolution only for massive views
+    } else {
+      return 16; // Quarter resolution only for absolutely enormous views (25M+ cells)
+    }
+  }, [MINIMAP_SIZE, CHUNK]);
+
   const schedulePaint = useCallback(() => {
     if (rafRef.current) return;
     rafRef.current = requestAnimationFrame(() => {
@@ -57,7 +82,7 @@ export default function Minimap({
 
       const ctx = canvas.getContext("2d");
       const dpr = window.devicePixelRatio || 1;
-      
+
       if (mode === "hud") {
         // HUD mode rendering
         const cssSize = MINIMAP_SIZE;
@@ -101,12 +126,21 @@ export default function Minimap({
             const srcH = Math.min(CHUNK - srcY, startWorldY + cellsPerSide - tileWorldY - srcY);
             if (srcW <= 0 || srcH <= 0) continue;
 
+            // Convert world cell coordinates to canvas pixel coordinates
+            // Canvas may be lower resolution (16x16, 32x32) but represents CHUNK x CHUNK cells
+            const resolution = rec.resolution || CHUNK;
+            const canvasScale = resolution / CHUNK; // how many pixels per world cell in the canvas
+            const canvasSrcX = srcX * canvasScale;
+            const canvasSrcY = srcY * canvasScale;
+            const canvasSrcW = srcW * canvasScale;
+            const canvasSrcH = srcH * canvasScale;
+
             const dstX = Math.floor((tileWorldX + srcX - startWorldX) * scale);
             const dstY = Math.floor((tileWorldY + srcY - startWorldY) * scale);
             const dstW = Math.ceil(srcW * scale);
             const dstH = Math.ceil(srcH * scale);
 
-            ctx.drawImage(rec.canvas, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH);
+            ctx.drawImage(rec.canvas, canvasSrcX, canvasSrcY, canvasSrcW, canvasSrcH, dstX, dstY, dstW, dstH);
           }
         }
 
@@ -150,7 +184,8 @@ export default function Minimap({
             if (!rec || !rec.canvas) continue;
             const ox = Math.floor(cx * CHUNK - x);
             const oy = Math.floor(cy * CHUNK - y);
-            ctx.drawImage(rec.canvas, 0, 0, CHUNK, CHUNK, Math.floor(ox * overlayZoom), Math.floor(oy * overlayZoom), Math.ceil(tilePx), Math.ceil(tilePx));
+            const resolution = rec.resolution || CHUNK;
+            ctx.drawImage(rec.canvas, 0, 0, resolution, resolution, Math.floor(ox * overlayZoom), Math.floor(oy * overlayZoom), Math.ceil(tilePx), Math.ceil(tilePx));
           }
         }
 
@@ -161,19 +196,19 @@ export default function Minimap({
           if (gameWidth && gameHeight) {
             const viewWidthCells = Math.ceil(gameWidth / zoom / CELL_SIZE);
             const viewHeightCells = Math.ceil(gameHeight / zoom / CELL_SIZE);
-            
+
             // Calculate game viewport bounds in world coordinates
             const gameViewLeftX = viewX / CELL_SIZE;
             const gameViewTopY = viewY / CELL_SIZE;
             const gameViewRightX = (viewX + gameWidth / zoom) / CELL_SIZE;
             const gameViewBottomY = (viewY + gameHeight / zoom) / CELL_SIZE;
-            
+
             // Convert to overlay canvas coordinates
             const boxLeft = (gameViewLeftX - x) * overlayZoom;
             const boxTop = (gameViewTopY - y) * overlayZoom;
             const boxWidth = (gameViewRightX - gameViewLeftX) * overlayZoom;
             const boxHeight = (gameViewBottomY - gameViewTopY) * overlayZoom;
-            
+
             ctx.strokeStyle = "rgba(0,0,0,0.9)";
             ctx.lineWidth = 2;
             ctx.strokeRect(boxLeft, boxTop, boxWidth, boxHeight);
@@ -187,11 +222,11 @@ export default function Minimap({
   useEffect(() => {
     const el = canvasRef.current;
     if (!el) return;
-    
+
     const onWheel = (e) => {
       e.preventDefault();
       lastMmInteractionAtRef.current = performance.now();
-      
+
       if (mode === "hud") {
         // HUD wheel handling
         const rect = el.getBoundingClientRect();
@@ -209,7 +244,8 @@ export default function Minimap({
         hudViewRef.current = { cx: newCx, cy: newCy, cells: newCells };
         setHudView(hudViewRef.current);
         schedulePaint();
-        requestAnimationFrame(() => updateMinimapSubscriptions(newCx, newCy, newCells, newCells, 2, 'hud'));
+        const resolution = calculateMinimapResolution('hud', newCells);
+        requestAnimationFrame(() => updateMinimapSubscriptions(newCx, newCy, newCells, newCells, 2, 'hud', resolution));
       } else {
         // Overlay wheel handling
         const rect = el.getBoundingClientRect();
@@ -242,22 +278,22 @@ export default function Minimap({
       const dx = e.clientX - lastPosRef.current.x;
       const dy = e.clientY - lastPosRef.current.y;
       lastPosRef.current = { x: e.clientX, y: e.clientY };
-      
+
       if (mode === "hud") {
         const cells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, hudViewRef.current.cells));
         const scale = MINIMAP_SIZE / cells;
-        hudViewRef.current = { 
-          cx: hudViewRef.current.cx - dx / scale, 
-          cy: hudViewRef.current.cy - dy / scale, 
-          cells 
+        hudViewRef.current = {
+          cx: hudViewRef.current.cx - dx / scale,
+          cy: hudViewRef.current.cy - dy / scale,
+          cells
         };
         setHudView(hudViewRef.current);
       } else {
         const dzoom = overlayViewRef.current.zoom;
-        overlayViewRef.current = { 
-          ...overlayViewRef.current, 
-          x: overlayViewRef.current.x - dx / dzoom, 
-          y: overlayViewRef.current.y - dy / dzoom 
+        overlayViewRef.current = {
+          ...overlayViewRef.current,
+          x: overlayViewRef.current.x - dx / dzoom,
+          y: overlayViewRef.current.y - dy / dzoom
         };
         setOverlayView(overlayViewRef.current);
       }
@@ -268,10 +304,11 @@ export default function Minimap({
       if (!draggingRef.current) return;
       draggingRef.current = false;
       lastMmInteractionAtRef.current = performance.now();
-      
+
       if (mode === "hud") {
         const { cx, cy, cells } = hudViewRef.current;
-        requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 1, 'hud'));
+        const resolution = calculateMinimapResolution('hud', cells);
+        requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 2, 'hud', resolution));
       }
     };
 
@@ -301,7 +338,7 @@ export default function Minimap({
 
         touchStateRef.current.initialDistance = distance;
         touchStateRef.current.initialMidpoint = { x: midX, y: midY };
-        
+
         if (mode === "hud") {
           touchStateRef.current.initialCells = hudViewRef.current.cells;
           touchStateRef.current.initialCenter = { cx: hudViewRef.current.cx, cy: hudViewRef.current.cy };
@@ -328,22 +365,22 @@ export default function Minimap({
         const dx = touch.x - lastPosRef.current.x;
         const dy = touch.y - lastPosRef.current.y;
         lastPosRef.current = { x: touch.x, y: touch.y };
-        
+
         if (mode === "hud") {
           const cells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, hudViewRef.current.cells));
           const scale = MINIMAP_SIZE / cells;
-          hudViewRef.current = { 
-            cx: hudViewRef.current.cx - dx / scale, 
-            cy: hudViewRef.current.cy - dy / scale, 
-            cells 
+          hudViewRef.current = {
+            cx: hudViewRef.current.cx - dx / scale,
+            cy: hudViewRef.current.cy - dy / scale,
+            cells
           };
           setHudView(hudViewRef.current);
         } else {
           const dzoom = overlayViewRef.current.zoom;
-          overlayViewRef.current = { 
-            ...overlayViewRef.current, 
-            x: overlayViewRef.current.x - dx / dzoom, 
-            y: overlayViewRef.current.y - dy / dzoom 
+          overlayViewRef.current = {
+            ...overlayViewRef.current,
+            x: overlayViewRef.current.x - dx / dzoom,
+            y: overlayViewRef.current.y - dy / dzoom
           };
           setOverlayView(overlayViewRef.current);
         }
@@ -362,10 +399,10 @@ export default function Minimap({
             const { initialCells } = touchStateRef.current;
             const zoomFactor = initialDistance / distance;
             const newCells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, initialCells * zoomFactor));
-            hudViewRef.current = { 
-              cx: hudViewRef.current.cx, 
-              cy: hudViewRef.current.cy, 
-              cells: newCells 
+            hudViewRef.current = {
+              cx: hudViewRef.current.cx,
+              cy: hudViewRef.current.cy,
+              cells: newCells
             };
             setHudView(hudViewRef.current);
           } else {
@@ -401,10 +438,11 @@ export default function Minimap({
           initialCells: 0,
           initialCenter: { cx: 0, cy: 0 },
         };
-        
+
         if (mode === "hud") {
           const { cx, cy, cells } = hudViewRef.current;
-          requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 2, 'hud'));
+          const resolution = calculateMinimapResolution('hud', cells);
+          requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 2, 'hud', resolution));
         }
       } else if (remainingTouches === 1 && touchStateRef.current.touches.length === 2) {
         const remainingTouch = e.touches[0];
@@ -426,7 +464,7 @@ export default function Minimap({
     el.addEventListener('touchstart', onTouchStart, { passive: false });
     el.addEventListener('touchmove', onTouchMove, { passive: false });
     el.addEventListener('touchend', onTouchEnd, { passive: false });
-    
+
     return () => {
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('mousedown', onDown);
@@ -436,23 +474,23 @@ export default function Minimap({
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('touchend', onTouchEnd);
     };
-  }, [mode, CHUNK, MINIMAP_SIZE, CELL_SIZE, updateMinimapSubscriptions, schedulePaint, minimapTilesRef, effectiveContainerRef, containerRef, zoom, viewX, viewY]);
+  }, [mode, CHUNK, MINIMAP_SIZE, CELL_SIZE, updateMinimapSubscriptions, schedulePaint, minimapTilesRef, effectiveContainerRef, containerRef, zoom, viewX, viewY, calculateMinimapResolution]);
 
   // Initialize overlay view to center on user or world origin
   useEffect(() => {
     if (mode !== "overlay") return;
-    
+
     const el = effectiveContainerRef.current;
     if (!el) return;
-    
+
     const w = el.clientWidth || 0;
     const h = el.clientHeight || 0;
     const currentZoom = overlayViewRef.current.zoom;
-    
+
     // Smart centering: use main viewport center if available, otherwise world origin
     let centerX = 0;
     let centerY = 0;
-    
+
     if (containerRef?.current && viewX !== undefined && viewY !== undefined && zoom && CELL_SIZE) {
       // Center on current main viewport
       const gameWidth = containerRef.current.clientWidth || 0;
@@ -460,23 +498,24 @@ export default function Minimap({
       centerX = Math.floor((viewX + gameWidth / 2 / zoom) / CELL_SIZE);
       centerY = Math.floor((viewY + gameHeight / 2 / zoom) / CELL_SIZE);
     }
-    
+
     const nx = centerX - w / (2 * currentZoom);
     const ny = centerY - h / (2 * currentZoom);
     const next = { x: nx, y: ny, zoom: currentZoom };
     overlayViewRef.current = next;
     setOverlayView(next);
-    
+
     schedulePaint();
-    
+
     const widthCells = Math.ceil(w / currentZoom);
     const heightCells = Math.ceil(h / currentZoom);
-    updateMinimapSubscriptions(centerX, centerY, widthCells, heightCells, 1, 'overlay');
-    
+    const resolution = calculateMinimapResolution('overlay', 0, currentZoom, w, h);
+    updateMinimapSubscriptions(centerX, centerY, widthCells, heightCells, 2, 'overlay', resolution);
+
     return () => {
       clearMinimapSubscriptionsFor?.('overlay');
     };
-  }, [mode, effectiveContainerRef, containerRef, viewX, viewY, zoom, CELL_SIZE, updateMinimapSubscriptions, clearMinimapSubscriptionsFor, schedulePaint]);
+  }, [mode, effectiveContainerRef, containerRef, viewX, viewY, zoom, CELL_SIZE, updateMinimapSubscriptions, clearMinimapSubscriptionsFor, schedulePaint, calculateMinimapResolution]);
 
   // Initialize HUD minimap center to main view center (spectator-friendly)
   useEffect(() => {
@@ -505,7 +544,8 @@ export default function Minimap({
     if (mode === "hud") {
       // For HUD mode, we can subscribe based on hudViewRef alone; no container needed
       const { cx, cy, cells } = hudViewRef.current;
-      updateMinimapSubscriptions(cx, cy, cells, cells, 2, 'hud');
+      const resolution = calculateMinimapResolution('hud', cells);
+      updateMinimapSubscriptions(cx, cy, cells, cells, 2, 'hud', resolution);
     } else {
       const el = effectiveContainerRef.current;
       if (!el) return;
@@ -516,30 +556,32 @@ export default function Minimap({
       const heightCells = Math.ceil(h / overlayZoom);
       const centerWorldX = Math.floor(x + widthCells / 2);
       const centerWorldY = Math.floor(y + heightCells / 2);
-      updateMinimapSubscriptions(centerWorldX, centerWorldY, widthCells, heightCells, 1, 'overlay');
+      const resolution = calculateMinimapResolution('overlay', 0, overlayZoom, w, h);
+      updateMinimapSubscriptions(centerWorldX, centerWorldY, widthCells, heightCells, 2, 'overlay', resolution);
     }
-  }, [mode, hudView, overlayView, updateMinimapSubscriptions, effectiveContainerRef]);
+  }, [mode, hudView, overlayView, updateMinimapSubscriptions, containerRef, effectiveContainerRef, calculateMinimapResolution]);
 
   // Auto-follow main view for both modes
   useEffect(() => {
     if (!mainViewMoveToken) return;
     if (performance.now() - (lastMmInteractionAtRef.current || 0) < 300) return;
-    
+
     const container = containerRef?.current;
     if (!container) return;
-    
+
     const width = container.clientWidth || 0;
     const height = container.clientHeight || 0;
     const { viewX: vx, viewY: vy, zoom: z } = mainViewRef.current;
     const cwx = Math.floor((vx + width / 2 / z) / CELL_SIZE);
     const cwy = Math.floor((vy + height / 2 / z) / CELL_SIZE);
-    
+
     if (mode === "hud") {
       hudViewRef.current = { cx: cwx, cy: cwy, cells: hudViewRef.current.cells };
       setHudView(hudViewRef.current);
       schedulePaint();
       const { cells } = hudViewRef.current;
-      updateMinimapSubscriptions(cwx, cwy, cells, cells, 2, 'hud');
+      const resolution = calculateMinimapResolution('hud', cells);
+      updateMinimapSubscriptions(cwx, cwy, cells, cells, 2, 'hud', resolution);
     } else if (mode === "overlay") {
       // Auto-follow for overlay mode too
       const el = effectiveContainerRef.current;
@@ -552,12 +594,13 @@ export default function Minimap({
       overlayViewRef.current = { x: nx, y: ny, zoom: currentZoom };
       setOverlayView(overlayViewRef.current);
       schedulePaint();
-      
+
       const widthCells = Math.ceil(w / currentZoom);
       const heightCells = Math.ceil(h / currentZoom);
-      updateMinimapSubscriptions(cwx, cwy, widthCells, heightCells, 1, 'overlay');
+      const resolution = calculateMinimapResolution('overlay', 0, currentZoom, w, h);
+      updateMinimapSubscriptions(cwx, cwy, widthCells, heightCells, 2, 'overlay', resolution);
     }
-  }, [mainViewMoveToken, mode, CELL_SIZE, containerRef, effectiveContainerRef, updateMinimapSubscriptions, schedulePaint]);
+  }, [mainViewMoveToken, mode, CELL_SIZE, containerRef, effectiveContainerRef, updateMinimapSubscriptions, schedulePaint, calculateMinimapResolution]);
 
   // Track latest main view values
   useEffect(() => {
@@ -575,15 +618,15 @@ export default function Minimap({
 
   if (mode === "hud") {
     return (
-      <div 
-        className="minimap" 
-        style={{ 
-          position: 'fixed', 
-          bottom: 10, 
-          right: 10, 
-          width: MINIMAP_SIZE, 
-          height: MINIMAP_SIZE, 
-          touchAction: 'none' 
+      <div
+        className="minimap"
+        style={{
+          position: 'fixed',
+          bottom: 10,
+          right: 10,
+          width: MINIMAP_SIZE,
+          height: MINIMAP_SIZE,
+          touchAction: 'none'
         }}
       >
         <canvas
