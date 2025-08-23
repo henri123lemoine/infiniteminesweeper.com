@@ -13,7 +13,8 @@ func TestMinimapSetAndCollectRects(t *testing.T) {
     s.minimapSetCell(cid, 2, 5)
     s.minimapSetCell(cid, uint32(ChunkSize+0), 6)
     s.minimapSetCell(cid, uint32(ChunkSize+1), 6)
-    t0 := s.minimapTiles[cid]
+    // Use the full-resolution (64x64) tile created by minimapSetCell
+    t0 := s.minimapTiles[cid][64]
     s.stateMu.Unlock()
 
     rects, bytes := minimapCollectRects(t0)
@@ -21,4 +22,3 @@ func TestMinimapSetAndCollectRects(t *testing.T) {
         t.Fatalf("expected non-empty rects")
     }
 }
-
