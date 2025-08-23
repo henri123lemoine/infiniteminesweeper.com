@@ -9,6 +9,7 @@ import Minimap from "./Minimap.jsx";
 import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
+import { usePinchPanZoom } from "./hooks/usePinchPanZoom.js";
 import meta from "./assets/spritesheet.json";
 
 function App() {
@@ -101,52 +102,7 @@ function App() {
   const [zoom, setZoom] = useState(initialZoom);
   const [mainViewMoveToken, setMainViewMoveToken] = useState(0);
   const bumpMainViewMove = useCallback(() => setMainViewMoveToken((t) => t + 1), []);
-  const handleWheel = useCallback(
-    (e) => {
-      e.preventDefault();
-      userMovedRef.current = true;
 
-      const container = containerRef.current;
-      if (!container) return;
-
-      const rect = container.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-
-      const MIN_ZOOM = 0.1;
-      const MAX_ZOOM = 5;
-
-      // Smooth exponential zoom; negative deltaY -> zoom in
-      const zoomFactor = Math.exp(-e.deltaY * 0.0007);
-
-      const prevZoom = zoomRef.current;
-      const targetZoom = Math.min(Math.max(prevZoom * zoomFactor, MIN_ZOOM), MAX_ZOOM);
-
-      // Anchor the zoom on the mouse position for intuitive behavior
-      const worldX = viewRef.current.x + mouseX / prevZoom;
-      const worldY = viewRef.current.y + mouseY / prevZoom;
-      const newViewX = worldX - mouseX / targetZoom;
-      const newViewY = worldY - mouseY / targetZoom;
-
-      // Update ref immediately for in-frame math/rendering; state for UI/re-render
-      zoomRef.current = targetZoom;
-      scheduleViewUpdate(newViewX, newViewY);
-      setZoom(targetZoom);
-      bumpMainViewMove();
-    },
-    [containerRef, scheduleViewUpdate, bumpMainViewMove]
-  );
-
-  // Attach non-passive wheel listener to prevent page scroll while zooming
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.addEventListener("wheel", handleWheel, { passive: false });
-    return () => el.removeEventListener("wheel", handleWheel);
-  }, [handleWheel]);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0, viewX: 0, viewY: 0 });
-  const dragTimeoutRef = useRef(null);
 
   // Rendering optimization refs
   const lastRenderTime = useRef(0);
@@ -346,342 +302,7 @@ function App() {
     });
   }, [getViewportInfo, updateMinimapSubscriptions]);
 
-  // Mouse event handlers
-  const handleMouseDown = useCallback(
-    (e) => {
-      e.preventDefault(); // Prevent context menu and other default behaviors
-      if (!connected) return;
-      if (e.button === 2) {
-        // Right click for flag
-        const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
-        handleCellClick(worldX, worldY, true);
-        return;
-      }
 
-      if (e.button !== 0) return;
-      userMovedRef.current = true;
-
-      setDragStart({
-        x: e.clientX,
-        y: e.clientY,
-        viewX: viewRef.current.x,
-        viewY: viewRef.current.y,
-      });
-
-      // Set a timeout to enable dragging after a delay
-      dragTimeoutRef.current = setTimeout(() => {
-        setIsDragging(true);
-      }, 150); // delay before considering it a drag
-    },
-    [screenToWorld, handleCellClick],
-  );
-
-  const handleMouseMove = useCallback(
-    (e) => {
-      if (!connected || !dragStart.x) return; // No mouse down recorded or not joined
-
-      const dx = Math.abs(e.clientX - dragStart.x);
-      const dy = Math.abs(e.clientY - dragStart.y);
-
-      // If mouse moved significantly, immediately enable dragging
-      if (dx > 50 || dy > 50) {
-        if (dragTimeoutRef.current) {
-          clearTimeout(dragTimeoutRef.current);
-          dragTimeoutRef.current = null;
-        }
-        setIsDragging(true);
-      }
-
-      if (isDragging) {
-        userMovedRef.current = true;
-        userHasDraggedRef.current = true;
-        const z = zoomRef.current;
-        const deltaX = (e.clientX - dragStart.x) / z;
-        const deltaY = (e.clientY - dragStart.y) / z;
-
-        scheduleViewUpdate(dragStart.viewX - deltaX, dragStart.viewY - deltaY);
-        bumpMainViewMove();
-      }
-    },
-    [isDragging, dragStart, scheduleViewUpdate, bumpMainViewMove],
-  );
-
-  const handleMouseUp = useCallback(
-    (e) => {
-      if (!connected) return;
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-        dragTimeoutRef.current = null;
-      }
-
-      if (!isDragging && dragStart.x) {
-        const { x: worldX, y: worldY } = screenToWorld(e.clientX, e.clientY);
-        const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
-        const cellKey = `${chunkX},${chunkY},${cell}`;
-        const isRevealed = revealedCellsRef.current.has(cellKey);
-
-        handleCellClick(worldX, worldY, false, isRevealed);
-      }
-
-      setIsDragging(false);
-      setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
-
-      // Cancel any pending RAF and commit final view
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-        commitViewRef();
-      }
-    },
-    [
-      isDragging,
-      dragStart,
-      screenToWorld,
-      handleCellClick,
-      commitViewRef,
-      connected,
-    ],
-  );
-
-  // Handle context menu (prevent default right-click menu)
-  const handleContextMenu = useCallback((e) => {
-    e.preventDefault();
-  }, []);
-
-  // Touch state for pinch-to-zoom
-  const touchStateRef = useRef({
-    touches: [],
-    initialDistance: 0,
-    initialZoom: 1,
-    initialMidpoint: { x: 0, y: 0 },
-    initialViewX: 0,
-    initialViewY: 0,
-  });
-
-  // Touch event handlers for mobile
-  const handleTouchStart = useCallback(
-    (e) => {
-      if (!connected) return;
-      e.preventDefault();
-
-      const touches = Array.from(e.touches).map(t => ({
-        id: t.identifier,
-        x: t.clientX,
-        y: t.clientY,
-      }));
-
-      touchStateRef.current.touches = touches;
-
-      if (touches.length === 1) {
-        // Single touch - prepare for panning
-        userMovedRef.current = true;
-        setDragStart({
-          x: touches[0].x,
-          y: touches[0].y,
-          viewX: viewRef.current.x,
-          viewY: viewRef.current.y,
-        });
-
-        // Start long press timer for flagging
-        dragTimeoutRef.current = setTimeout(() => {
-          // This is a long press - place a flag
-          const { x: worldX, y: worldY } = screenToWorld(touches[0].x, touches[0].y);
-          handleCellClick(worldX, worldY, true); // true = right click (flag)
-          // Clear drag start to prevent any further actions
-          setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
-        }, 200);
-      } else if (touches.length === 2) {
-        // Two fingers - prepare for pinch zoom
-        if (dragTimeoutRef.current) {
-          clearTimeout(dragTimeoutRef.current);
-          dragTimeoutRef.current = null;
-        }
-        setIsDragging(false);
-
-        const dx = touches[1].x - touches[0].x;
-        const dy = touches[1].y - touches[0].y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        const midX = (touches[0].x + touches[1].x) / 2;
-        const midY = (touches[0].y + touches[1].y) / 2;
-
-        touchStateRef.current.initialDistance = distance;
-        touchStateRef.current.initialZoom = zoomRef.current;
-        touchStateRef.current.initialMidpoint = { x: midX, y: midY };
-        touchStateRef.current.initialViewX = viewRef.current.x;
-        touchStateRef.current.initialViewY = viewRef.current.y;
-      }
-    },
-    [screenToWorld, handleCellClick, connected],
-  );
-
-  const handleTouchMove = useCallback(
-    (e) => {
-      e.preventDefault(); // Prevent scrolling
-      if (!connected) return;
-
-      const touches = Array.from(e.touches).map(t => ({
-        id: t.identifier,
-        x: t.clientX,
-        y: t.clientY,
-      }));
-
-      if (touches.length === 1 && dragStart.x) {
-        // Single touch panning
-        const touch = touches[0];
-        const dx = Math.abs(touch.x - dragStart.x);
-        const dy = Math.abs(touch.y - dragStart.y);
-
-        // If touch moved significantly, cancel long press and enable dragging
-        if (dx > 10 || dy > 10) {
-          if (dragTimeoutRef.current) {
-            clearTimeout(dragTimeoutRef.current);
-            dragTimeoutRef.current = null;
-          }
-          setIsDragging(true);
-        }
-
-        if (isDragging) {
-          userMovedRef.current = true;
-          userHasDraggedRef.current = true;
-          const z = zoomRef.current;
-          const deltaX = (touch.x - dragStart.x) / z;
-          const deltaY = (touch.y - dragStart.y) / z;
-
-          scheduleViewUpdate(
-            dragStart.viewX - deltaX,
-            dragStart.viewY - deltaY,
-          );
-          bumpMainViewMove();
-        }
-      } else if (touches.length === 2) {
-        // Two finger pinch zoom
-        const dx = touches[1].x - touches[0].x;
-        const dy = touches[1].y - touches[0].y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        const midX = (touches[0].x + touches[1].x) / 2;
-        const midY = (touches[0].y + touches[1].y) / 2;
-
-        const { initialDistance, initialZoom, initialMidpoint, initialViewX, initialViewY } = touchStateRef.current;
-
-        if (initialDistance > 0) {
-          const container = containerRef.current;
-          if (!container) return;
-
-          const zoomFactor = distance / initialDistance;
-          const MIN_ZOOM = 0.1;
-          const MAX_ZOOM = 5;
-          const targetZoom = Math.min(Math.max(initialZoom * zoomFactor, MIN_ZOOM), MAX_ZOOM);
-
-          // Calculate world coordinates at the midpoint during initial touch
-          const worldX = initialViewX + initialMidpoint.x / initialZoom;
-          const worldY = initialViewY + initialMidpoint.y / initialZoom;
-
-          // Calculate new view position to keep the midpoint stable
-          const newViewX = worldX - midX / targetZoom;
-          const newViewY = worldY - midY / targetZoom;
-
-          // Update zoom and view
-          zoomRef.current = targetZoom;
-          scheduleViewUpdate(newViewX, newViewY);
-          setZoom(targetZoom);
-          bumpMainViewMove();
-        }
-      }
-    },
-    [isDragging, dragStart, scheduleViewUpdate, bumpMainViewMove, connected],
-  );
-
-  const handleTouchEnd = useCallback(
-    (e) => {
-      if (!connected) return;
-
-      // Clear the long press timeout
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-        dragTimeoutRef.current = null;
-      }
-
-      const remainingTouches = e.touches.length;
-
-      if (remainingTouches === 0) {
-        // All fingers lifted
-        if (!isDragging && dragStart.x && e.changedTouches.length === 1) {
-          // This was a short tap, not a drag or long press - reveal cell or chord
-          const touch = e.changedTouches[0];
-          const { x: worldX, y: worldY } = screenToWorld(
-            touch.clientX,
-            touch.clientY,
-          );
-          const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
-          const cellKey = `${chunkX},${chunkY},${cell}`;
-          const isRevealed = revealedCellsRef.current.has(cellKey);
-
-          // Pass true for isChord if the cell is already revealed
-          handleCellClick(worldX, worldY, false, isRevealed);
-        }
-
-        // Reset all touch state
-        setIsDragging(false);
-        setDragStart({ x: 0, y: 0, viewX: 0, viewY: 0 });
-        touchStateRef.current = {
-          touches: [],
-          initialDistance: 0,
-          initialZoom: 1,
-          initialMidpoint: { x: 0, y: 0 },
-          initialViewX: 0,
-          initialViewY: 0,
-        };
-
-        // Cancel any pending RAF and commit final view
-        if (rafRef.current) {
-          cancelAnimationFrame(rafRef.current);
-          rafRef.current = null;
-          commitViewRef();
-        }
-      } else if (remainingTouches === 1 && touchStateRef.current.touches.length === 2) {
-        // Went from two fingers to one finger - transition to single touch mode
-        const remainingTouch = e.touches[0];
-        setIsDragging(false);
-        setDragStart({
-          x: remainingTouch.clientX,
-          y: remainingTouch.clientY,
-          viewX: viewRef.current.x,
-          viewY: viewRef.current.y,
-        });
-
-        // Reset pinch state but keep the remaining touch for potential panning
-        touchStateRef.current.touches = [{
-          id: remainingTouch.identifier,
-          x: remainingTouch.clientX,
-          y: remainingTouch.clientY,
-        }];
-        touchStateRef.current.initialDistance = 0;
-      }
-    },
-    [
-      isDragging,
-      dragStart,
-      screenToWorld,
-      handleCellClick,
-      commitViewRef,
-      connected,
-      worldToChunk,
-    ],
-  );
-
-  // Attach non-passive touch listeners to prevent default behaviors
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.addEventListener("touchstart", handleTouchStart, { passive: false });
-    el.addEventListener("touchmove", handleTouchMove, { passive: false });
-    el.addEventListener("touchend", handleTouchEnd, { passive: false });
-    return () => {
-      el.removeEventListener("touchstart", handleTouchStart);
-      el.removeEventListener("touchmove", handleTouchMove);
-      el.removeEventListener("touchend", handleTouchEnd);
-    };
-  }, [handleTouchStart, handleTouchMove, handleTouchEnd]);
 
   // Keyboard panning with Arrow keys (and optional WASD)
   useEffect(() => {
@@ -894,6 +515,84 @@ function App() {
     const newViewY = worldY * CELL_SIZE - centerY / z;
     scheduleViewUpdate(newViewX, newViewY);
   }, [CELL_SIZE, scheduleViewUpdate]);
+
+  // Pan/zoom/drag handler using the unified hook
+  const { bind } = usePinchPanZoom({
+    getPointToWorld: (screenX, screenY) => {
+      const world = screenToWorld(screenX, screenY);
+      return { x: world.x, y: world.y, viewX: viewRef.current.x, viewY: viewRef.current.y, zoom: zoomRef.current };
+    },
+    onPan: (deltaX, deltaY, context) => {
+      if (!connected) return;
+      userMovedRef.current = true;
+      userHasDraggedRef.current = true;
+      const z = zoomRef.current;
+      scheduleViewUpdate(
+        context.viewStartX - deltaX / z,
+        context.viewStartY - deltaY / z
+      );
+      bumpMainViewMove();
+    },
+    onZoom: (zoomFactor, anchor, context) => {
+      if (!connected) return;
+      userMovedRef.current = true;
+      
+      const MIN_ZOOM = 0.1;
+      const MAX_ZOOM = 5;
+      
+      if (context.targetZoom) {
+        // Pinch zoom with pre-calculated values
+        zoomRef.current = context.targetZoom;
+        scheduleViewUpdate(context.newViewX, context.newViewY);
+        setZoom(context.targetZoom);
+      } else {
+        // Wheel zoom
+        const prevZoom = zoomRef.current;
+        const targetZoom = Math.min(Math.max(prevZoom * zoomFactor, MIN_ZOOM), MAX_ZOOM);
+        
+        const container = containerRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        const mouseX = context.x;
+        const mouseY = context.y;
+        
+        const worldX = viewRef.current.x + mouseX / prevZoom;
+        const worldY = viewRef.current.y + mouseY / prevZoom;
+        const newViewX = worldX - mouseX / targetZoom;
+        const newViewY = worldY - mouseY / targetZoom;
+        
+        zoomRef.current = targetZoom;
+        scheduleViewUpdate(newViewX, newViewY);
+        setZoom(targetZoom);
+      }
+      
+      bumpMainViewMove();
+    },
+    onLongPress: (worldX, worldY, isLongPress) => {
+      if (!connected) return;
+      
+      if (isLongPress === false) {
+        // This was a tap/click - reveal cell or chord
+        const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
+        const cellKey = `${chunkX},${chunkY},${cell}`;
+        const isRevealed = revealedCellsRef.current.has(cellKey);
+        handleCellClick(worldX, worldY, false, isRevealed);
+      } else {
+        // This was a right-click or long press - place flag
+        handleCellClick(worldX, worldY, true);
+      }
+      
+      // Commit final view
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        commitViewRef();
+      }
+    },
+    minZoom: 0.1,
+    maxZoom: 5,
+    dragDelayMs: 150
+  });
 
   // Fetch hotspot metadata (no auto-centering; user must drag to move the camera)
   useEffect(() => {
@@ -1327,13 +1026,8 @@ function App() {
       <div className="board-container">
         <div
           ref={containerRef}
-          className={`canvas-container ${isDragging ? "dragging" : ""}`}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          onContextMenu={handleContextMenu}
-          style={{ touchAction: "none" }} // Prevent default touch behaviors
+          className="canvas-container"
+          {...bind}
         >
           <canvas ref={canvasRef} id="game-canvas" />
 

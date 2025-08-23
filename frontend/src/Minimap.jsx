@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { CHUNK } from './useGameState.js';
+import { usePinchPanZoom } from './hooks/usePinchPanZoom.js';
 
 export default function Minimap({
   mode = "hud", // "hud" or "overlay"
@@ -30,22 +31,8 @@ export default function Minimap({
   const mainViewRef = useRef({ viewX: viewX || 0, viewY: viewY || 0, zoom: zoom || 1 });
 
   // Interaction state
-  const draggingRef = useRef(false);
-  const lastPosRef = useRef({ x: 0, y: 0 });
-  const lastMmInteractionAtRef = useRef(0);
   const userHasDraggedRef = useRef(false);
   const rafRef = useRef(null);
-
-  // Touch state for pinch-to-zoom
-  const touchStateRef = useRef({
-    touches: [],
-    initialDistance: 0,
-    initialZoom: 1,
-    initialView: { x: 0, y: 0 },
-    initialMidpoint: { x: 0, y: 0 },
-    initialCells: 0,
-    initialCenter: { cx: 0, cy: 0 },
-  });
 
   // Calculate appropriate minimap resolution based on zoom level
   const calculateMinimapResolution = useCallback((mode, cells, overlayZoom, containerWidth = 0, containerHeight = 0) => {
@@ -217,25 +204,59 @@ export default function Minimap({
     });
   }, [mode, MINIMAP_SIZE, CHUNK, CELL_SIZE, minimapTilesRef, effectiveContainerRef, containerRef, zoom, viewX, viewY]);
 
-  // Mouse and touch event handlers
-  useEffect(() => {
-    const el = canvasRef.current;
-    if (!el) return;
-
-    const onWheel = (e) => {
-      e.preventDefault();
-      lastMmInteractionAtRef.current = performance.now();
-
+  // Pan/zoom/drag handler using the unified hook
+  const { bind, lastInteractionRef } = usePinchPanZoom({
+    getPointToWorld: (screenX, screenY) => {
+      // Return different coordinate systems based on mode
       if (mode === "hud") {
-        // HUD wheel handling
-        const rect = el.getBoundingClientRect();
-        const mx = e.clientX - rect.left;
-        const my = e.clientY - rect.top;
+        return {
+          x: hudViewRef.current.cx,
+          y: hudViewRef.current.cy,
+          cells: hudViewRef.current.cells,
+          mode: "hud"
+        };
+      } else {
+        return {
+          x: overlayViewRef.current.x,
+          y: overlayViewRef.current.y,
+          zoom: overlayViewRef.current.zoom,
+          mode: "overlay"
+        };
+      }
+    },
+    onPan: (deltaX, deltaY, context) => {
+      if (mode === "hud") {
+        const cells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, hudViewRef.current.cells));
+        const scale = MINIMAP_SIZE / cells;
+        hudViewRef.current = {
+          cx: hudViewRef.current.cx - deltaX / scale,
+          cy: hudViewRef.current.cy - deltaY / scale,
+          cells
+        };
+        setHudView(hudViewRef.current);
+      } else {
+        const dzoom = overlayViewRef.current.zoom;
+        overlayViewRef.current = {
+          ...overlayViewRef.current,
+          x: overlayViewRef.current.x - deltaX / dzoom,
+          y: overlayViewRef.current.y - deltaY / dzoom
+        };
+        setOverlayView(overlayViewRef.current);
+      }
+      schedulePaint();
+    },
+    onZoom: (zoomFactor, anchor, context) => {
+      if (mode === "hud") {
+        // HUD zoom handling
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const mx = context.x;
+        const my = context.y;
         const cells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, hudViewRef.current.cells));
         const scale = MINIMAP_SIZE / cells;
         const worldX = hudViewRef.current.cx - (MINIMAP_SIZE / 2 - mx) / scale;
         const worldY = hudViewRef.current.cy - (MINIMAP_SIZE / 2 - my) / scale;
-        const factor = Math.exp(-e.deltaY * 0.00045);
+        const factor = 1 / zoomFactor; // Invert for minimap
         const newCells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, cells / factor));
         const newScale = MINIMAP_SIZE / newCells;
         const newCx = worldX + (MINIMAP_SIZE / 2 - mx) / newScale;
@@ -246,13 +267,14 @@ export default function Minimap({
         const resolution = calculateMinimapResolution('hud', newCells);
         requestAnimationFrame(() => updateMinimapSubscriptions(newCx, newCy, newCells, newCells, 2, 'hud', resolution));
       } else {
-        // Overlay wheel handling
-        const rect = el.getBoundingClientRect();
-        const mx = e.clientX - rect.left;
-        const my = e.clientY - rect.top;
+        // Overlay zoom handling
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        const mx = context.x;
+        const my = context.y;
         const wz = overlayViewRef.current.zoom;
-        const factor = Math.exp(-e.deltaY * 0.00045);
-        const nz = Math.min(Math.max(wz * factor, 0.125), 8);
+        const factor = 1 / zoomFactor; // Invert for minimap
+        const nz = Math.min(Math.max(wz / factor, 0.125), 8);
         const worldX = overlayViewRef.current.x + mx / wz;
         const worldY = overlayViewRef.current.y + my / wz;
         const nx = worldX - mx / nz;
@@ -261,219 +283,16 @@ export default function Minimap({
         setOverlayView(overlayViewRef.current);
         schedulePaint();
       }
-    };
+    },
+    onInteraction: () => {
+      // Custom interaction tracking for minimap
+    },
+    enableRightClick: false,
+    dragDelayMs: 0, // Immediate drag for minimap
+    useIncrementalPan: true // Use frame-to-frame deltas for minimap
+  });
 
-    const onDown = (e) => {
-      e.preventDefault();
-      lastMmInteractionAtRef.current = performance.now();
-      draggingRef.current = true;
-      lastPosRef.current = { x: e.clientX, y: e.clientY };
-    };
-
-    const onMove = (e) => {
-      if (!draggingRef.current) return;
-      e.preventDefault();
-      lastMmInteractionAtRef.current = performance.now();
-      const dx = e.clientX - lastPosRef.current.x;
-      const dy = e.clientY - lastPosRef.current.y;
-      lastPosRef.current = { x: e.clientX, y: e.clientY };
-
-      if (mode === "hud") {
-        const cells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, hudViewRef.current.cells));
-        const scale = MINIMAP_SIZE / cells;
-        hudViewRef.current = {
-          cx: hudViewRef.current.cx - dx / scale,
-          cy: hudViewRef.current.cy - dy / scale,
-          cells
-        };
-        setHudView(hudViewRef.current);
-      } else {
-        const dzoom = overlayViewRef.current.zoom;
-        overlayViewRef.current = {
-          ...overlayViewRef.current,
-          x: overlayViewRef.current.x - dx / dzoom,
-          y: overlayViewRef.current.y - dy / dzoom
-        };
-        setOverlayView(overlayViewRef.current);
-      }
-      schedulePaint();
-    };
-
-    const onUp = () => {
-      if (!draggingRef.current) return;
-      draggingRef.current = false;
-      lastMmInteractionAtRef.current = performance.now();
-
-      if (mode === "hud") {
-        const { cx, cy, cells } = hudViewRef.current;
-        const resolution = calculateMinimapResolution('hud', cells);
-        requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 2, 'hud', resolution));
-      }
-    };
-
-    // Touch handlers
-    const onTouchStart = (e) => {
-      e.preventDefault();
-      lastMmInteractionAtRef.current = performance.now();
-
-      const touches = Array.from(e.touches).map(t => ({
-        id: t.identifier,
-        x: t.clientX,
-        y: t.clientY,
-      }));
-
-      touchStateRef.current.touches = touches;
-
-      if (touches.length === 1) {
-        draggingRef.current = true;
-        lastPosRef.current = { x: touches[0].x, y: touches[0].y };
-      } else if (touches.length === 2) {
-        draggingRef.current = false;
-        const dx = touches[1].x - touches[0].x;
-        const dy = touches[1].y - touches[0].y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        const midX = (touches[0].x + touches[1].x) / 2;
-        const midY = (touches[0].y + touches[1].y) / 2;
-
-        touchStateRef.current.initialDistance = distance;
-        touchStateRef.current.initialMidpoint = { x: midX, y: midY };
-
-        if (mode === "hud") {
-          touchStateRef.current.initialCells = hudViewRef.current.cells;
-          touchStateRef.current.initialCenter = { cx: hudViewRef.current.cx, cy: hudViewRef.current.cy };
-        } else {
-          touchStateRef.current.initialZoom = overlayViewRef.current.zoom;
-          touchStateRef.current.initialView = { x: overlayViewRef.current.x, y: overlayViewRef.current.y };
-        }
-      }
-    };
-
-    const onTouchMove = (e) => {
-      e.preventDefault();
-      lastMmInteractionAtRef.current = performance.now();
-
-      const touches = Array.from(e.touches).map(t => ({
-        id: t.identifier,
-        x: t.clientX,
-        y: t.clientY,
-      }));
-
-      if (touches.length === 1 && draggingRef.current) {
-        // Single touch panning
-        const touch = touches[0];
-        const dx = touch.x - lastPosRef.current.x;
-        const dy = touch.y - lastPosRef.current.y;
-        lastPosRef.current = { x: touch.x, y: touch.y };
-
-        if (mode === "hud") {
-          const cells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, hudViewRef.current.cells));
-          const scale = MINIMAP_SIZE / cells;
-          hudViewRef.current = {
-            cx: hudViewRef.current.cx - dx / scale,
-            cy: hudViewRef.current.cy - dy / scale,
-            cells
-          };
-          setHudView(hudViewRef.current);
-        } else {
-          const dzoom = overlayViewRef.current.zoom;
-          overlayViewRef.current = {
-            ...overlayViewRef.current,
-            x: overlayViewRef.current.x - dx / dzoom,
-            y: overlayViewRef.current.y - dy / dzoom
-          };
-          setOverlayView(overlayViewRef.current);
-        }
-        schedulePaint();
-      } else if (touches.length === 2) {
-        // Two finger pinch zoom
-        const dx = touches[1].x - touches[0].x;
-        const dy = touches[1].y - touches[0].y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        const midX = (touches[0].x + touches[1].x) / 2;
-        const midY = (touches[0].y + touches[1].y) / 2;
-
-        const { initialDistance } = touchStateRef.current;
-        if (initialDistance > 0) {
-          if (mode === "hud") {
-            const { initialCells } = touchStateRef.current;
-            const zoomFactor = initialDistance / distance;
-            const newCells = Math.max(CHUNK / 2, Math.min(CHUNK * 32, initialCells * zoomFactor));
-            hudViewRef.current = {
-              cx: hudViewRef.current.cx,
-              cy: hudViewRef.current.cy,
-              cells: newCells
-            };
-            setHudView(hudViewRef.current);
-          } else {
-            const { initialZoom, initialView, initialMidpoint } = touchStateRef.current;
-            const rect = el.getBoundingClientRect();
-            const zoomFactor = distance / initialDistance;
-            const targetZoom = Math.min(Math.max(initialZoom * zoomFactor, 0.125), 8);
-            const worldX = initialView.x + (initialMidpoint.x - rect.left) / initialZoom;
-            const worldY = initialView.y + (initialMidpoint.y - rect.top) / initialZoom;
-            const newViewX = worldX - (midX - rect.left) / targetZoom;
-            const newViewY = worldY - (midY - rect.top) / targetZoom;
-            overlayViewRef.current = { x: newViewX, y: newViewY, zoom: targetZoom };
-            setOverlayView(overlayViewRef.current);
-          }
-          schedulePaint();
-        }
-      }
-    };
-
-    const onTouchEnd = (e) => {
-      e.preventDefault();
-      lastMmInteractionAtRef.current = performance.now();
-      const remainingTouches = e.touches.length;
-
-      if (remainingTouches === 0) {
-        draggingRef.current = false;
-        touchStateRef.current = {
-          touches: [],
-          initialDistance: 0,
-          initialZoom: 1,
-          initialView: { x: 0, y: 0 },
-          initialMidpoint: { x: 0, y: 0 },
-          initialCells: 0,
-          initialCenter: { cx: 0, cy: 0 },
-        };
-
-        if (mode === "hud") {
-          const { cx, cy, cells } = hudViewRef.current;
-          const resolution = calculateMinimapResolution('hud', cells);
-          requestAnimationFrame(() => updateMinimapSubscriptions(cx, cy, cells, cells, 2, 'hud', resolution));
-        }
-      } else if (remainingTouches === 1 && touchStateRef.current.touches.length === 2) {
-        const remainingTouch = e.touches[0];
-        draggingRef.current = true;
-        lastPosRef.current = { x: remainingTouch.clientX, y: remainingTouch.clientY };
-        touchStateRef.current.touches = [{
-          id: remainingTouch.identifier,
-          x: remainingTouch.clientX,
-          y: remainingTouch.clientY,
-        }];
-        touchStateRef.current.initialDistance = 0;
-      }
-    };
-
-    el.addEventListener('wheel', onWheel, { passive: false });
-    el.addEventListener('mousedown', onDown);
-    window.addEventListener('mousemove', onMove, { passive: false });
-    window.addEventListener('mouseup', onUp);
-    el.addEventListener('touchstart', onTouchStart, { passive: false });
-    el.addEventListener('touchmove', onTouchMove, { passive: false });
-    el.addEventListener('touchend', onTouchEnd, { passive: false });
-
-    return () => {
-      el.removeEventListener('wheel', onWheel);
-      el.removeEventListener('mousedown', onDown);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      el.removeEventListener('touchstart', onTouchStart);
-      el.removeEventListener('touchmove', onTouchMove);
-      el.removeEventListener('touchend', onTouchEnd);
-    };
-  }, [mode, CHUNK, MINIMAP_SIZE, CELL_SIZE, updateMinimapSubscriptions, schedulePaint, minimapTilesRef, effectiveContainerRef, containerRef, zoom, viewX, viewY, calculateMinimapResolution]);
+  const lastMmInteractionAtRef = lastInteractionRef;
 
   // Initialize overlay view to center on user or world origin
   useEffect(() => {
@@ -630,7 +449,8 @@ export default function Minimap({
       >
         <canvas
           ref={canvasRef}
-          style={{ width: '100%', height: '100%', cursor: "grab", touchAction: 'none' }}
+          style={{ width: '100%', height: '100%', cursor: "grab" }}
+          {...bind}
         />
         <button
           onClick={onOpenOverlay}
@@ -665,8 +485,8 @@ export default function Minimap({
   }
 
   return (
-    <div ref={localContainerRef} style={{ position: 'relative', width: '100%', height: '100%', background: '#202020', touchAction: 'none' }}>
-      <canvas ref={canvasRef} style={{ width: '100%', height: '100%', touchAction: 'none' }} />
+    <div ref={localContainerRef} style={{ position: 'relative', width: '100%', height: '100%', background: '#202020' }}>
+      <canvas ref={canvasRef} style={{ width: '100%', height: '100%' }} {...bind} />
     </div>
   );
 }
