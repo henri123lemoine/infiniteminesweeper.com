@@ -7,11 +7,12 @@ import (
 	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
-// MinimapTile represents a 64x64 palette-indexed tile with a monotonic version.
+// MinimapTile represents a resolution×resolution palette-indexed tile with a monotonic version.
 type MinimapTile struct {
-	Version uint32
-	Data    [ChunkSize * ChunkSize]byte
-	Dirty   [ChunkSize * ChunkSize]bool
+	Version    uint32
+	Resolution uint32 // 16, 32, or 64
+	Data       []byte // resolution*resolution palette indices
+	Dirty      []bool // resolution*resolution dirty flags
 }
 
 // palette indices (<=10 colors total)
@@ -30,6 +31,51 @@ const (
 	mmFlagBase = 10 // 10 buckets for flags: 10..19
 )
 
+// Create a new MinimapTile with the specified resolution
+func newMinimapTile(resolution uint32) *MinimapTile {
+	size := resolution * resolution
+	return &MinimapTile{
+		Resolution: resolution,
+		Data:       make([]byte, size),
+		Dirty:      make([]bool, size),
+	}
+}
+
+// Simple pixel averaging that preserves overall density and visual appearance
+// This maintains the intuitive look of the minimap at all scales
+func simplePixelAverage(fullData []byte, blockX, blockY, blockSize int) byte {
+	counts := make(map[byte]int)
+	totalPixels := 0
+	
+	// Count each palette index in this averaging block
+	for dy := 0; dy < blockSize; dy++ {
+		for dx := 0; dx < blockSize; dx++ {
+			srcX := blockX*blockSize + dx
+			srcY := blockY*blockSize + dy
+			if srcX >= ChunkSize || srcY >= ChunkSize {
+				continue
+			}
+			idx := fullData[srcY*ChunkSize + srcX]
+			counts[idx]++
+			totalPixels++
+		}
+	}
+	
+	// Return the most frequent palette index (mode)
+	// This preserves the overall density and visual character
+	maxCount := 0
+	var bestIdx byte = mmUnseen
+	
+	for idx, count := range counts {
+		if count > maxCount {
+			maxCount = count
+			bestIdx = idx
+		}
+	}
+	
+	return bestIdx
+}
+
 func minimapFlagBucket(flagID uint32) int {
 	// Map sprite IDs to one of 10 color buckets.
 	// Note: newer flag ID series are offset by +1 compared to the original 0..9 mapping.
@@ -42,13 +88,19 @@ func minimapFlagBucket(flagID uint32) int {
 	return b
 }
 
-// mark a cell dirty in the minimap and set its palette index
+// mark a cell dirty in the minimap and set its palette index for full resolution (64x64)
 func (s *Server) minimapSetCell(cid ChunkID, cell uint32, idx byte) {
-	t := s.minimapTiles[cid]
-	if t == nil {
-		t = &MinimapTile{}
-		s.minimapTiles[cid] = t
+	if s.minimapTiles[cid] == nil {
+		s.minimapTiles[cid] = make(map[uint32]*MinimapTile)
 	}
+	
+	// Always maintain the full-resolution (64x64) tile as the master
+	t := s.minimapTiles[cid][64]
+	if t == nil {
+		t = newMinimapTile(64)
+		s.minimapTiles[cid][64] = t
+	}
+	
 	pos := int(cell)
 	if pos < 0 || pos >= ChunkSize*ChunkSize {
 		return
@@ -57,6 +109,26 @@ func (s *Server) minimapSetCell(cid ChunkID, cell uint32, idx byte) {
 		t.Data[pos] = idx
 		t.Dirty[pos] = true
 		s.minimapDirtyTiles[cid] = struct{}{}
+		
+		// Mark lower resolution tiles as dirty too
+		if t32, ok := s.minimapTiles[cid][32]; ok {
+			// Calculate which lower-res cell this affects
+			localX := pos % ChunkSize
+			localY := pos / ChunkSize
+			lrX := localX / 2  // 64->32 downsampling
+			lrY := localY / 2
+			lrPos := lrY*32 + lrX
+			t32.Dirty[lrPos] = true
+		}
+		
+		if t16, ok := s.minimapTiles[cid][16]; ok {
+			localX := pos % ChunkSize
+			localY := pos / ChunkSize
+			lrX := localX / 4  // 64->16 downsampling
+			lrY := localY / 4
+			lrPos := lrY*16 + lrX
+			t16.Dirty[lrPos] = true
+		}
 	}
 }
 
@@ -97,17 +169,38 @@ func (s *Server) minimapPaletteFor(cid ChunkID, cell uint32) byte {
 	return mmUnseen
 }
 
-// rebuild a full tile from current world state
-func (s *Server) minimapRebuildTile(cid ChunkID) *MinimapTile {
-	t := s.minimapTiles[cid]
-	if t == nil {
-		t = &MinimapTile{}
-		s.minimapTiles[cid] = t
+// rebuild a full tile from current world state at the specified resolution
+func (s *Server) minimapRebuildTile(cid ChunkID, resolution uint32) *MinimapTile {
+	if s.minimapTiles[cid] == nil {
+		s.minimapTiles[cid] = make(map[uint32]*MinimapTile)
 	}
-	for i := 0; i < ChunkSize*ChunkSize; i++ {
-		idx := s.minimapPaletteFor(cid, uint32(i))
-		t.Data[i] = idx
-		t.Dirty[i] = false
+	
+	t := s.minimapTiles[cid][resolution]
+	if t == nil {
+		t = newMinimapTile(resolution)
+		s.minimapTiles[cid][resolution] = t
+	}
+	
+	if resolution == 64 {
+		// Full resolution - direct mapping
+		for i := 0; i < ChunkSize*ChunkSize; i++ {
+			idx := s.minimapPaletteFor(cid, uint32(i))
+			t.Data[i] = idx
+			t.Dirty[i] = false
+		}
+	} else {
+		// Lower resolution - need to rebuild from full resolution
+		fullTile := s.minimapRebuildTile(cid, 64) // Ensure full resolution exists
+		blockSize := int(64 / resolution)        // 64/32=2, 64/16=4
+		
+		for y := 0; y < int(resolution); y++ {
+			for x := 0; x < int(resolution); x++ {
+				idx := simplePixelAverage(fullTile.Data, x, y, blockSize)
+				pos := y*int(resolution) + x
+				t.Data[pos] = idx
+				t.Dirty[pos] = false
+			}
+		}
 	}
 	return t
 }
@@ -126,40 +219,42 @@ func minimapCollectRects(t *MinimapTile) (rects []struct {
 	x, y, w, h int
 	rows       []byte
 }, deltaBytes int) {
+	resolution := int(t.Resolution)
+	
 	// First, find horizontal runs per row
 	type run struct{ x0, x1 int }
-	runs := make([][]run, ChunkSize)
-	for y := 0; y < ChunkSize; y++ {
-		row := t.Dirty[y*ChunkSize : (y+1)*ChunkSize]
+	runs := make([][]run, resolution)
+	for y := 0; y < resolution; y++ {
+		row := t.Dirty[y*resolution : (y+1)*resolution]
 		x := 0
-		for x < ChunkSize {
+		for x < resolution {
 			// skip clean
-			for x < ChunkSize && !row[x] {
+			for x < resolution && !row[x] {
 				x++
 			}
-			if x >= ChunkSize {
+			if x >= resolution {
 				break
 			}
 			start := x
-			for x < ChunkSize && row[x] {
+			for x < resolution && row[x] {
 				x++
 			}
 			runs[y] = append(runs[y], run{start, x - 1})
 		}
 	}
 	// Merge identical runs vertically into rectangles
-	used := make([][]bool, ChunkSize)
-	for y := 0; y < ChunkSize; y++ {
+	used := make([][]bool, resolution)
+	for y := 0; y < resolution; y++ {
 		used[y] = make([]bool, len(runs[y]))
 	}
-	for y := 0; y < ChunkSize; y++ {
+	for y := 0; y < resolution; y++ {
 		for i, r := range runs[y] {
 			if used[y][i] {
 				continue
 			}
 			h := 1
 			// try to extend downward while there exists an identical run
-			for yy := y + 1; yy < ChunkSize; yy++ {
+			for yy := y + 1; yy < resolution; yy++ {
 				// find a matching run in runs[yy]
 				foundJ := -1
 				for j, rr := range runs[yy] {
@@ -178,7 +273,7 @@ func minimapCollectRects(t *MinimapTile) (rects []struct {
 			w := r.x1 - r.x0 + 1
 			var buf bytes.Buffer
 			for yy := y; yy < y+h; yy++ {
-				start := yy*ChunkSize + r.x0
+				start := yy*resolution + r.x0
 				buf.Write(t.Data[start : start+w])
 			}
 			rects = append(rects, struct {
@@ -193,10 +288,17 @@ func minimapCollectRects(t *MinimapTile) (rects []struct {
 
 // send a FullTile for cid to a specific player (stateMu may be held by caller)
 func (s *Server) minimapSendFullTo(playerID uint32, cid ChunkID) {
+	// Get player's resolution preference (default to 64 if not set)
+	resolution := uint32(64)
+	if playerRes, ok := s.minimapPlayerRes[playerID]; ok {
+		resolution = playerRes
+	}
+	
 	// Rebuild from authoritative state to avoid stale or missing tiles
-	t := s.minimapRebuildTile(cid)
+	t := s.minimapRebuildTile(cid, resolution)
 	isAllUnseen := true
-	for i := 0; i < ChunkSize*ChunkSize; i++ {
+	tileSize := int(resolution * resolution)
+	for i := 0; i < tileSize; i++ {
 		if t.Data[i] != mmUnseen {
 			isAllUnseen = false
 			break
@@ -209,9 +311,10 @@ func (s *Server) minimapSendFullTo(playerID uint32, cid ChunkID) {
 	data := make([]byte, len(t.Data))
 	copy(data, t.Data[:])
 	msg := &pb.Msg{Payload: &pb.Msg_MinimapFullTile{MinimapFullTile: &pb.FullTile{
-		Tile:    &pb.TileRef{X: int32(cid.X), Y: int32(cid.Y)},
-		Version: t.Version,
-		Data:    data,
+		Tile:       &pb.TileRef{X: int32(cid.X), Y: int32(cid.Y)},
+		Version:    t.Version,
+		Data:       data,
+		Resolution: resolution,
 	}}}
 	s.sendToPlayer(playerID, mustProto(msg))
 }
@@ -235,67 +338,96 @@ func (s *Server) runMinimapBroadcaster() {
 		// reset set
 		s.minimapDirtyTiles = make(map[ChunkID]struct{})
 
-		// For each tile, compute delta rectangles and send to subscribers
+		// For each dirty tile, group subscribers by resolution and send appropriate updates
 		for _, cid := range dirty {
-			t := s.minimapTiles[cid]
-			if t == nil {
+			subs := s.minimapSubs[cid]
+			if len(subs) == 0 {
 				continue
 			}
-			rects, deltaBytes := minimapCollectRects(t)
-			// Heuristic: if over half of tile, send full
-			if deltaBytes > (ChunkSize*ChunkSize)/2 {
-				// clear dirties, bump version, send full
-				for i := range t.Dirty {
-					t.Dirty[i] = false
+			
+			// Group subscribers by resolution
+			playersByRes := make(map[uint32][]uint32)
+			for pid := range subs {
+				res := uint32(64) // default
+				if playerRes, ok := s.minimapPlayerRes[pid]; ok {
+					res = playerRes
+				}
+				playersByRes[res] = append(playersByRes[res], pid)
+			}
+			
+			// Process each resolution group
+			for resolution, players := range playersByRes {
+				tileMap := s.minimapTiles[cid]
+				if tileMap == nil {
+					continue
+				}
+				
+				t := tileMap[resolution]
+				if t == nil {
+					// Need to create/rebuild this resolution
+					t = s.minimapRebuildTile(cid, resolution)
+				}
+				
+				rects, deltaBytes := minimapCollectRects(t)
+				tileSize := int(resolution * resolution)
+				
+				// Heuristic: if over half of tile, send full
+				if deltaBytes > tileSize/2 {
+					// clear dirties, bump version, send full
+					for i := range t.Dirty {
+						t.Dirty[i] = false
+					}
+					t.Version++
+					data := make([]byte, len(t.Data))
+					copy(data, t.Data[:])
+					msg := &pb.Msg{Payload: &pb.Msg_MinimapFullTile{MinimapFullTile: &pb.FullTile{
+						Tile:       &pb.TileRef{X: int32(cid.X), Y: int32(cid.Y)},
+						Version:    t.Version,
+						Data:       data,
+						Resolution: resolution,
+					}}}
+					s.stateMu.Unlock()
+					for _, pid := range players {
+						s.sendToPlayer(pid, mustProto(msg))
+					}
+					s.stateMu.Lock()
+					continue
+				}
+				
+				if len(rects) == 0 {
+					continue
+				}
+				
+				// build TileDelta
+				pRects := make([]*pb.DeltaRect, 0, len(rects))
+				for _, r := range rects {
+					// clear dirty marks for cells in rect
+					for yy := r.y; yy < r.y+r.h; yy++ {
+						for xx := r.x; xx < r.x+r.w; xx++ {
+							t.Dirty[yy*int(resolution)+xx] = false
+						}
+					}
+					pRects = append(pRects, &pb.DeltaRect{
+						X:    uint32(r.x),
+						Y:    uint32(r.y),
+						W:    uint32(r.w),
+						H:    uint32(r.h),
+						Rows: append([]byte(nil), r.rows...),
+					})
 				}
 				t.Version++
-				data := make([]byte, len(t.Data))
-				copy(data, t.Data[:])
-				msg := &pb.Msg{Payload: &pb.Msg_MinimapFullTile{MinimapFullTile: &pb.FullTile{
-					Tile:    &pb.TileRef{X: int32(cid.X), Y: int32(cid.Y)},
-					Version: t.Version,
-					Data:    data,
+				msg := &pb.Msg{Payload: &pb.Msg_MinimapTileDelta{MinimapTileDelta: &pb.TileDelta{
+					Tile:       &pb.TileRef{X: int32(cid.X), Y: int32(cid.Y)},
+					Version:    t.Version,
+					Rects:      pRects,
+					Resolution: resolution,
 				}}}
-				subs := s.minimapSubs[cid]
 				s.stateMu.Unlock()
-				for pid := range subs {
+				for _, pid := range players {
 					s.sendToPlayer(pid, mustProto(msg))
 				}
 				s.stateMu.Lock()
-				continue
 			}
-			if len(rects) == 0 {
-				continue
-			}
-			// build TileDelta
-			pRects := make([]*pb.DeltaRect, 0, len(rects))
-			for _, r := range rects {
-				// clear dirty marks for cells in rect
-				for yy := r.y; yy < r.y+r.h; yy++ {
-					for xx := r.x; xx < r.x+r.w; xx++ {
-						t.Dirty[yy*ChunkSize+xx] = false
-					}
-				}
-				pRects = append(pRects, &pb.DeltaRect{
-					X:    uint32(r.x),
-					Y:    uint32(r.y),
-					W:    uint32(r.w),
-					H:    uint32(r.h),
-					Rows: append([]byte(nil), r.rows...),
-				})
-			}
-			t.Version++
-			msg := &pb.Msg{Payload: &pb.Msg_MinimapTileDelta{MinimapTileDelta: &pb.TileDelta{
-				Tile:    &pb.TileRef{X: int32(cid.X), Y: int32(cid.Y)},
-				Version: t.Version,
-				Rects:   pRects,
-			}}}
-			subs := s.minimapSubs[cid]
-			s.stateMu.Unlock()
-			for pid := range subs {
-				s.sendToPlayer(pid, mustProto(msg))
-			}
-			s.stateMu.Lock()
 		}
 		s.stateMu.Unlock()
 	}

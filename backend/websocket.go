@@ -586,6 +586,17 @@ func (s *Server) readPump(player *Player) {
 			m := t.MinimapSubscribe
 			if m != nil {
 				s.stateMu.Lock()
+				// Store player's resolution preference
+				resolution := m.Resolution
+				if resolution == 0 {
+					resolution = 64 // default to full resolution
+				}
+				// Validate resolution
+				if resolution != 16 && resolution != 32 && resolution != 64 {
+					resolution = 64 // fallback to full resolution for invalid values
+				}
+				s.minimapPlayerRes[player.ID] = resolution
+				
 				for _, tr := range m.Tiles {
 					cid := ChunkID{X: int64(tr.X), Y: int64(tr.Y)}
 					if s.minimapSubs[cid] == nil {

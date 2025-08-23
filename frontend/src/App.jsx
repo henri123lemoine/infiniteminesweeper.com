@@ -342,7 +342,7 @@ function App() {
     if (typeof updateMinimapSubscriptions !== 'function') return;
     requestAnimationFrame(() => {
       const { worldWidthCells, worldHeightCells, centerWorldX, centerWorldY } = getViewportInfo();
-      updateMinimapSubscriptions(centerWorldX, centerWorldY, worldWidthCells, worldHeightCells, 1, 'viewport');
+      updateMinimapSubscriptions(centerWorldX, centerWorldY, worldWidthCells, worldHeightCells, 2, 'viewport');
     });
   }, [getViewportInfo, updateMinimapSubscriptions]);
 
@@ -594,7 +594,7 @@ function App() {
   const handleTouchEnd = useCallback(
     (e) => {
       if (!connected) return;
-      
+
       // Clear the long press timeout
       if (dragTimeoutRef.current) {
         clearTimeout(dragTimeoutRef.current);
@@ -648,7 +648,7 @@ function App() {
           viewX: viewRef.current.x,
           viewY: viewRef.current.y,
         });
-        
+
         // Reset pinch state but keep the remaining touch for potential panning
         touchStateRef.current.touches = [{
           id: remainingTouch.identifier,
@@ -977,7 +977,7 @@ function App() {
       setValidationError("Enter 1-20 characters: letters, numbers, _ or -");
       return;
     }
-    
+
     if (connected) {
       // For connected users: this is a rename request - wait for server response
       setIsRenameAttempt(true);
@@ -1211,9 +1211,9 @@ function App() {
                 {lbLoading && fullLeaderboard == null && <p>Loading leaderboard…</p>}
                 {!lbLoading && fullLeaderboard && fullLeaderboard.length === 0 && <p>No players yet.</p>}
                 {!lbLoading && Array.isArray(fullLeaderboard) && fullLeaderboard.length > 0 && (
-                  <ol style={{ 
-                    maxHeight: "60vh", 
-                    overflow: "auto", 
+                  <ol style={{
+                    maxHeight: "60vh",
+                    overflow: "auto",
                     paddingRight: 8,
                     WebkitOverflowScrolling: "touch",
                     scrollbarWidth: "thin"

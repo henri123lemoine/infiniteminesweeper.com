@@ -156,11 +156,13 @@ export const useGameState = () => {
   const [updateSuccess, setUpdateSuccess] = useState(false);
 
   // Minimap streaming store and helpers
-  const minimapTilesRef = useRef(new Map()); // key "x,y" -> { version, data: Uint8Array, canvas }
+  const minimapTilesRef = useRef(new Map()); // key "x,y" -> { version, data: Uint8Array, canvas, resolution }
   // Union of active subscriptions actually sent to the server
   const minimapActiveSubsRef = useRef(new Set());
   // Desired subscriptions per logical source (e.g. 'hud', 'overlay')
   const minimapDesiredBySourceRef = useRef(new Map()); // sourceKey -> Set("x,y")
+  // Track current resolution preference to detect changes
+  const currentResolutionRef = useRef(64);
   // 0..9: board background, mines, numbers; 10..19: 10 flag colors
   const minimapPalette = new Uint32Array(256);
   // base board colors
@@ -196,9 +198,10 @@ export const useGameState = () => {
     const rec = minimapTilesRef.current.get(key);
     if (!rec) return null;
     if (rec.canvas) return rec.canvas;
+    const resolution = rec.resolution || CHUNK; // fallback to CHUNK for legacy tiles
     const c = (typeof OffscreenCanvas !== 'undefined')
-      ? new OffscreenCanvas(CHUNK, CHUNK)
-      : (() => { const el = document.createElement('canvas'); el.width = CHUNK; el.height = CHUNK; return el; })();
+      ? new OffscreenCanvas(resolution, resolution)
+      : (() => { const el = document.createElement('canvas'); el.width = resolution; el.height = resolution; return el; })();
     rec.canvas = c;
     return c;
   }, []);
@@ -208,7 +211,8 @@ export const useGameState = () => {
     if (!rec) return;
     const c = minimapGetCanvas(key);
     const ctx = c.getContext('2d');
-    const img = ctx.createImageData(CHUNK, CHUNK);
+    const resolution = rec.resolution || CHUNK; // fallback to CHUNK for legacy tiles
+    const img = ctx.createImageData(resolution, resolution);
     const dst = img.data;
     const data = rec.data;
     let di = 0;
@@ -711,7 +715,7 @@ export const useGameState = () => {
             setServerFlagID(data.flagID); // Sync server's authoritative flagID
             setJoinError(""); // Clear any previous join errors
             setConnected(true); // Now we're fully connected as a player
-            
+
             // Send a view update after successful join
             requestAnimationFrame(() => {
               try {
@@ -767,18 +771,38 @@ export const useGameState = () => {
           const tr = data.tile || {};
           const key = `${tr.x},${tr.y}`;
           const buf = b64ToU8(data.data);
-          const rec = { version: Number(data.version) || 0, data: new Uint8Array(buf) };
+          const resolution = data.resolution || CHUNK; // fallback for legacy tiles
+
+          // Check if this is a resolution change - if so, force canvas regeneration
+          const existingRec = minimapTilesRef.current.get(key);
+          const rec = { version: Number(data.version) || 0, data: new Uint8Array(buf), resolution };
+
+          // If resolution changed, clear old canvas to force regeneration at new size
+          if (existingRec && existingRec.resolution !== resolution && existingRec.canvas) {
+            delete existingRec.canvas;
+          }
+
           minimapTilesRef.current.set(key, rec);
           minimapDrawFull(key);
         } else if (type === "minimapTileDelta") {
           const tr = data.tile || {};
           const key = `${tr.x},${tr.y}`;
           let rec = minimapTilesRef.current.get(key);
+          const resolution = data.resolution || CHUNK; // fallback for legacy tiles
+
           // If we haven't received a full tile yet, bootstrap an unseen tile and apply delta
           if (!rec) {
-            rec = { version: 0, data: new Uint8Array(CHUNK * CHUNK) };
+            rec = { version: 0, data: new Uint8Array(resolution * resolution), resolution };
             minimapTilesRef.current.set(key, rec);
             // draw initial unseen background for this tile
+            minimapDrawFull(key);
+          } else if (rec.resolution !== resolution) {
+            // Resolution changed - replace with new tile at new resolution
+            if (rec.canvas) {
+              delete rec.canvas;
+            }
+            rec = { version: 0, data: new Uint8Array(resolution * resolution), resolution };
+            minimapTilesRef.current.set(key, rec);
             minimapDrawFull(key);
           }
           const incVersion = Number(data.version) || 0;
@@ -789,7 +813,7 @@ export const useGameState = () => {
             const bytes = b64ToU8(r.rows || []);
             let src = 0;
             for (let row = 0; row < h; row++) {
-              const base = (y + row) * CHUNK + x;
+              const base = (y + row) * resolution + x;
               rec.data.set(bytes.subarray(src, src + w), base);
               src += w;
             }
@@ -992,14 +1016,14 @@ export const useGameState = () => {
       console.error("Cannot join: WebSocket not connected");
       return;
     }
-    
+
     const sessionToken = localStorage.getItem("session_token") || "";
-    ws.send(encodeMsg({ 
-      join: { 
-        sessionToken, 
-        name: nameInput, 
-        flagID 
-      } 
+    ws.send(encodeMsg({
+      join: {
+        sessionToken,
+        name: nameInput,
+        flagID
+      }
     }));
   }, [ws]);
 
@@ -1009,14 +1033,14 @@ export const useGameState = () => {
       console.error("Cannot update profile: not connected as player");
       return;
     }
-    
+
     setUpdateError(""); // Clear any previous errors
     setUpdateSuccess(false); // Clear any previous success
-    ws.send(encodeMsg({ 
-      updateProfile: { 
-        name: nameInput, 
-        flagID 
-      } 
+    ws.send(encodeMsg({
+      updateProfile: {
+        name: nameInput,
+        flagID
+      }
     }));
   }, [ws, connected]);
 
@@ -1062,7 +1086,26 @@ export const useGameState = () => {
     sendViewUpdateRef: sendViewUpdate,
     // Minimap streaming
     minimapTilesRef,
-    updateMinimapSubscriptions: useCallback((centerWorldX, centerWorldY, widthCells, heightCells, marginTiles = 1, sourceKey = 'default') => {
+    updateMinimapSubscriptions: useCallback((centerWorldX, centerWorldY, widthCells, heightCells, marginTiles = 1, sourceKey = 'default', resolution = 64) => {
+      const s = wsRef.current;
+      if (!s || s.readyState !== WebSocket.OPEN) return;
+
+      // Check if resolution changed significantly - request new tiles but keep old ones visible
+      const prevResolution = currentResolutionRef.current;
+      if (resolution !== prevResolution) {
+        currentResolutionRef.current = resolution;
+
+        // Force re-subscription of all active tiles at new resolution
+        // But keep the old tiles visible until new ones arrive
+        if (minimapActiveSubsRef.current.size > 0) {
+          const allTiles = Array.from(minimapActiveSubsRef.current).map(k => {
+            const [x, y] = k.split(',').map(Number);
+            return { x, y };
+          });
+          s.send(encodeMsg({ minimapSubscribe: { tiles: allTiles, resolution } }));
+        }
+      }
+
       const tilesWide = Math.ceil(widthCells / CHUNK) + marginTiles * 2;
       const tilesHigh = Math.ceil(heightCells / CHUNK) + marginTiles * 2;
       const centerChunkX = Math.floor(centerWorldX / CHUNK);
@@ -1081,9 +1124,6 @@ export const useGameState = () => {
       }
       minimapDesiredBySourceRef.current.set(sourceKey, desiredForSource);
 
-      const s = wsRef.current;
-      if (!s || s.readyState !== WebSocket.OPEN) return; // will reconcile on open or next call
-
       // Compute union of all sources
       const union = new Set();
       for (const set of minimapDesiredBySourceRef.current.values()) {
@@ -1098,7 +1138,7 @@ export const useGameState = () => {
 
       if (toAdd.length) {
         const tiles = toAdd.map(k => { const [x, y] = k.split(',').map(Number); return { x, y }; });
-        s.send(encodeMsg({ minimapSubscribe: { tiles } }));
+        s.send(encodeMsg({ minimapSubscribe: { tiles, resolution } }));
         toAdd.forEach(k => minimapActiveSubsRef.current.add(k));
       }
       if (toDel.length) {
