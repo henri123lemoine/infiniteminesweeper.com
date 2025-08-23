@@ -233,11 +233,12 @@ export const useGameState = () => {
     if (!rec) return;
     const c = minimapGetCanvas(key);
     const ctx = c.getContext('2d');
+    const resolution = rec.resolution || CHUNK;
     const img = ctx.getImageData(x, y, w, h);
     const dst = img.data;
     let di = 0;
     for (let row = 0; row < h; row++) {
-      const base = (y + row) * CHUNK + x;
+      const base = (y + row) * resolution + x;
       for (let col = 0; col < w; col++) {
         const idx = rec.data[base + col] & 0xff;
         const color = minimapPalette[idx] >>> 0;
