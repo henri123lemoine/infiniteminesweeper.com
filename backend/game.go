@@ -108,7 +108,7 @@ func (s *Server) isValidCoordinate(x, y int) bool {
 	return x >= 0 && x < ChunkSize && y >= 0 && y < ChunkSize
 }
 
-var usernameRegex = regexp.MustCompile(`^[A-Za-z0-9_-]{1,20}$`)
+var usernameRegex = regexp.MustCompile(`^[A-Za-z0-9 ._'-]{1,30}$`)
 
 func isValidUsername(name string) bool {
 	return usernameRegex.MatchString(name)

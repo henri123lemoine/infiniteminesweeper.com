@@ -55,7 +55,7 @@ function App() {
     densityCache,
     sendViewUpdateRef,
     updateMinimapSubscriptions,
-     clearMinimapSubscriptionsFor,
+    clearMinimapSubscriptionsFor,
     minimapTilesRef,
   } = useGameState();
 
@@ -466,7 +466,7 @@ function App() {
   useEffect(() => {
     return () => {
       if (typeof clearMinimapSubscriptionsFor === 'function') {
-        try { clearMinimapSubscriptionsFor('viewport'); } catch {}
+        try { clearMinimapSubscriptionsFor('viewport'); } catch { }
       }
     };
   }, [clearMinimapSubscriptionsFor]);
@@ -594,7 +594,7 @@ function App() {
         if (canceled || !data) return;
         setHotspotInfo(data);
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => {
       canceled = true;
     };
@@ -662,9 +662,9 @@ function App() {
   const handleJoinGame = useCallback(() => {
     setValidationError("");
     const trimmedName = (nameInput || "").trim();
-    const valid = /^[A-Za-z0-9_-]{1,20}$/.test(trimmedName);
+    const valid = /^[A-Za-z0-9 ._'-]{1,30}$/.test(trimmedName);
     if (!valid) {
-      setValidationError("Enter 1-20 characters: letters, numbers, _ or -");
+      setValidationError("Enter 1-30 characters: letters, numbers, spaces, _ . ' or -");
       return;
     }
 
@@ -704,7 +704,7 @@ function App() {
               }
               const pick = FLAG_IDS.find(id => !nearby.has(id)) ?? FLAG_IDS[0];
               if (Number.isFinite(pick)) setFlagID(pick);
-            } catch {}
+            } catch { }
           }}
           style={{
             position: "fixed",
@@ -839,8 +839,8 @@ function App() {
                   }}
                   placeholder="Your name"
                   maxLength={20}
-                  pattern="[A-Za-z0-9_-]{1,20}"
-                  title="Use 1-20 characters: letters, numbers, underscores, or hyphens"
+                  pattern="[A-Za-z0-9_-]{1,30}"
+                  title="Use 1-30 characters: letters, numbers, underscores, or hyphens"
                 />
                 <button
                   onClick={handleJoinGame}

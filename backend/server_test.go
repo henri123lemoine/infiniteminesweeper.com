@@ -161,9 +161,9 @@ func TestIsValidUsername(t *testing.T) {
 		{"abc", true},
 		{"A_B-C123", true},
 		{"ab", true},
-		{"thisnameiswaytoolongforvalidation", false},
+		{"thisnameiswaaaaaaaaaaaaaaaaaaaaaaaaaaaaaytoolongforvalidation", false},
 		{"bad!name", false},
-		{"space name", false},
+		{"space name", true},
 		{"", false},
 	}
 	for _, tt := range tests {
