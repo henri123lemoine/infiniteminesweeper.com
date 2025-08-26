@@ -880,6 +880,7 @@ func (s *Server) unsubscribeFromChunk(playerID uint32, chunkID ChunkID) {
 
 func (s *Server) removePlayer(p *Player) {
 	s.playersMu.Lock()
+	hasRemainingConnections := false
 	if set, ok := s.players[p.ID]; ok {
 		if _, exists := set[p]; exists {
 			// signal goroutines to stop enqueueing work
@@ -892,24 +893,29 @@ func (s *Server) removePlayer(p *Player) {
 			delete(set, p)
 			if len(set) == 0 {
 				delete(s.players, p.ID)
+			} else {
+				hasRemainingConnections = true
 			}
 		}
 	}
 	s.playersMu.Unlock()
 
-	s.stateMu.Lock()
-	for chunkID, subs := range s.subs {
-		if _, exists := subs[p.ID]; exists {
-			delete(subs, p.ID)
-			if len(subs) == 0 {
-				delete(s.subs, chunkID)
+	// Only clear subscriptions if no other connections remain for this playerID
+	if !hasRemainingConnections {
+		s.stateMu.Lock()
+		for chunkID, subs := range s.subs {
+			if _, exists := subs[p.ID]; exists {
+				delete(subs, p.ID)
+				if len(subs) == 0 {
+					delete(s.subs, chunkID)
+				}
 			}
 		}
+		// Clear reverse index for this player so next connection starts fresh
+		delete(s.playerSubs, p.ID)
+		delete(s.playerSubLastSeen, p.ID)
+		s.stateMu.Unlock()
 	}
-	// Clear reverse index for this player so next connection starts fresh
-	delete(s.playerSubs, p.ID)
-	delete(s.playerSubLastSeen, p.ID)
-	s.stateMu.Unlock()
 
 	log.Printf("Player %d disconnected", p.ID)
 }
