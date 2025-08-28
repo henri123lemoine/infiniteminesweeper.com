@@ -51,6 +51,8 @@ func debugLogMessage(msg *pb.Msg, playerID uint32) {
 		if tr != nil {
 			log.Printf("[DEBUG] Player %d -> MinimapResendFull: (%d,%d)", playerID, tr.X, tr.Y)
 		}
+	case *pb.Msg_SeedRequest:
+		log.Printf("[DEBUG] Player %d -> SeedRequest: %d chunks", playerID, len(payload.SeedRequest.ChunkIds))
 
 	default:
 		log.Printf("[DEBUG] Player %d -> Unknown message type: %T", playerID, payload)
@@ -366,6 +368,45 @@ func (s *Server) handleUpdateProfile(player *Player, update *pb.UpdateProfile) {
 	}
 }
 
+// handleSeedRequest processes a SeedRequest message, returning seeds and densities for requested chunks
+func (s *Server) handleSeedRequest(playerID uint32, chunkIds []*pb.ChunkID) {
+	if len(chunkIds) == 0 {
+		return
+	}
+
+	s.stateMu.Lock()
+	
+	seeds := make([]*pb.ChunkSeed, 0, len(chunkIds))
+	
+	for _, chunkIdPB := range chunkIds {
+		if chunkIdPB == nil {
+			continue
+		}
+		
+		chunkID := ChunkID{X: chunkIdPB.X, Y: chunkIdPB.Y}
+		seed64 := s.generateChunkSeed(chunkID)
+		var seedBytes [8]byte
+		binary.LittleEndian.PutUint64(seedBytes[:], seed64)
+		
+		density := s.getChunkDensity(chunkID)
+		
+		seeds = append(seeds, &pb.ChunkSeed{
+			ChunkId: &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
+			Seed:    seedBytes[:],
+			Density: float32(density),
+		})
+	}
+	
+	s.stateMu.Unlock()
+	
+	if len(seeds) > 0 {
+		msg := &pb.Msg{Payload: &pb.Msg_SeedResponse{SeedResponse: &pb.SeedResponse{
+			Seeds: seeds,
+		}}}
+		s.sendToPlayer(playerID, mustProto(msg))
+	}
+}
+
 func (s *Server) readPump(player *Player) {
 	defer func() {
 		s.removePlayer(player)
@@ -630,6 +671,11 @@ func (s *Server) readPump(player *Player) {
 				s.stateMu.Lock()
 				s.minimapSendFullTo(player.ID, cid)
 				s.stateMu.Unlock()
+			}
+		case *pb.Msg_SeedRequest:
+			m := t.SeedRequest
+			if m != nil {
+				s.handleSeedRequest(player.ID, m.ChunkIds)
 			}
 		}
 	}
