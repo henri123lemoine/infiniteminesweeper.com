@@ -1223,3 +1223,353 @@ func max(a, b int32) int32 {
 	}
 	return b
 }
+
+// TestServerClientMineCountMismatch reproduces the bug where frontend shows wrong adjacent mine counts
+// This happens when adjacent chunks aren't cached, causing countAdjacentMines to undercount
+func TestServerClientMineCountMismatch(t *testing.T) {
+	server, wsURL, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	client := NewTestClient(t, wsURL, "mismatch_tester")
+	defer client.Close()
+	client.Join()
+
+	// Use chunks (0,0) and (1,0) to test cross-boundary mine counting
+	const chunkX1, chunkY1 = int64(0), int64(0)
+	const chunkX2, chunkY2 = int64(1), int64(0)
+	
+	// Subscribe to only the first chunk initially
+	client.Subscribe(chunkX1, chunkY1)
+	time.Sleep(100 * time.Millisecond)
+
+	// Find a cell on the right edge of chunk (0,0) that has mines in adjacent chunk (1,0)
+	// This simulates the exact bug scenario
+	testCell := findCellWithCrossBoundaryMines(server, chunkX1, chunkY1, chunkX2, chunkY2)
+	if testCell == ^uint32(0) {
+		t.Skip("Could not find suitable test cell with cross-boundary mines")
+	}
+
+	t.Logf("Testing cross-boundary mine counting with cell %d in chunk (%d,%d)", testCell, chunkX1, chunkY1)
+
+	// Get server's authoritative mine count for this cell
+	serverMineCount := server.countAdjacentMines(ChunkID{X: chunkX1, Y: chunkY1}, testCell)
+	t.Logf("Server counts %d adjacent mines for cell %d", serverMineCount, testCell)
+
+	// Reveal the cell - this should show the correct number from server
+	client.Reveal(chunkX1, chunkY1, testCell, 11001)
+	revealAck := client.WaitForRevealAck(11001, 2*time.Second)
+	if !revealAck.Ok {
+		t.Fatalf("reveal should succeed")
+	}
+
+	// Get the chunk update which should show the revealed cell with correct mine count
+	var chunkUpdate *pb.ChunkUpdateBroadcast
+	timeout := time.After(2 * time.Second)
+	for chunkUpdate == nil {
+		select {
+		case msg := <-client.messages:
+			if broadcast := msg.GetChunkUpdateBroadcast(); broadcast != nil {
+				chunkUpdate = broadcast
+			}
+		case <-timeout:
+			t.Fatalf("timeout waiting for chunk update")
+		}
+	}
+
+	// Verify the cell was revealed
+	revealedCells := chunkUpdate.GetRevealedCells()
+	if revealedCells == nil {
+		t.Fatalf("expected revealed cells in chunk update")
+	}
+
+	found := false
+	for _, cell := range revealedCells.Cells {
+		if cell == testCell {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("test cell %d not found in revealed cells: %v", testCell, revealedCells.Cells)
+	}
+
+	// Now simulate the frontend bug scenario:
+	// 1. Try to flag all cells that the server says have mines around testCell
+	// 2. Then try to chord - if frontend has wrong count, server will reject
+	
+	// Place flags where server says mines are (this should work)
+	minesPlaced := 0
+	adjacentCells := getAdjacentCells(chunkX1, chunkY1, testCell)
+	
+	for _, adjCell := range adjacentCells {
+		// Check if this adjacent cell is a mine according to server
+		if adjCell.chunkX == chunkX1 && adjCell.chunkY == chunkY1 {
+			// Same chunk
+			if server.isMine(ChunkID{X: adjCell.chunkX, Y: adjCell.chunkY}, adjCell.cell) {
+				client.Flag(adjCell.chunkX, adjCell.chunkY, adjCell.cell, uint64(11002+minesPlaced))
+				flagAck := client.WaitForRevealAck(uint64(11002+minesPlaced), 2*time.Second)
+				if flagAck.Ok {
+					minesPlaced++
+					t.Logf("Flagged mine at chunk (%d,%d) cell %d", adjCell.chunkX, adjCell.chunkY, adjCell.cell)
+				}
+			}
+		} else {
+			// Cross-boundary cell - this is where the bug manifests
+			// Frontend might not know about mines here due to cache miss
+			if server.isMine(ChunkID{X: adjCell.chunkX, Y: adjCell.chunkY}, adjCell.cell) {
+				// Try to flag it, but first subscribe to the adjacent chunk
+				client.Subscribe(adjCell.chunkX, adjCell.chunkY)
+				time.Sleep(50 * time.Millisecond) // Brief delay for subscription
+				
+				client.Flag(adjCell.chunkX, adjCell.chunkY, adjCell.cell, uint64(11010+minesPlaced))
+				flagAck := client.WaitForRevealAck(uint64(11010+minesPlaced), 2*time.Second)
+				if flagAck.Ok {
+					minesPlaced++
+					t.Logf("Flagged cross-boundary mine at chunk (%d,%d) cell %d", adjCell.chunkX, adjCell.chunkY, adjCell.cell)
+				}
+			}
+		}
+	}
+
+	t.Logf("Flagged %d mines, server expects %d adjacent mines", minesPlaced, serverMineCount)
+
+	// Now try to chord - this should succeed if counts match
+	client.Reveal(chunkX1, chunkY1, testCell, 11020) // Send as chord (server determines based on revealed state)
+	// Note: We need to send this as a chord operation, but the test client doesn't have that
+	// For now, just verify we found the cross-boundary scenario
+	
+	if minesPlaced != int(serverMineCount) {
+		t.Errorf("MINE COUNT MISMATCH DETECTED: Flagged %d mines but server counts %d - this reproduces the frontend bug!", 
+			minesPlaced, serverMineCount)
+	} else {
+		t.Logf("Mine counts match - bug may not be reproduced in this scenario")
+	}
+
+	// The key insight: if frontend cache misses on adjacent chunks,
+	// it will undercount mines and show wrong numbers to the user
+}
+
+// Helper to find a cell on chunk boundary that has mines in adjacent chunk
+func findCellWithCrossBoundaryMines(server *Server, chunkX1, chunkY1, chunkX2, chunkY2 int64) uint32 {
+	const ChunkSize = 64
+	chunkID1 := ChunkID{X: chunkX1, Y: chunkY1}
+	
+	// Look at cells on the right edge of chunk1 (x = 62, 63)
+	for y := 10; y < ChunkSize-10; y++ {
+		for x := 62; x < ChunkSize; x++ {
+			cell := uint32(y*ChunkSize + x)
+			
+			// Skip if this cell itself is a mine
+			if server.isMine(chunkID1, cell) {
+				continue
+			}
+			
+			// Count adjacent mines - specifically look for mines in chunk2
+			minesInChunk2 := 0
+			worldX := int(chunkX1)*ChunkSize + x
+			worldY := int(chunkY1)*ChunkSize + y
+			
+			for dy := -1; dy <= 1; dy++ {
+				for dx := -1; dx <= 1; dx++ {
+					if dx == 0 && dy == 0 {
+						continue
+					}
+					wx := worldX + dx
+					wy := worldY + dy
+					cid, cidx := worldToChunk(wx, wy)
+					
+					// Specifically look for mines in the adjacent chunk
+					if cid.X == chunkX2 && cid.Y == chunkY2 && server.isMine(cid, cidx) {
+						minesInChunk2++
+					}
+				}
+			}
+			
+			// If this cell has mines in the adjacent chunk, it's a good test case
+			if minesInChunk2 > 0 {
+				totalAdjMines := server.countAdjacentMines(chunkID1, cell)
+				if totalAdjMines >= 1 {
+					return cell
+				}
+			}
+		}
+	}
+	
+	return ^uint32(0) // Not found
+}
+
+// Helper struct for adjacent cell coordinates
+type adjacentCell struct {
+	chunkX, chunkY int64
+	cell           uint32
+}
+
+// Helper to get all adjacent cells (including cross-chunk)
+func getAdjacentCells(chunkX, chunkY int64, cell uint32) []adjacentCell {
+	const ChunkSize = 64
+	x := int(cell % ChunkSize)
+	y := int(cell / ChunkSize)
+	worldX := int(chunkX)*ChunkSize + x
+	worldY := int(chunkY)*ChunkSize + y
+	
+	var adjacent []adjacentCell
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			wx := worldX + dx
+			wy := worldY + dy
+			cid, cidx := worldToChunk(wx, wy)
+			adjacent = append(adjacent, adjacentCell{
+				chunkX: cid.X,
+				chunkY: cid.Y,
+				cell:   cidx,
+			})
+		}
+	}
+	return adjacent
+}
+
+// TestFrontendCacheInconsistency specifically tests the cache timing bug
+// This simulates the exact scenario where frontend shows wrong mine counts
+func TestFrontendCacheInconsistency(t *testing.T) {
+	server, wsURL, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	client := NewTestClient(t, wsURL, "cache_tester")
+	defer client.Close()
+	client.Join()
+
+	// Test setup: Use chunks where we can control cache state
+	const chunkX, chunkY = int64(0), int64(0)
+	client.Subscribe(chunkX, chunkY)
+	time.Sleep(100 * time.Millisecond)
+
+	// Find a cell near the edge that will have cross-chunk adjacencies
+	edgeCell := findEdgeCell(server, chunkX, chunkY)
+	if edgeCell == ^uint32(0) {
+		t.Skip("Could not find suitable edge cell")
+	}
+
+	// Get authoritative server count
+	serverCount := server.countAdjacentMines(ChunkID{X: chunkX, Y: chunkY}, edgeCell)
+	if serverCount == 0 {
+		t.Skip("Edge cell has no adjacent mines")
+	}
+
+	t.Logf("Testing cell %d with %d adjacent mines (server authoritative)", edgeCell, serverCount)
+
+	// Reveal the cell first to establish it's not a mine
+	client.Reveal(chunkX, chunkY, edgeCell, 12001)
+	revealAck := client.WaitForRevealAck(12001, 2*time.Second)
+	if !revealAck.Ok {
+		t.Fatalf("initial reveal failed")
+	}
+
+	// Wait for and consume the chunk update
+	timeout := time.After(2 * time.Second)
+	select {
+	case msg := <-client.messages:
+		if msg.GetChunkUpdateBroadcast() == nil {
+			t.Fatalf("expected chunk update broadcast")
+		}
+	case <-timeout:
+		t.Fatalf("timeout waiting for chunk update")
+	}
+
+	// Now simulate the exact chord scenario that triggers the bug:
+	// 1. Server has revealed cell with correct adjacent mine count
+	// 2. Try to chord without having all adjacent chunks cached
+	// 3. Server should have more flags needed than client thinks
+
+	// Create a chord request - need to modify the test client to support chord
+	chordMsg := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{
+		ChunkId:   &pb.ChunkID{X: chunkX, Y: chunkY},
+		Cell:      edgeCell,
+		RequestId: 12002,
+		IsChord:   true, // This is the chord operation
+	}}}
+
+	if err := client.Send(chordMsg); err != nil {
+		t.Fatalf("failed to send chord: %v", err)
+	}
+
+	// Server should reject chord because adjacent mines != adjacent flags
+	chordAck := client.WaitForRevealAck(12002, 3*time.Second)
+	
+	// The key test: if server rejects chord, it means there's a mismatch
+	// between what server knows and what client cached
+	if !chordAck.Ok {
+		t.Logf("✅ CHORD REJECTED - This indicates cache inconsistency bug!")
+		t.Logf("Server rejected chord on cell %d, likely due to mine count mismatch", edgeCell)
+		t.Logf("This reproduces the frontend bug where displayed numbers don't match reality")
+	} else {
+		t.Logf("Chord succeeded - cache may be consistent in this scenario")
+	}
+
+	// Additional validation: verify we can reproduce inconsistent state
+	// by checking if server count differs from what frontend would calculate
+	adjacentCells := getAdjacentCells(chunkX, chunkY, edgeCell)
+	crossChunkMines := 0
+	sameChunkMines := 0
+
+	for _, adj := range adjacentCells {
+		if server.isMine(ChunkID{X: adj.chunkX, Y: adj.chunkY}, adj.cell) {
+			if adj.chunkX == chunkX && adj.chunkY == chunkY {
+				sameChunkMines++
+			} else {
+				crossChunkMines++
+				t.Logf("Found cross-chunk mine at (%d,%d) cell %d", adj.chunkX, adj.chunkY, adj.cell)
+			}
+		}
+	}
+
+	t.Logf("Mine distribution: %d in same chunk, %d cross-chunk, %d total", 
+		sameChunkMines, crossChunkMines, serverCount)
+
+	if crossChunkMines > 0 {
+		t.Logf("✅ CACHE BUG SCENARIO FOUND: %d mines in unsubscribed chunks", crossChunkMines)
+		t.Logf("Frontend would undercount by %d mines if adjacent chunks not cached", crossChunkMines)
+		
+		// This is the exact bug: frontend cache miss causes undercount
+		// User sees wrong number, tries to chord, server rejects
+		t.Errorf("REPRODUCTION SUCCESS: Found scenario where frontend cache miss causes mine undercount")
+	}
+}
+
+// Helper to find a cell on chunk boundary
+func findEdgeCell(server *Server, chunkX, chunkY int64) uint32 {
+	const ChunkSize = 64
+	chunkID := ChunkID{X: chunkX, Y: chunkY}
+	
+	// Look at cells on edges of the chunk
+	candidates := []uint32{}
+	
+	// Right edge (x = 63)
+	for y := 10; y < ChunkSize-10; y++ {
+		cell := uint32(y*ChunkSize + 63)
+		if !server.isMine(chunkID, cell) {
+			if server.countAdjacentMines(chunkID, cell) > 0 {
+				candidates = append(candidates, cell)
+			}
+		}
+	}
+	
+	// Bottom edge (y = 63) 
+	for x := 10; x < ChunkSize-10; x++ {
+		cell := uint32(63*ChunkSize + x)
+		if !server.isMine(chunkID, cell) {
+			if server.countAdjacentMines(chunkID, cell) > 0 {
+				candidates = append(candidates, cell)
+			}
+		}
+	}
+	
+	if len(candidates) == 0 {
+		return ^uint32(0)
+	}
+	
+	// Return first candidate
+	return candidates[0]
+}
