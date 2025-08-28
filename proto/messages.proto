@@ -79,6 +79,11 @@ message UpdateProfile {
   uint32 flagID = 2;
 }
 
+// Request just seeds and densities for specific chunks (for pre-emptive caching)
+message SeedRequest {
+  repeated ChunkID chunkIds = 1;
+}
+
 // ---- Server -> Client Messages ----
 
 
@@ -181,6 +186,18 @@ message UpdateAck {
   sint32 score = 5;
 }
 
+// Chunk seed information for pre-emptive caching
+message ChunkSeed {
+  ChunkID chunkId = 1;
+  bytes seed = 2; // 8-byte seed
+  float density = 3; // Mine density [0,1]
+}
+
+// Response to SeedRequest with seeds and densities for requested chunks
+message SeedResponse {
+  repeated ChunkSeed seeds = 1;
+}
+
 // Wrapper for all possible messages.
 message Msg {
   oneof payload {
@@ -189,6 +206,7 @@ message Msg {
     Unsubscribe unsubscribe = 3;
     Reveal reveal = 4;
     ViewUpdate viewUpdate = 5;
+    SeedRequest seedRequest = 21; // Request seeds and densities for chunks
     Join join = 17; // FSM: SPECTATOR -> PLAYER transition
     UpdateProfile updateProfile = 18; // FSM: Update profile while PLAYER
 
@@ -198,6 +216,7 @@ message Msg {
     ChunkUpdateBroadcast chunkUpdateBroadcast = 9;
     Leaderboard leaderboard = 10;
     ChunkRegionSync chunkRegionSync = 11;
+    SeedResponse seedResponse = 22; // Response to SeedRequest
     JoinAck joinAck = 19; // FSM: Response to Join
     UpdateAck updateAck = 20; // FSM: Response to UpdateProfile
 
