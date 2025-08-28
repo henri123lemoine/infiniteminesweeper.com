@@ -267,6 +267,38 @@ export const useGameState = () => {
   const playerFlagsRef = useRef(new Map());
   const optimisticActions = useRef(new Map());
 
+  // Request seeds and densities for adjacent chunks (pre-emptive caching)
+  const requestAdjacentSeeds = useCallback((cx, cy) => {
+    if (!ws || !connected) return;
+    
+    const adjacentChunks = [];
+    const alreadyRequested = new Set();
+    
+    // Check all 8 adjacent chunks around the given chunk
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue; // Skip the center chunk itself
+        const adjX = cx + dx;
+        const adjY = cy + dy;
+        const chunkKey = `${adjX},${adjY}`;
+        
+        // Only request if we don't already have the seed cached
+        if (!seedCache.current.has(chunkKey) && !alreadyRequested.has(chunkKey)) {
+          adjacentChunks.push({ X: adjX, Y: adjY });
+          alreadyRequested.add(chunkKey);
+        }
+      }
+    }
+    
+    if (adjacentChunks.length > 0 && ws.readyState === WebSocket.OPEN) {
+      ws.send(encodeMsg({
+        seedRequest: {
+          chunkIds: adjacentChunks
+        }
+      }));
+    }
+  }, [ws, connected]);
+
   const countAdjacentMines = useCallback((cx, cy, cell) => {
     const x = cell % CHUNK;
     const y = Math.floor(cell / CHUNK);
@@ -274,6 +306,8 @@ export const useGameState = () => {
     const worldY = cy * CHUNK + y;
 
     let count = 0;
+    let hasIncompleteData = false;
+    
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         if (dx === 0 && dy === 0) continue;
@@ -285,11 +319,17 @@ export const useGameState = () => {
         const chunkKey = `${ncx},${ncy}`;
         const nSeed = seedCache.current.get(chunkKey);
         const nDensity = densityCache.current.get(chunkKey);
-        if (!nSeed || nDensity == null) continue;
+        
+        if (!nSeed || nDensity == null) {
+          hasIncompleteData = true;
+          continue;
+        }
         if (isMineWith(nSeed, nDensity, ncell)) count++;
       }
     }
-    return count;
+    
+    // Return -1 to indicate incomplete data, which the caller can render as "?"
+    return hasIncompleteData ? -1 : count;
   }, []);
 
   const applyChunkSync = useCallback(
@@ -346,6 +386,7 @@ export const useGameState = () => {
           const adjacent = isMineVal
             ? 0
             : countAdjacentMines(X, Y, i);
+          // Use -1 as a sentinel value for incomplete data (renders as "?")
           revealedCellsRef.current.set(cellKey, {
             isMine: isMineVal,
             adjacentMines: adjacent,
@@ -354,8 +395,11 @@ export const useGameState = () => {
       }
       // Any change to this chunk's content should bump its version
       bumpChunkVersion(X, Y);
+      
+      // Pre-emptively request seeds for adjacent chunks to prevent cache misses
+      requestAdjacentSeeds(X, Y);
     },
-    [countAdjacentMines, bumpChunkVersion]
+    [countAdjacentMines, bumpChunkVersion, requestAdjacentSeeds]
   );
 
   // Count flags around a (world-coord) cell
@@ -391,6 +435,9 @@ export const useGameState = () => {
 
     const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
     const expectedMines = countAdjacentMines(chunkX, chunkY, cell);
+
+    // If we have incomplete data (expectedMines = -1), prevent chording for safety
+    if (expectedMines < 0) return false;
 
     return placedFlags + revealedMines === expectedMines;
   }, [countAdjacentFlags, countAdjacentMines]);
@@ -577,7 +624,7 @@ export const useGameState = () => {
           revealedCellsRef.current.set(cellKey, { isMine: isM, adjacentMines: adj });
           recordChange(chunkKey, { type: 'reveal', cell: cidx });
 
-          // if zero, expand around it
+          // if zero, expand around it (only if we have complete data)
           if (!isM && adj === 0) {
             for (let dy2 = -1; dy2 <= 1; dy2++) {
               for (let dx2 = -1; dx2 <= 1; dx2++) {
@@ -595,6 +642,7 @@ export const useGameState = () => {
             revealedCellsRef.current.set(cellKey, { isMine: true, adjacentMines: 0 });
           } else {
             const adjacent = countAdjacentMines(chunkX, chunkY, cell);
+            // Store -1 for incomplete data, which renderers can display as "?"
             revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: adjacent });
           }
           recordChange(chunkKey, { type: 'reveal', cell });
@@ -889,6 +937,7 @@ export const useGameState = () => {
                 const adjacent = isMineVal
                   ? 0
                   : countAdjacentMines(X, Y, cell);
+                // Store -1 for incomplete data to be rendered as "?"
                 revealedCellsRef.current.set(cellKey, {
                   isMine: isMineVal,
                   adjacentMines: adjacent,
@@ -970,6 +1019,7 @@ export const useGameState = () => {
                     }
 
                     // Mark revealed; if it's currently flagged, carry that through for rendering suppression
+                    // Store -1 for incomplete data to be rendered as "?"
                     const isFlagged = flaggedCellsRef.current.has(worldKey);
                     revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent, isFlagged });
                 }
@@ -985,6 +1035,24 @@ export const useGameState = () => {
             }
 
             setTick(t => t+1);
+        } else if (type === "seedResponse") {
+            // Handle seed response for pre-emptive caching
+            const seeds = Array.isArray(data.seeds) ? data.seeds : [];
+            for (const seedData of seeds) {
+              if (seedData.chunkId && seedData.seed && seedData.density != null) {
+                const { X, Y } = normalizeChunkId(seedData.chunkId);
+                const chunkKey = `${X},${Y}`;
+                // Convert base64 seed to bytes if needed
+                const seedBytes = b64ToU8(seedData.seed);
+                const seedBigInt = new DataView(
+                  seedBytes.buffer,
+                  seedBytes.byteOffset,
+                  8
+                ).getBigUint64(0, true);
+                seedCache.current.set(chunkKey, seedBigInt);
+                densityCache.current.set(chunkKey, seedData.density);
+              }
+            }
         } else if (type === "leaderboard") {
             const entries = Array.isArray(data.entries) ? data.entries : [];
             // De-duplicate by name on the client defensively; keep the highest score
