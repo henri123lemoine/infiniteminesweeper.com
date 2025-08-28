@@ -8,16 +8,11 @@ import (
 	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
-// This test documents a bug: when a player has two /ws connections (e.g. reload),
-// closing one connection clears ALL subscriptions for that playerID, leaving the
-// other connection unsubscribed and not receiving broadcasts.
-//
-// EXPECTATION (desired): The remaining connection should continue receiving
-// broadcasts for chunks it had in view.
-// CURRENT BEHAVIOR: It does not, because removePlayer() deletes s.subs[...] for the playerID.
-//
-// TODO: Fix the bug and re-enable this test
-func _TestRemainingConnectionLosesSubscriptionsOnPeerClose_bug(t *testing.T) {
+// This test verifies the fix for a connection lifecycle bug: when a player has
+// two /ws connections (e.g. reload), closing one connection should NOT clear
+// subscriptions for that playerID, leaving the remaining connection to continue
+// receiving broadcasts for chunks it had in view.
+func TestRemainingConnectionKeepsSubscriptionsOnPeerClose(t *testing.T) {
 	s, wsURL, cleanup := startTestServer(t)
 	defer cleanup()
 
@@ -75,20 +70,20 @@ func _TestRemainingConnectionLosesSubscriptionsOnPeerClose_bug(t *testing.T) {
 	s.stateMu.Unlock()
 	s.handleReveal(999, 1, ChunkID{X: 0, Y: 0}, 0, false, false)
 
-	// Expectation (desired): c2 should receive a ChunkUpdateBroadcast since user is still looking at (0,0)
-	// Actual result (bug): no broadcast arrives because subscriptions were wiped when c1 closed.
+	// Expected behavior: c2 should receive a ChunkUpdateBroadcast since user is still looking at (0,0)
+	// With the fix: subscriptions are preserved when other connections remain active.
 	c2.SetReadDeadline(time.Now().Add(600 * time.Millisecond))
 	for {
 		_, data, err := c2.ReadMessage()
 		if err != nil {
-			t.Fatalf("BUG: missing broadcast after peer close; err=%v. This documents a real issue.", err)
+			t.Fatalf("Expected broadcast after peer close, but timed out: %v", err)
 		}
 		m, err := decodeMsg(data)
 		if err != nil {
 			continue
 		}
 		if m.GetChunkUpdateBroadcast() != nil {
-			// Success path (desired); but in current code this likely never executes
+			// Success! The fix works - subscriptions were preserved after peer close
 			return
 		}
 		// Ignore other messages (leaderboard, etc) and continue reading within deadline
