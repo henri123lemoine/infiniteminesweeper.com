@@ -759,13 +759,21 @@ function App() {
           onMouseDown={(e) => {
             if (e.currentTarget === e.target) {
               e.preventDefault();
-              setShowHomeOverlay(false);
+              // Only allow closing overlay by clicking background if user has successfully joined
+              // This prevents users from bypassing the join flow and ending up in a broken spectator state
+              if (connected) {
+                setShowHomeOverlay(false);
+              }
             }
           }}
           onTouchStart={(e) => {
             if (e.currentTarget === e.target) {
               e.preventDefault();
-              setShowHomeOverlay(false);
+              // Only allow closing overlay by clicking background if user has successfully joined
+              // This prevents users from bypassing the join flow and ending up in a broken spectator state
+              if (connected) {
+                setShowHomeOverlay(false);
+              }
             }
           }}
         >
