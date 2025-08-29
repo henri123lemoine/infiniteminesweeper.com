@@ -78,18 +78,25 @@ func mustProto(m *pb.Msg) []byte {
 func (s *Server) sendToPlayer(playerID uint32, data []byte) {
 	s.playersMu.RLock()
 	conns, exists := s.players[playerID]
-	s.playersMu.RUnlock()
 	if !exists {
+		s.playersMu.RUnlock()
 		return
 	}
 
+	// Create a slice to hold connections so we can release the lock
+	var activeConns []*Player
 	for p := range conns {
 		select {
 		case <-p.done:
 			continue // player gone
 		default:
+			activeConns = append(activeConns, p)
 		}
+	}
+	s.playersMu.RUnlock()
 
+	// Send to connections without holding the lock
+	for _, p := range activeConns {
 		select {
 		case p.Send <- data:
 			p.dropMisses = 0

@@ -1,3 +1,6 @@
+//go:build integration
+// +build integration
+
 package main
 
 import (
@@ -31,7 +34,7 @@ func TestLoadWithManyClients(t *testing.T) {
 		go func(clientNum int) {
 			defer wg.Done()
 
-			client := NewTestClient(t, wsURL, fmt.Sprintf("load%d", clientNum))
+			client := NewTestClient(t, wsURL, fmt.Sprintf("load%d_%d_%d", clientNum, time.Now().UnixNano()%10000, clientNum*1000+int(time.Now().UnixMicro()%1000)))
 			clients[clientNum] = client
 
 			// Join
@@ -117,7 +120,7 @@ func TestMemoryUsageUnderLoad(t *testing.T) {
 		go func(clientNum int) {
 			defer wg.Done()
 
-			client := NewTestClient(t, wsURL, fmt.Sprintf("mem%d", clientNum))
+			client := NewTestClient(t, wsURL, fmt.Sprintf("mem%d_%d_%d", clientNum, time.Now().UnixNano()%10000, clientNum*2000+int(time.Now().UnixMicro()%1000)))
 			clients[clientNum] = client
 			client.Join()
 
@@ -187,7 +190,13 @@ func TestChunkGenerationPerformance(t *testing.T) {
 
 		// Make a reveal to ensure chunk is fully generated
 		client.Reveal(chunkX, chunkY, 0, uint64(i+1000))
+		
+		// Brief delay to allow server to process the reveal
+		time.Sleep(2 * time.Millisecond)
 	}
+	
+	// Allow additional time for all operations to complete
+	time.Sleep(100 * time.Millisecond)
 
 	elapsed := time.Since(startTime)
 	chunksPerSecond := float64(numChunks) / elapsed.Seconds()
@@ -290,7 +299,7 @@ func TestConcurrentChunkAccess(t *testing.T) {
 		go func(routineNum int) {
 			defer wg.Done()
 
-			client := NewTestClient(t, wsURL, fmt.Sprintf("concurrent%d", routineNum))
+			client := NewTestClient(t, wsURL, fmt.Sprintf("concurrent%d_%d_%d", routineNum, time.Now().UnixNano()%10000, routineNum*3000+int(time.Now().UnixMicro()%1000)))
 			defer client.Close()
 
 			client.Join()
