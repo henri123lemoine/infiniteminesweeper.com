@@ -28,11 +28,13 @@ function App() {
 
   const {
     connected,
+    connectionState,
     playerScore,
     userRank,
     username,
     setUsername,
     connectWebSocket,
+    manualReconnect,
     joinGame,
     updateProfile,
     updateError,
@@ -993,6 +995,23 @@ function App() {
 
       {/* Player Score Display */}
       <div className="player-score">Score: {playerScore ?? 0}</div>
+
+      {/* Connection Status Indicator */}
+      <div className={`connection-status-indicator ${connectionState}`}>
+        {connectionState === 'connected' ? '🟢 Connected' : 
+         connectionState === 'connecting' ? '🟡 Connecting...' : 
+         connectionState === 'reconnecting' ? '🟠 Reconnecting...' : 
+         connectionState === 'failed' ? '🔴 Connection Failed' : '⚪ Disconnected'}
+        {connectionState === 'failed' && (
+          <button 
+            onClick={manualReconnect}
+            className="reconnect-button"
+            style={{ marginLeft: 8, fontSize: 11, padding: '2px 6px' }}
+          >
+            Retry
+          </button>
+        )}
+      </div>
 
       {/* Help & Scoring dropdown */}
       <div className="help-dropdown">

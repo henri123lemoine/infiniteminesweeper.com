@@ -141,6 +141,15 @@ export const useGameState = () => {
   const [connected, setConnected] = useState(false);
   const wsRef = useRef(null);
   const connectedRef = useRef(false);
+  
+  // Reconnection state
+  const [connectionState, setConnectionState] = useState('disconnected'); // 'connected', 'connecting', 'reconnecting', 'disconnected', 'failed'
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimeoutRef = useRef(null);
+  const maxReconnectAttempts = 10;
+  const reconnectBaseDelay = 1000; // 1 second base delay
+  const isReconnectingRef = useRef(false);
+  const shouldReconnectRef = useRef(true); // Allow manual disconnect control
   const lastViewSentRef = useRef({ startX: null, startY: null, w: 0, h: 0, at: 0 });
   const MIN_VIEW_SEND_INTERVAL_MS = 220;
   const [leaderboard, setLeaderboard] = useState([]);
@@ -676,13 +685,58 @@ export const useGameState = () => {
     [ws, connected, countAdjacentMines, countAdjacentFlags, canChord, username],
   );
 
+  // Reconnection function with exponential backoff
+  const attemptReconnect = useCallback(() => {
+    if (!shouldReconnectRef.current || isReconnectingRef.current) {
+      return;
+    }
+
+    if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
+      setConnectionState('failed');
+      console.error('Max reconnection attempts reached');
+      return;
+    }
+
+    isReconnectingRef.current = true;
+    setConnectionState('reconnecting');
+
+    const delay = Math.min(
+      reconnectBaseDelay * Math.pow(2, reconnectAttemptsRef.current),
+      30000 // Max 30 seconds
+    );
+
+    console.log(`Attempting reconnection ${reconnectAttemptsRef.current + 1}/${maxReconnectAttempts} in ${delay}ms`);
+
+    reconnectTimeoutRef.current = setTimeout(() => {
+      reconnectAttemptsRef.current += 1;
+      isReconnectingRef.current = false;
+      connectWebSocket();
+    }, delay);
+  }, []);
+
+  // Clear reconnection timer
+  const clearReconnectTimeout = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    isReconnectingRef.current = false;
+  }, []);
+
   const connectWebSocket = useCallback(() => {
+    clearReconnectTimeout();
+    setConnectionState('connecting');
+    
     const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
     const websocket = new WebSocket(wsUrl);
     websocket.binaryType = "arraybuffer";
     let didJoinAck = false;
 
     websocket.onopen = () => {
+      // Reset reconnection state on successful connection
+      reconnectAttemptsRef.current = 0;
+      clearReconnectTimeout();
+      setConnectionState('connected');
       // Start in spectator mode - no initial message needed
       // Connection starts as spectator automatically
       setWs(websocket);
@@ -728,24 +782,49 @@ export const useGameState = () => {
       });
     };
 
-    websocket.onclose = () => {
+    websocket.onclose = (event) => {
       setConnected(false);
       setWs(null);
       wsRef.current = null;
       connectedRef.current = false;
       try { minimapActiveSubsRef.current.clear(); } catch {}
       optimisticActions.current.clear();
-      revealedCellsRef.current.clear();
-      flaggedCellsRef.current.clear();
-      playerFlagsRef.current.clear();
+      
       // If server rejected the join (e.g., invalid or taken username),
-      // reset username so the join dialog is shown again.
+      // reset username and clear all state
       if (!didJoinAck) {
         setUsername("");
+        revealedCellsRef.current.clear();
+        flaggedCellsRef.current.clear();
+        playerFlagsRef.current.clear();
+        setConnectionState('disconnected');
+        return;
+      }
+
+      // Don't immediately clear game state on unexpected disconnections
+      // This preserves the user's session data for reconnection
+      console.log(`WebSocket closed. Code: ${event.code}, Reason: ${event.reason || 'Unknown'}`);
+
+      // Attempt reconnection if this was an unexpected closure and we should reconnect
+      if (shouldReconnectRef.current && event.code !== 1000) { // 1000 = normal closure
+        console.log('Unexpected WebSocket closure, attempting reconnection...');
+        setConnectionState('disconnected');
+        attemptReconnect();
+      } else {
+        // Clean disconnect or manual disconnect
+        revealedCellsRef.current.clear();
+        flaggedCellsRef.current.clear();
+        playerFlagsRef.current.clear();
+        setConnectionState('disconnected');
       }
     };
 
-      websocket.onmessage = (event) => {
+    websocket.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      setConnectionState('disconnected');
+    };
+
+    websocket.onmessage = (event) => {
         const msg = decodeMsg(event.data);
         const type = activeKey(msg);
         const data = msg[type];
@@ -1076,8 +1155,12 @@ export const useGameState = () => {
         }
       };
 
-    return () => websocket.close();
-  }, [countAdjacentMines]);
+    return () => {
+      shouldReconnectRef.current = false;
+      clearReconnectTimeout();
+      websocket.close();
+    };
+  }, [countAdjacentMines, attemptReconnect, clearReconnectTimeout]);
 
   // Join the game by sending a Join message (transitions from SPECTATOR to PLAYER)
   const joinGame = useCallback((nameInput, flagID) => {
@@ -1114,17 +1197,75 @@ export const useGameState = () => {
   }, [ws, connected]);
 
   const disconnect = useCallback(() => {
+    shouldReconnectRef.current = false;
+    clearReconnectTimeout();
     try {
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.close();
+        ws.close(1000, 'Manual disconnect'); // 1000 = normal closure
       }
     } catch {
       // ignore
     }
-  }, [ws]);
+    setConnectionState('disconnected');
+  }, [ws, clearReconnectTimeout]);
+
+  // Manual reconnect function for UI controls
+  const manualReconnect = useCallback(() => {
+    if (connectionState === 'connecting' || connectionState === 'reconnecting') {
+      return; // Already connecting
+    }
+    
+    shouldReconnectRef.current = true;
+    reconnectAttemptsRef.current = 0;
+    clearReconnectTimeout();
+    connectWebSocket();
+  }, [connectionState, clearReconnectTimeout, connectWebSocket]);
+
+  // Page Visibility API integration for mobile reconnection
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // App came to foreground
+        console.log('Page became visible, checking connection...');
+        
+        // If we're disconnected and should reconnect, attempt reconnection
+        if ((connectionState === 'disconnected' || connectionState === 'failed') && 
+            shouldReconnectRef.current) {
+          console.log('Attempting reconnection after page became visible');
+          reconnectAttemptsRef.current = 0; // Reset attempts when user returns
+          clearReconnectTimeout();
+          connectWebSocket();
+        }
+        
+        // If we have a connection but it's not responsive, check its state
+        if (ws && ws.readyState === WebSocket.OPEN && connectionState === 'connected') {
+          // Send a ping-like message to verify connection is still alive
+          // The server will respond with leaderboard or other data
+          try {
+            ws.send(encodeMsg({ ping: { timestamp: Date.now() } }));
+          } catch (error) {
+            console.log('Failed to ping server, connection may be stale:', error);
+            if (shouldReconnectRef.current) {
+              attemptReconnect();
+            }
+          }
+        }
+      } else if (document.visibilityState === 'hidden') {
+        // App went to background
+        console.log('Page became hidden');
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [ws, connectionState, connectWebSocket, clearReconnectTimeout, attemptReconnect]);
 
   return {
     connected,
+    connectionState, // New: 'connected', 'connecting', 'reconnecting', 'disconnected', 'failed'
     playerScore,
     userRank,
     username,
@@ -1141,6 +1282,7 @@ export const useGameState = () => {
     chunkVersionRef,
     handleCellClick,
     connectWebSocket,
+    manualReconnect, // New: Force reconnection attempt
     joinGame,
     updateProfile,
     updateError,
