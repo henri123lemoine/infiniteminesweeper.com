@@ -57,6 +57,7 @@ function App() {
     updateMinimapSubscriptions,
     clearMinimapSubscriptionsFor,
     minimapTilesRef,
+    handleVisibilityChange,
   } = useGameState();
 
   const canvasRef = useRef(null);
@@ -470,6 +471,18 @@ function App() {
       }
     };
   }, [clearMinimapSubscriptionsFor]);
+
+  // Handle page visibility changes for mobile reconnection
+  useEffect(() => {
+    if (typeof handleVisibilityChange === 'function') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      window.addEventListener('focus', handleVisibilityChange);
+      return () => {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        window.removeEventListener('focus', handleVisibilityChange);
+      };
+    }
+  }, [handleVisibilityChange]);
 
   // Cleanup RAF on unmount
   useEffect(() => {

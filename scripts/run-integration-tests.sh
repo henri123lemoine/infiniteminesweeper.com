@@ -278,7 +278,7 @@ generate_test_report() {
     
     log_info "Generating test report..."
     
-    cat > ../data/test-report.txt << EOF
+    cat > ../../data/test-report.txt << EOF
 Integration Test Report
 =======================
 Date: $(date)

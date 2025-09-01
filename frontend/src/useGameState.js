@@ -141,6 +141,7 @@ export const useGameState = () => {
   const [connected, setConnected] = useState(false);
   const wsRef = useRef(null);
   const connectedRef = useRef(false);
+  const isReconnectingRef = useRef(false);
   const lastViewSentRef = useRef({ startX: null, startY: null, w: 0, h: 0, at: 0 });
   const MIN_VIEW_SEND_INTERVAL_MS = 220;
   const [leaderboard, setLeaderboard] = useState([]);
@@ -676,7 +677,14 @@ export const useGameState = () => {
     [ws, connected, countAdjacentMines, countAdjacentFlags, canChord, username],
   );
 
+
   const connectWebSocket = useCallback(() => {
+    // Prevent multiple concurrent connection attempts
+    if (isReconnectingRef.current) {
+      return () => {};
+    }
+    
+    isReconnectingRef.current = true;
     const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
     const websocket = new WebSocket(wsUrl);
     websocket.binaryType = "arraybuffer";
@@ -688,6 +696,8 @@ export const useGameState = () => {
       setWs(websocket);
       wsRef.current = websocket;
       connectedRef.current = true;
+      isReconnectingRef.current = false;
+      
       // Note: setConnected(true) is only called after successful join
       // On fresh connection, server has no minimap subs; clear local active set
       try { minimapActiveSubsRef.current.clear(); } catch {}
@@ -726,13 +736,33 @@ export const useGameState = () => {
           }
         } catch {}
       });
+      
+      // Auto-rejoin if we have stored credentials (handles reconnection after disconnect)
+      const storedUsername = localStorage.getItem("username");
+      const storedToken = localStorage.getItem("session_token");
+      const storedFlagID = localStorage.getItem("flagID");
+      if (storedUsername && storedToken && storedFlagID) {
+        // Small delay to ensure connection is fully established
+        setTimeout(() => {
+          if (websocket.readyState === WebSocket.OPEN) {
+            websocket.send(encodeMsg({
+              join: {
+                sessionToken: storedToken,
+                name: storedUsername,
+                flagID: Number(storedFlagID) || 0
+              }
+            }));
+          }
+        }, 100);
+      }
     };
 
-    websocket.onclose = () => {
+    websocket.onclose = (event) => {
       setConnected(false);
       setWs(null);
       wsRef.current = null;
       connectedRef.current = false;
+      isReconnectingRef.current = false;
       try { minimapActiveSubsRef.current.clear(); } catch {}
       optimisticActions.current.clear();
       revealedCellsRef.current.clear();
@@ -1123,6 +1153,27 @@ export const useGameState = () => {
     }
   }, [ws]);
 
+  // Handle page visibility changes for mobile reconnection
+  const handleVisibilityChange = useCallback(() => {
+    if (document.visibilityState === 'visible') {
+      // Page became visible - check if we need to reconnect
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        // Only reconnect if we have stored credentials (user was previously connected)
+        const storedUsername = localStorage.getItem("username");
+        const storedToken = localStorage.getItem("session_token");
+        if (storedUsername && storedToken) {
+          if (__DEV__) console.log("Page became visible - attempting reconnection");
+          connectWebSocket();
+        }
+      }
+    }
+  }, [connectWebSocket]);
+
+  // Expose wsRef to window for testing
+  if (__DEV__ && typeof window !== 'undefined') {
+    window.wsRef = wsRef;
+  }
+
   return {
     connected,
     playerScore,
@@ -1153,6 +1204,8 @@ export const useGameState = () => {
     densityCache,
     // expose throttled view-update sender to App.jsx
     sendViewUpdateRef: sendViewUpdate,
+    // expose visibility handler for App.jsx to set up listener
+    handleVisibilityChange,
     // Minimap streaming
     minimapTilesRef,
     updateMinimapSubscriptions: useCallback((centerWorldX, centerWorldY, widthCells, heightCells, marginTiles = 1, sourceKey = 'default', resolution = 64) => {
