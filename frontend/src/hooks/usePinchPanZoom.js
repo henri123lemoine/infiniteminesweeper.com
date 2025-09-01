@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useEffect } from "react";
 
 export function usePinchPanZoom({
   getPointToWorld,
@@ -11,6 +11,7 @@ export function usePinchPanZoom({
   dragDelayMs = 150,
   enableRightClick = true,
   useIncrementalPan = false,
+  elementRef = null,
 }) {
   const dragStateRef = useRef({
     isDragging: false,
@@ -294,13 +295,25 @@ export function usePinchPanZoom({
     e.preventDefault();
   }, []);
 
+  useEffect(() => {
+    const element = elementRef?.current;
+    if (!element) return;
+
+    element.addEventListener('wheel', onWheel, { passive: false });
+    element.addEventListener('touchstart', onTouchStart, { passive: false });
+    element.addEventListener('touchmove', onTouchMove, { passive: false });
+
+    return () => {
+      element.removeEventListener('wheel', onWheel);
+      element.removeEventListener('touchstart', onTouchStart);
+      element.removeEventListener('touchmove', onTouchMove);
+    };
+  }, [elementRef, onWheel, onTouchStart, onTouchMove]);
+
   const bind = {
-    onWheel,
     onPointerDown,
     onPointerMove,
     onPointerUp,
-    onTouchStart,
-    onTouchMove,
     onTouchEnd,
     onContextMenu,
     style: { touchAction: "none" },

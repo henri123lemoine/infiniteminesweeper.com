@@ -206,6 +206,7 @@ export default function Minimap({
 
   // Pan/zoom/drag handler using the unified hook
   const { bind, lastInteractionRef } = usePinchPanZoom({
+    elementRef: canvasRef,
     getPointToWorld: (screenX, screenY) => {
       // Return different coordinate systems based on mode
       if (mode === "hud") {

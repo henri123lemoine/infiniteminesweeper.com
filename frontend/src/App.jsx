@@ -522,6 +522,7 @@ function App() {
 
   // Pan/zoom/drag handler using the unified hook
   const { bind } = usePinchPanZoom({
+    elementRef: containerRef,
     getPointToWorld: (screenX, screenY) => {
       const world = screenToWorld(screenX, screenY);
       return { x: world.x, y: world.y, viewX: viewRef.current.x, viewY: viewRef.current.y, zoom: zoomRef.current };
