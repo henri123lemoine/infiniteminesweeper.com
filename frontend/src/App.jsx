@@ -11,6 +11,7 @@ import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
 import { usePinchPanZoom } from "./hooks/usePinchPanZoom.js";
 import { initSprites, getFlagIds } from "./sprites/index.js";
+import PWAInstallBanner from "./PWAInstallBanner.jsx";
 
 function App() {
   const storedName = localStorage.getItem("username") || "";
@@ -1183,6 +1184,9 @@ function App() {
           <p>No players yet</p>
         )}
       </div>
+
+      {/* PWA Install Banner */}
+      <PWAInstallBanner />
     </div>
   );
 }
