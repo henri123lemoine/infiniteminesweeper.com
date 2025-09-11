@@ -228,6 +228,7 @@ message Msg {
     // Minimap streaming (server -> client)
     FullTile minimapFullTile = 15;
     TileDelta minimapTileDelta = 16;
+    MinimapBatch minimapBatch = 23;
   }
 }
 
@@ -267,4 +268,10 @@ message TileDelta {
   uint32 version = 2; // version AFTER applying this delta
   repeated DeltaRect rects = 3;
   uint32 resolution = 4; // 16, 32, or 64 pixels per tile
+}
+
+// Batch of minimap updates to reduce WebSocket message overhead
+message MinimapBatch {
+  repeated FullTile fullTiles = 1;
+  repeated TileDelta tileDeltas = 2;
 }

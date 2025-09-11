@@ -651,8 +651,8 @@ func (s *Server) readPump(player *Player) {
 						s.minimapSubs[cid] = make(map[uint32]struct{})
 					}
 					s.minimapSubs[cid][player.ID] = struct{}{}
-					// send current full tile snapshot
-					s.minimapSendFullTo(player.ID, cid)
+					// mark tile dirty so it gets sent in next batch cycle
+					s.minimapDirtyTiles[cid] = struct{}{}
 				}
 				s.stateMu.Unlock()
 			}
@@ -676,7 +676,8 @@ func (s *Server) readPump(player *Player) {
 			if m != nil && m.Tile != nil {
 				cid := ChunkID{X: int64(m.Tile.X), Y: int64(m.Tile.Y)}
 				s.stateMu.Lock()
-				s.minimapSendFullTo(player.ID, cid)
+				// mark tile dirty so it gets sent in next batch cycle
+				s.minimapDirtyTiles[cid] = struct{}{}
 				s.stateMu.Unlock()
 			}
 		case *pb.Msg_SeedRequest:

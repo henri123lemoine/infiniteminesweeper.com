@@ -86,6 +86,14 @@ type Server struct {
 	minimapSubs          map[ChunkID]map[uint32]struct{}     // per-tile subscriber sets
 	minimapPlayerRes     map[uint32]uint32                   // player resolution preferences (player ID -> resolution)
 	minimapDirtyTiles    map[ChunkID]struct{}                // tiles with pending dirties
+	
+	// LRU cache for built tiles to avoid repeated rebuilding
+	minimapCache         map[minimapCacheKey]*MinimapTile    // cached built tiles
+	minimapCacheOrder    []minimapCacheKey                   // LRU order (newest first)
+	minimapCacheMaxSize  int                                 // max cache entries
+	
+	// Async update queue for decoupling from game logic
+	minimapUpdateQueue   chan minimapUpdate                  // buffered channel for async updates
 }
 
 func NewServer() *Server {
@@ -136,6 +144,14 @@ func NewServer() *Server {
 		minimapSubs:       make(map[ChunkID]map[uint32]struct{}),
 		minimapPlayerRes:  make(map[uint32]uint32),
 		minimapDirtyTiles: make(map[ChunkID]struct{}),
+		
+		// Minimap LRU cache (limit to 1000 tiles to stay under memory constraints)
+		minimapCache:        make(map[minimapCacheKey]*MinimapTile),
+		minimapCacheOrder:   make([]minimapCacheKey, 0, 1000),
+		minimapCacheMaxSize: 1000,
+		
+		// Async minimap updates (buffer 1000 updates to handle bursts)
+		minimapUpdateQueue:  make(chan minimapUpdate, 1000),
 	}
 }
 
