@@ -625,6 +625,11 @@ export const useGameState = () => {
           revealedCellsRef.current.set(cellKey, { isMine: isM, adjacentMines: adj });
           recordChange(chunkKey, { type: 'reveal', cell: cidx });
 
+          // Request seeds for adjacent chunks if mine count was incomplete
+          if (adj === -1) {
+            requestAdjacentSeeds(cx, cy);
+          }
+
           // if zero, expand around it (only if we have complete data)
           if (!isM && adj === 0) {
             for (let dy2 = -1; dy2 <= 1; dy2++) {
@@ -645,6 +650,10 @@ export const useGameState = () => {
             const adjacent = countAdjacentMines(chunkX, chunkY, cell);
             // Store -1 for incomplete data, which renderers can display as "?"
             revealedCellsRef.current.set(cellKey, { isMine: false, adjacentMines: adjacent });
+            // Request seeds for adjacent chunks if mine count was incomplete
+            if (adjacent === -1) {
+              requestAdjacentSeeds(chunkX, chunkY);
+            }
           }
           recordChange(chunkKey, { type: 'reveal', cell });
       }
@@ -959,6 +968,7 @@ export const useGameState = () => {
             if (outcomeType === "revealedCells") {
               // guard against missing or non-array cells
               const cells = Array.isArray(outcome.cells) ? outcome.cells : [];
+              let hasIncompleteData = false;
               for (const cell of cells) {
                 const cellKey = `${primaryChunkKey},${cell}`;
                 const seed = seedCache.current.get(primaryChunkKey);
@@ -972,8 +982,13 @@ export const useGameState = () => {
                   isMine: isMineVal,
                   adjacentMines: adjacent,
                 });
+                if (adjacent === -1) hasIncompleteData = true;
               }
               bumpChunkVersion(X, Y);
+              // Request seeds for adjacent chunks if any cell had incomplete mine count
+              if (hasIncompleteData) {
+                requestAdjacentSeeds(X, Y);
+              }
             } else if (outcomeType === "flaggedCell") {
               const cellIdx = (outcome && typeof outcome === "object" && Number.isFinite(outcome.cell)) ? outcome.cell : outcome;
               const lx = cellIdx % CHUNK;
@@ -1031,6 +1046,7 @@ export const useGameState = () => {
             if (updateType === "revealedCells") {
                 // guard against missing or non-array cells
                 const cells = Array.isArray(updateData.cells) ? updateData.cells : [];
+                let hasIncompleteData = false;
                 for (const cell of cells) {
                     const cellKey = `${chunkKey},${cell}`;
                     const lX = cell % CHUNK, lY = Math.floor(cell / CHUNK);
@@ -1052,8 +1068,13 @@ export const useGameState = () => {
                     // Store -1 for incomplete data to be rendered as "?"
                     const isFlagged = flaggedCellsRef.current.has(worldKey);
                     revealedCellsRef.current.set(cellKey, { isMine: isMineVal, adjacentMines: adjacent, isFlagged });
+                    if (adjacent === -1) hasIncompleteData = true;
                 }
                 bumpChunkVersion(X, Y);
+                // Request seeds for adjacent chunks if any cell had incomplete mine count
+                if (hasIncompleteData) {
+                    requestAdjacentSeeds(X, Y);
+                }
             } else if (updateType === "flaggedCell") {
                 const lX = updateData.cell % CHUNK, lY = Math.floor(updateData.cell / CHUNK);
                 const wX = X * CHUNK + lX, wY = Y * CHUNK + lY;
@@ -1068,6 +1089,7 @@ export const useGameState = () => {
         } else if (type === "seedResponse") {
             // Handle seed response for pre-emptive caching
             const seeds = Array.isArray(data.seeds) ? data.seeds : [];
+            const updatedChunks = new Set();
             for (const seedData of seeds) {
               if (seedData.chunkId && seedData.seed && seedData.density != null) {
                 const { X, Y } = normalizeChunkId(seedData.chunkId);
@@ -1081,7 +1103,49 @@ export const useGameState = () => {
                 ).getBigUint64(0, true);
                 seedCache.current.set(chunkKey, seedBigInt);
                 densityCache.current.set(chunkKey, seedData.density);
+                updatedChunks.add(chunkKey);
               }
+            }
+
+            // Recalculate mine counts for revealed cells in chunks adjacent to newly loaded chunks
+            // This fixes cells that were showing -1 (incomplete data)
+            if (updatedChunks.size > 0) {
+              for (const chunkKey of updatedChunks) {
+                const [cx, cy] = chunkKey.split(',').map(Number);
+                // Check all 8 adjacent chunks + the center chunk for revealed cells
+                for (let dy = -1; dy <= 1; dy++) {
+                  for (let dx = -1; dx <= 1; dx++) {
+                    const adjCx = cx + dx;
+                    const adjCy = cy + dy;
+                    const adjChunkKey = `${adjCx},${adjCy}`;
+
+                    // Only recalculate if this chunk has seeds (is loaded)
+                    const adjSeed = seedCache.current.get(adjChunkKey);
+                    const adjDensity = densityCache.current.get(adjChunkKey);
+                    if (!adjSeed || adjDensity == null) continue;
+
+                    // Recalculate adjacentMines for all revealed cells in this adjacent chunk
+                    for (let cell = 0; cell < CHUNK * CHUNK; cell++) {
+                      const cellKey = `${adjChunkKey},${cell}`;
+                      const revealedData = revealedCellsRef.current.get(cellKey);
+                      if (revealedData && !revealedData.isMine) {
+                        // Recalculate mine count (now that we have more seed data)
+                        const newAdjacentCount = countAdjacentMines(adjCx, adjCy, cell);
+                        if (newAdjacentCount !== revealedData.adjacentMines) {
+                          revealedCellsRef.current.set(cellKey, {
+                            ...revealedData,
+                            adjacentMines: newAdjacentCount
+                          });
+                          // Bump version to trigger re-render
+                          bumpChunkVersion(adjCx, adjCy);
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+              // Trigger a re-render to show updated mine counts
+              setTick(t => t + 1);
             }
         } else if (type === "leaderboard") {
             const entries = Array.isArray(data.entries) ? data.entries : [];
