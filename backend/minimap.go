@@ -127,6 +127,9 @@ func minimapFlagBucket(flagID uint32) int {
 
 // mark a cell dirty in the minimap and set its palette index for full resolution (64x64)
 func (s *Server) minimapSetCell(cid ChunkID, cell uint32, idx byte) {
+	if len(s.minimapSubs[cid]) == 0 {
+		return
+	}
 	if s.minimapTiles[cid] == nil {
 		s.minimapTiles[cid] = make(map[uint32]*MinimapTile)
 	}

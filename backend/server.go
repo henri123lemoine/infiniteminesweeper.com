@@ -16,6 +16,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	seedCacheMaxEntries    = 200000
+	densityCacheMaxEntries = 200000
+)
+
 type Server struct {
 	secret []byte
 
@@ -82,10 +87,10 @@ type Server struct {
 	upgrader websocket.Upgrader
 
 	// Minimap streaming state
-	minimapTiles         map[ChunkID]map[uint32]*MinimapTile // tile data by resolution (key: resolution, value: tile)
-	minimapSubs          map[ChunkID]map[uint32]struct{}     // per-tile subscriber sets
-	minimapPlayerRes     map[uint32]uint32                   // player resolution preferences (player ID -> resolution)
-	minimapDirtyTiles    map[ChunkID]struct{}                // tiles with pending dirties
+	minimapTiles      map[ChunkID]map[uint32]*MinimapTile // tile data by resolution (key: resolution, value: tile)
+	minimapSubs       map[ChunkID]map[uint32]struct{}     // per-tile subscriber sets
+	minimapPlayerRes  map[uint32]uint32                   // player resolution preferences (player ID -> resolution)
+	minimapDirtyTiles map[ChunkID]struct{}                // tiles with pending dirties
 }
 
 func NewServer() *Server {
@@ -160,6 +165,9 @@ func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
 	seed := binary.LittleEndian.Uint64(hash[:8])
 
 	s.seedCacheMu.Lock()
+	if len(s.seedCache) >= seedCacheMaxEntries {
+		s.seedCache = make(map[ChunkID]uint64, seedCacheMaxEntries)
+	}
 	s.seedCache[chunkID] = seed
 	s.seedCacheMu.Unlock()
 

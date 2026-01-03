@@ -139,9 +139,8 @@ func (s *Server) runLeaderboardBroadcaster() {
 					if pl.LastLBVersion == lbVer {
 						return
 					}
-					// ship bytes outside the actor to avoid blocking it
-					go func() { p.Send <- lbJSON }()
 					pl.LastLBVersion = lbVer
+					s.sendToPlayer(pl.ID, lbJSON)
 				}
 			}
 		}

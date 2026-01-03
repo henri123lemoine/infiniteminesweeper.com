@@ -72,6 +72,7 @@ func main() {
 	http.Handle("/", http.FileServer(http.FS(distFS)))
 
 	go server.runLeaderboardBroadcaster()
+	go server.runMinimapBroadcaster()
 
 	fmt.Printf("Server running at: http://%s/\n", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
