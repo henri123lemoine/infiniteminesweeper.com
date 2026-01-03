@@ -199,7 +199,8 @@ body {
 
 @media (max-width: 768px), (max-height: 768px) {
   /* Force viewport to be exactly what it should be */
-  html, body {
+  html,
+  body {
     height: 100%;
     width: 100%;
     overflow: hidden;
@@ -207,14 +208,14 @@ body {
     margin: 0;
     padding: 0;
   }
-  
+
   .game-container {
     height: 100vh;
     height: 100dvh; /* Use dynamic viewport height for better mobile support */
     width: 100vw;
     width: 100dvw;
   }
-  
+
   .coordinates-debug {
     font-size: 10px;
     padding: 4px 6px;
@@ -243,7 +244,7 @@ body {
     margin-bottom: 1px;
     line-height: 1.2;
   }
-  
+
   /* Adjust minimap positioning on mobile */
   .minimap {
     bottom: 5px;
@@ -251,7 +252,7 @@ body {
     max-width: 25vw;
     max-height: 25vh;
   }
-  
+
   /* Improve player score visibility on mobile */
   .player-score {
     top: 5px;
@@ -261,7 +262,7 @@ body {
     text-align: center;
     box-sizing: border-box;
   }
-  
+
   /* Help button adjustments for mobile */
   .help-dropdown {
     top: 5px;
@@ -269,12 +270,12 @@ body {
     max-width: 40vw;
     box-sizing: border-box;
   }
-  
+
   .help-button {
     padding: 6px 8px;
     font-size: 12px;
   }
-  
+
   .help-content {
     max-width: 280px;
     font-size: 12px;

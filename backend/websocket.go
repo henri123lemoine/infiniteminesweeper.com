@@ -382,30 +382,30 @@ func (s *Server) handleSeedRequest(playerID uint32, chunkIds []*pb.ChunkID) {
 	}
 
 	s.stateMu.Lock()
-	
+
 	seeds := make([]*pb.ChunkSeed, 0, len(chunkIds))
-	
+
 	for _, chunkIdPB := range chunkIds {
 		if chunkIdPB == nil {
 			continue
 		}
-		
+
 		chunkID := ChunkID{X: chunkIdPB.X, Y: chunkIdPB.Y}
 		seed64 := s.generateChunkSeed(chunkID)
 		var seedBytes [8]byte
 		binary.LittleEndian.PutUint64(seedBytes[:], seed64)
-		
+
 		density := s.getChunkDensity(chunkID)
-		
+
 		seeds = append(seeds, &pb.ChunkSeed{
 			ChunkId: &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
 			Seed:    seedBytes[:],
 			Density: float32(density),
 		})
 	}
-	
+
 	s.stateMu.Unlock()
-	
+
 	if len(seeds) > 0 {
 		msg := &pb.Msg{Payload: &pb.Msg_SeedResponse{SeedResponse: &pb.SeedResponse{
 			Seeds: seeds,
@@ -644,7 +644,7 @@ func (s *Server) readPump(player *Player) {
 					resolution = 64 // fallback to full resolution for invalid values
 				}
 				s.minimapPlayerRes[player.ID] = resolution
-				
+
 				for _, tr := range m.Tiles {
 					cid := ChunkID{X: int64(tr.X), Y: int64(tr.Y)}
 					if s.minimapSubs[cid] == nil {

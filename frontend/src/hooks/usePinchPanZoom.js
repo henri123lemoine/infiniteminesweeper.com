@@ -89,7 +89,12 @@ export function usePinchPanZoom({
       lastInteractionRef.current = performance.now();
       onInteraction && onInteraction();
 
-      if (enableRightClick && e.pointerType === "mouse" && e.button === 2 && onLongPress) {
+      if (
+        enableRightClick &&
+        e.pointerType === "mouse" &&
+        e.button === 2 &&
+        onLongPress
+      ) {
         const world = getPointToWorld(e.clientX, e.clientY);
         onLongPress(world.x, world.y);
         return;
@@ -144,7 +149,7 @@ export function usePinchPanZoom({
       if (dragStateRef.current.isDragging) {
         lastInteractionRef.current = performance.now();
         onInteraction && onInteraction();
-        
+
         if (useIncrementalPan) {
           // Incremental pan (for minimap) - use frame-to-frame delta
           const deltaX = e.clientX - dragStateRef.current.lastX;
@@ -156,12 +161,13 @@ export function usePinchPanZoom({
           // Absolute pan (for main board) - use total delta from start
           const deltaX = e.clientX - dragStateRef.current.startX;
           const deltaY = e.clientY - dragStateRef.current.startY;
-          onPan && onPan(deltaX, deltaY, {
-            startX: dragStateRef.current.startX,
-            startY: dragStateRef.current.startY,
-            viewStartX: dragStateRef.current.viewStartX,
-            viewStartY: dragStateRef.current.viewStartY,
-          });
+          onPan &&
+            onPan(deltaX, deltaY, {
+              startX: dragStateRef.current.startX,
+              startY: dragStateRef.current.startY,
+              viewStartX: dragStateRef.current.viewStartX,
+              viewStartY: dragStateRef.current.viewStartY,
+            });
         }
       }
     },
@@ -191,7 +197,7 @@ export function usePinchPanZoom({
       clearDragTimeout();
       resetDragState();
 
-      const touches = Array.from(e.touches).map(t => ({
+      const touches = Array.from(e.touches).map((t) => ({
         id: t.identifier,
         x: t.clientX,
         y: t.clientY,
@@ -218,13 +224,14 @@ export function usePinchPanZoom({
 
   const onTouchMove = useCallback(
     (e) => {
-      if (e.touches.length !== 2 || touchStateRef.current.initialDistance === 0) return;
+      if (e.touches.length !== 2 || touchStateRef.current.initialDistance === 0)
+        return;
 
       e.preventDefault();
       lastInteractionRef.current = performance.now();
       onInteraction && onInteraction();
 
-      const touches = Array.from(e.touches).map(t => ({
+      const touches = Array.from(e.touches).map((t) => ({
         id: t.identifier,
         x: t.clientX,
         y: t.clientY,
@@ -245,7 +252,10 @@ export function usePinchPanZoom({
       } = touchStateRef.current;
 
       const zoomFactor = distance / initialDistance;
-      const targetZoom = Math.min(Math.max(initialZoom * zoomFactor, minZoom), maxZoom);
+      const targetZoom = Math.min(
+        Math.max(initialZoom * zoomFactor, minZoom),
+        maxZoom
+      );
 
       const worldX = initialViewX + initialMidpoint.x / initialZoom;
       const worldY = initialViewY + initialMidpoint.y / initialZoom;
@@ -253,13 +263,18 @@ export function usePinchPanZoom({
       const newViewX = worldX - midX / targetZoom;
       const newViewY = worldY - midY / targetZoom;
 
-      onZoom && onZoom(targetZoom / initialZoom, { x: worldX, y: worldY }, {
-        x: midX,
-        y: midY,
-        newViewX,
-        newViewY,
-        targetZoom,
-      });
+      onZoom &&
+        onZoom(
+          targetZoom / initialZoom,
+          { x: worldX, y: worldY },
+          {
+            x: midX,
+            y: midY,
+            newViewX,
+            newViewY,
+            targetZoom,
+          }
+        );
     },
     [onZoom, minZoom, maxZoom, onInteraction]
   );
@@ -268,10 +283,13 @@ export function usePinchPanZoom({
     (e) => {
       if (e.touches.length === 0) {
         resetTouchState();
-      } else if (e.touches.length === 1 && touchStateRef.current.touches.length === 2) {
+      } else if (
+        e.touches.length === 1 &&
+        touchStateRef.current.touches.length === 2
+      ) {
         const remainingTouch = e.touches[0];
         const current = getPointToWorld(0, 0);
-        
+
         dragStateRef.current = {
           isDragging: false,
           startX: remainingTouch.clientX,
@@ -280,11 +298,13 @@ export function usePinchPanZoom({
           viewStartY: current.viewY || 0,
         };
 
-        touchStateRef.current.touches = [{
-          id: remainingTouch.identifier,
-          x: remainingTouch.clientX,
-          y: remainingTouch.clientY,
-        }];
+        touchStateRef.current.touches = [
+          {
+            id: remainingTouch.identifier,
+            x: remainingTouch.clientX,
+            y: remainingTouch.clientY,
+          },
+        ];
         touchStateRef.current.initialDistance = 0;
       }
     },
@@ -299,14 +319,14 @@ export function usePinchPanZoom({
     const element = elementRef?.current;
     if (!element) return;
 
-    element.addEventListener('wheel', onWheel, { passive: false });
-    element.addEventListener('touchstart', onTouchStart, { passive: false });
-    element.addEventListener('touchmove', onTouchMove, { passive: false });
+    element.addEventListener("wheel", onWheel, { passive: false });
+    element.addEventListener("touchstart", onTouchStart, { passive: false });
+    element.addEventListener("touchmove", onTouchMove, { passive: false });
 
     return () => {
-      element.removeEventListener('wheel', onWheel);
-      element.removeEventListener('touchstart', onTouchStart);
-      element.removeEventListener('touchmove', onTouchMove);
+      element.removeEventListener("wheel", onWheel);
+      element.removeEventListener("touchstart", onTouchStart);
+      element.removeEventListener("touchmove", onTouchMove);
     };
   }, [elementRef, onWheel, onTouchStart, onTouchMove]);
 

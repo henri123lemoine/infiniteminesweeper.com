@@ -59,7 +59,7 @@ func (c *TestClient) messageReader() {
 			close(c.done)
 		}
 	}()
-	
+
 	for {
 		_, data, err := c.conn.ReadMessage()
 		if err != nil {
@@ -92,7 +92,7 @@ func (c *TestClient) messageReader() {
 func (c *TestClient) Send(msg *pb.Msg) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	data, err := proto.Marshal(msg)
 	if err != nil {
 		return err
@@ -215,7 +215,7 @@ func findMineInChunk(server *Server, chunkX, chunkY int64) (uint32, bool) {
 	chunkID := ChunkID{X: chunkX, Y: chunkY}
 	seed := server.generateChunkSeed(chunkID)
 	density := server.getChunkDensity(chunkID)
-	
+
 	// Convert density to the same format as server
 	d32 := float32(density)
 	if d32 < 0 {
@@ -227,7 +227,7 @@ func findMineInChunk(server *Server, chunkX, chunkY int64) (uint32, bool) {
 	if threshold > 100 {
 		threshold = 100
 	}
-	
+
 	// Check each cell in the chunk (4096 cells)
 	for cell := uint32(0); cell < 4096; cell++ {
 		cellSeed := splitmix64(seed + uint64(cell))
@@ -237,7 +237,6 @@ func findMineInChunk(server *Server, chunkX, chunkY int64) (uint32, bool) {
 	}
 	return 0, false
 }
-
 
 // TestMultiClientBoardConsistency verifies that multiple clients viewing the same region
 // receive identical mine layouts and cell states
@@ -267,7 +266,7 @@ func TestMultiClientBoardConsistency(t *testing.T) {
 
 	// Both clients should receive updates
 	var update1, update2 *pb.ChunkUpdateBroadcast
-	
+
 	// Client1 should receive RevealAck and ChunkUpdateBroadcast
 	timeout := time.After(3 * time.Second)
 client1Loop:
@@ -284,7 +283,7 @@ client1Loop:
 			break client1Loop
 		}
 	}
-	
+
 	// Client2 should receive ChunkUpdateBroadcast
 	timeout = time.After(3 * time.Second)
 client2Loop:
@@ -306,20 +305,20 @@ client2Loop:
 
 	// Verify both updates are for the same chunk
 	if update1.ChunkId.X != update2.ChunkId.X || update1.ChunkId.Y != update2.ChunkId.Y {
-		t.Fatalf("chunk IDs mismatch: client1=(%d,%d) client2=(%d,%d)", 
+		t.Fatalf("chunk IDs mismatch: client1=(%d,%d) client2=(%d,%d)",
 			update1.ChunkId.X, update1.ChunkId.Y, update2.ChunkId.X, update2.ChunkId.Y)
 	}
 
 	// Verify revealed cells are identical
 	revealed1 := update1.GetRevealedCells()
 	revealed2 := update2.GetRevealedCells()
-	
+
 	if revealed1 == nil || revealed2 == nil {
 		t.Fatalf("one or both updates missing revealed cells: client1=%v client2=%v", revealed1, revealed2)
 	}
-	
+
 	if len(revealed1.Cells) != len(revealed2.Cells) {
-		t.Fatalf("revealed cell counts differ: client1=%d client2=%d", 
+		t.Fatalf("revealed cell counts differ: client1=%d client2=%d",
 			len(revealed1.Cells), len(revealed2.Cells))
 	}
 
@@ -339,7 +338,7 @@ func TestMoveValidationPipeline(t *testing.T) {
 	defer client.Close()
 	client.Join()
 	client.Subscribe(0, 0)
-	
+
 	time.Sleep(100 * time.Millisecond)
 
 	tests := []struct {
@@ -368,7 +367,7 @@ func TestMoveValidationPipeline(t *testing.T) {
 			name:      "double reveal same cell",
 			chunkX:    0,
 			chunkY:    0,
-			cell:      5, // Same as first test
+			cell:      5,    // Same as first test
 			expectAck: true, // Server still sends ack, but with no new reveals
 			setupFunc: func() {
 				// First reveal was already done in "valid reveal" test
@@ -388,7 +387,7 @@ func TestMoveValidationPipeline(t *testing.T) {
 			// Look for RevealAck within timeout
 			timeout := time.After(1 * time.Second)
 			var ack *pb.RevealAck
-			
+
 		messageLoop:
 			for {
 				select {
@@ -423,7 +422,7 @@ func TestConcurrentReveals(t *testing.T) {
 
 	const numClients = 5
 	clients := make([]*TestClient, numClients)
-	
+
 	// Create and join all clients
 	for i := 0; i < numClients; i++ {
 		clients[i] = NewTestClient(t, wsURL, fmt.Sprintf("concurrent%d", i))
@@ -454,7 +453,7 @@ func TestConcurrentReveals(t *testing.T) {
 		// Each client should get at least their own RevealAck and some updates
 		timeout := time.After(3 * time.Second)
 		receivedAck := false
-		
+
 	clientLoop:
 		for {
 			select {
@@ -472,7 +471,7 @@ func TestConcurrentReveals(t *testing.T) {
 				break clientLoop
 			}
 		}
-		
+
 		if !receivedAck {
 			t.Errorf("client %d didn't receive their own RevealAck", i)
 		}
@@ -505,14 +504,14 @@ func TestRateLimiting(t *testing.T) {
 	const delayBetween = 10 * time.Millisecond
 
 	var successCount, errorCount int
-	
+
 	for i := 0; i < numRapidReveals; i++ {
 		// Try to reveal different cells rapidly
 		cellIndex := uint32(20 + i)
 		if cellIndex >= 4096 {
 			cellIndex = uint32(20 + (i % 100)) // Wrap around to valid range
 		}
-		
+
 		client.Reveal(0, 0, cellIndex, uint64(4000+i))
 		time.Sleep(delayBetween)
 	}
@@ -520,7 +519,7 @@ func TestRateLimiting(t *testing.T) {
 	// Count responses
 	timeout := time.After(5 * time.Second)
 	responses := 0
-	
+
 responseLoop:
 	for responses < numRapidReveals {
 		select {
@@ -538,9 +537,9 @@ responseLoop:
 		}
 	}
 
-	t.Logf("Rapid reveals: %d success, %d errors, %d total responses", 
+	t.Logf("Rapid reveals: %d success, %d errors, %d total responses",
 		successCount, errorCount, responses)
-	
+
 	// We expect some rate limiting, but this depends on implementation
 	// At minimum, we shouldn't crash and should get reasonable responses
 	if responses == 0 {
@@ -558,12 +557,12 @@ func TestReconnectionStateSync(t *testing.T) {
 	client1.Join()
 	token := client1.token
 	client1.Subscribe(0, 0)
-	
+
 	time.Sleep(100 * time.Millisecond)
-	
+
 	// Make a reveal
 	client1.Reveal(0, 0, 30, 5001)
-	
+
 	// Wait for reveal to process
 	timeout := time.After(2 * time.Second)
 revealLoop:
@@ -577,14 +576,14 @@ revealLoop:
 			t.Fatalf("initial reveal timed out")
 		}
 	}
-	
+
 	client1.Close()
 	time.Sleep(100 * time.Millisecond)
 
 	// Reconnect with same token
 	client2 := NewTestClient(t, wsURL, "reconnector")
 	defer client2.Close()
-	
+
 	rejoin := &pb.Msg{Payload: &pb.Msg_Join{Join: &pb.Join{SessionToken: token}}}
 	if err := client2.Send(rejoin); err != nil {
 		t.Fatalf("failed to rejoin: %v", err)
@@ -599,7 +598,7 @@ revealLoop:
 
 	// Subscribe to same region and verify we get current state
 	client2.Subscribe(0, 0)
-	
+
 	// Should receive chunk region sync with previous reveals
 	timeout = time.After(3 * time.Second)
 	for {
@@ -630,7 +629,6 @@ func TestMineExplosionBehavior(t *testing.T) {
 	// Both clients join
 	client1.Join()
 	client2.Join()
-
 
 	// Both subscribe to the same chunk
 	const chunkX, chunkY = int64(0), int64(0)
@@ -685,12 +683,12 @@ func TestMineExplosionBehavior(t *testing.T) {
 
 	// Wait for potential ChunkUpdateBroadcast to both clients
 	var update1, update2 *pb.ChunkUpdateBroadcast
-	
+
 	// Collect updates from both clients
 	timeout := time.After(2 * time.Second)
 	updates1 := 0
 	updates2 := 0
-	
+
 updateLoop:
 	for updates1 == 0 || updates2 == 0 {
 		select {
@@ -864,7 +862,7 @@ flagUpdateLoop:
 
 	// Verify both clients see the same flag
 	if flag1.Cell != mineCell || flag2.Cell != mineCell {
-		t.Fatalf("flag placement mismatch: expected cell %d, got client1=%d client2=%d", 
+		t.Fatalf("flag placement mismatch: expected cell %d, got client1=%d client2=%d",
 			mineCell, flag1.Cell, flag2.Cell)
 	}
 
@@ -877,7 +875,7 @@ flagUpdateLoop:
 	if wrongFlagCell >= 4096 {
 		wrongFlagCell = nonMineCell - 1
 	}
-	
+
 	// Make sure it's not a mine and not already revealed
 	chunkID := ChunkID{X: chunkX, Y: chunkY}
 	if server.isMine(chunkID, wrongFlagCell) || server.isCellRevealed(chunkID, wrongFlagCell) {
@@ -972,7 +970,7 @@ func TestCrossChunkFloodFill(t *testing.T) {
 	// Now check if we get chunk updates for multiple chunks
 	chunkUpdates := make(map[string]*pb.ChunkUpdateBroadcast)
 	timeout := time.After(3 * time.Second)
-	
+
 	// Collect chunk updates
 collectLoop:
 	for len(chunkUpdates) < 2 {
@@ -982,8 +980,8 @@ collectLoop:
 				key := fmt.Sprintf("%d,%d", broadcast.ChunkId.X, broadcast.ChunkId.Y)
 				if _, exists := chunkUpdates[key]; !exists {
 					chunkUpdates[key] = broadcast
-					t.Logf("Received update for chunk (%d,%d) with %d revealed cells", 
-						broadcast.ChunkId.X, broadcast.ChunkId.Y, 
+					t.Logf("Received update for chunk (%d,%d) with %d revealed cells",
+						broadcast.ChunkId.X, broadcast.ChunkId.Y,
 						len(broadcast.GetRevealedCells().GetCells()))
 				}
 			}
@@ -1012,7 +1010,7 @@ collectLoop:
 		t.Fatalf("no cells revealed in chunk updates")
 	}
 
-	t.Logf("Cross-chunk flood fill test passed: %d total cells revealed across %d chunks", 
+	t.Logf("Cross-chunk flood fill test passed: %d total cells revealed across %d chunks",
 		totalRevealed, len(chunkUpdates))
 }
 
@@ -1020,22 +1018,22 @@ collectLoop:
 func findGoodFloodFillCell(server *Server, chunkX, chunkY int64) uint32 {
 	const ChunkSize = 64
 	chunkID := ChunkID{X: chunkX, Y: chunkY}
-	
+
 	// Look for cells near the right edge (x = 62, 63) that have no adjacent mines
 	for y := 10; y < ChunkSize-10; y++ { // Avoid very top/bottom edges
 		for x := 60; x < ChunkSize; x++ { // Right edge cells
 			cell := uint32(y*ChunkSize + x)
-			
+
 			// Skip if this cell is a mine
 			if server.isMine(chunkID, cell) {
 				continue
 			}
-			
+
 			// Check adjacent mines count
 			adjMines := 0
 			worldX := int(chunkX)*ChunkSize + x
 			worldY := int(chunkY)*ChunkSize + y
-			
+
 			for dy := -1; dy <= 1; dy++ {
 				for dx := -1; dx <= 1; dx++ {
 					if dx == 0 && dy == 0 {
@@ -1049,17 +1047,16 @@ func findGoodFloodFillCell(server *Server, chunkX, chunkY int64) uint32 {
 					}
 				}
 			}
-			
+
 			// If this cell has no adjacent mines, it's good for flood fill
 			if adjMines == 0 {
 				return cell
 			}
 		}
 	}
-	
+
 	return ^uint32(0) // Not found
 }
-
 
 // TestScoreCalculationAccuracy verifies score calculations are correct and consistent
 func TestScoreCalculationAccuracy(t *testing.T) {
@@ -1076,7 +1073,7 @@ func TestScoreCalculationAccuracy(t *testing.T) {
 
 	// Get initial score (should be 0)
 	initialScore := int32(0)
-	
+
 	// Test 1: Safe cell reveal should give positive score
 	nonMineCell := findNonMineCell(server, chunkX, chunkY)
 	if nonMineCell == ^uint32(0) {
@@ -1117,7 +1114,7 @@ func TestScoreCalculationAccuracy(t *testing.T) {
 			t.Errorf("mine explosion should give -100 penalty, got %d", mineScoreDelta)
 		}
 
-		expectedScore = max(0, expectedScore + mineScoreDelta) // Score can't go below 0
+		expectedScore = max(0, expectedScore+mineScoreDelta) // Score can't go below 0
 		t.Logf("Mine explosion: %d points (total: %d)", mineScoreDelta, expectedScore)
 	}
 
@@ -1139,7 +1136,7 @@ func TestScoreCalculationAccuracy(t *testing.T) {
 			multiplier := server.getScoreMultiplier(chunkID)
 			expectedFlagScore := int32(math.Round(10 * multiplier))
 			if correctFlagDelta != expectedFlagScore {
-				t.Errorf("flag score mismatch: expected %d (10 * %.2f), got %d", 
+				t.Errorf("flag score mismatch: expected %d (10 * %.2f), got %d",
 					expectedFlagScore, multiplier, correctFlagDelta)
 			}
 		}
@@ -1158,7 +1155,7 @@ func TestScoreCalculationAccuracy(t *testing.T) {
 			if wrongFlagDelta != -20 {
 				t.Errorf("wrong flag should give -20 penalty, got %d", wrongFlagDelta)
 			}
-			expectedScore = max(0, expectedScore + wrongFlagDelta)
+			expectedScore = max(0, expectedScore+wrongFlagDelta)
 			t.Logf("Wrong flag: %d points (total: %d)", wrongFlagDelta, expectedScore)
 		}
 	}
@@ -1177,7 +1174,7 @@ func TestScoreCalculationAccuracy(t *testing.T) {
 				break
 			}
 			anotherMine = testMine // Update for next iteration
-			
+
 			client.Reveal(chunkX, chunkY, testMine, uint64(10005+i))
 			bombAck := client.WaitForRevealAck(uint64(10005+i), 2*time.Second)
 			if bombAck.Ok {
@@ -1185,7 +1182,7 @@ func TestScoreCalculationAccuracy(t *testing.T) {
 				if bombAck.ScoreUpdate != nil {
 					bombDelta = bombAck.ScoreUpdate.Delta
 				}
-				expectedScore = max(0, expectedScore + bombDelta)
+				expectedScore = max(0, expectedScore+bombDelta)
 				if expectedScore < 0 {
 					t.Errorf("score underflow detected: %d", expectedScore)
 					break
@@ -1251,7 +1248,7 @@ func TestServerClientMineCountMismatch(t *testing.T) {
 	// Use chunks (0,0) and (1,0) to test cross-boundary mine counting
 	const chunkX1, chunkY1 = int64(0), int64(0)
 	const chunkX2, chunkY2 = int64(1), int64(0)
-	
+
 	// Subscribe to only the first chunk initially
 	client.Subscribe(chunkX1, chunkY1)
 	time.Sleep(100 * time.Millisecond)
@@ -1310,11 +1307,11 @@ func TestServerClientMineCountMismatch(t *testing.T) {
 	// Now simulate the frontend bug scenario:
 	// 1. Try to flag all cells that the server says have mines around testCell
 	// 2. Then try to chord - if frontend has wrong count, server will reject
-	
+
 	// Place flags where server says mines are (this should work)
 	minesPlaced := 0
 	adjacentCells := getAdjacentCells(chunkX1, chunkY1, testCell)
-	
+
 	for _, adjCell := range adjacentCells {
 		// Check if this adjacent cell is a mine according to server
 		if adjCell.chunkX == chunkX1 && adjCell.chunkY == chunkY1 {
@@ -1334,7 +1331,7 @@ func TestServerClientMineCountMismatch(t *testing.T) {
 				// Try to flag it, but first subscribe to the adjacent chunk
 				client.Subscribe(adjCell.chunkX, adjCell.chunkY)
 				time.Sleep(50 * time.Millisecond) // Brief delay for subscription
-				
+
 				client.Flag(adjCell.chunkX, adjCell.chunkY, adjCell.cell, uint64(11010+minesPlaced))
 				flagAck := client.WaitForRevealAck(uint64(11010+minesPlaced), 2*time.Second)
 				if flagAck.Ok {
@@ -1351,9 +1348,9 @@ func TestServerClientMineCountMismatch(t *testing.T) {
 	client.Reveal(chunkX1, chunkY1, testCell, 11020) // Send as chord (server determines based on revealed state)
 	// Note: We need to send this as a chord operation, but the test client doesn't have that
 	// For now, just verify we found the cross-boundary scenario
-	
+
 	if minesPlaced != int(serverMineCount) {
-		t.Errorf("MINE COUNT MISMATCH DETECTED: Flagged %d mines but server counts %d - this reproduces the frontend bug!", 
+		t.Errorf("MINE COUNT MISMATCH DETECTED: Flagged %d mines but server counts %d - this reproduces the frontend bug!",
 			minesPlaced, serverMineCount)
 	} else {
 		t.Logf("Mine counts match - bug may not be reproduced in this scenario")
@@ -1367,22 +1364,22 @@ func TestServerClientMineCountMismatch(t *testing.T) {
 func findCellWithCrossBoundaryMines(server *Server, chunkX1, chunkY1, chunkX2, chunkY2 int64) uint32 {
 	const ChunkSize = 64
 	chunkID1 := ChunkID{X: chunkX1, Y: chunkY1}
-	
+
 	// Look at cells on the right edge of chunk1 (x = 62, 63)
 	for y := 10; y < ChunkSize-10; y++ {
 		for x := 62; x < ChunkSize; x++ {
 			cell := uint32(y*ChunkSize + x)
-			
+
 			// Skip if this cell itself is a mine
 			if server.isMine(chunkID1, cell) {
 				continue
 			}
-			
+
 			// Count adjacent mines - specifically look for mines in chunk2
 			minesInChunk2 := 0
 			worldX := int(chunkX1)*ChunkSize + x
 			worldY := int(chunkY1)*ChunkSize + y
-			
+
 			for dy := -1; dy <= 1; dy++ {
 				for dx := -1; dx <= 1; dx++ {
 					if dx == 0 && dy == 0 {
@@ -1391,14 +1388,14 @@ func findCellWithCrossBoundaryMines(server *Server, chunkX1, chunkY1, chunkX2, c
 					wx := worldX + dx
 					wy := worldY + dy
 					cid, cidx := worldToChunk(wx, wy)
-					
+
 					// Specifically look for mines in the adjacent chunk
 					if cid.X == chunkX2 && cid.Y == chunkY2 && server.isMine(cid, cidx) {
 						minesInChunk2++
 					}
 				}
 			}
-			
+
 			// If this cell has mines in the adjacent chunk, it's a good test case
 			if minesInChunk2 > 0 {
 				totalAdjMines := server.countAdjacentMines(chunkID1, cell)
@@ -1408,7 +1405,7 @@ func findCellWithCrossBoundaryMines(server *Server, chunkX1, chunkY1, chunkX2, c
 			}
 		}
 	}
-	
+
 	return ^uint32(0) // Not found
 }
 
@@ -1425,7 +1422,7 @@ func getAdjacentCells(chunkX, chunkY int64, cell uint32) []adjacentCell {
 	y := int(cell / ChunkSize)
 	worldX := int(chunkX)*ChunkSize + x
 	worldY := int(chunkY)*ChunkSize + y
-	
+
 	var adjacent []adjacentCell
 	for dy := -1; dy <= 1; dy++ {
 		for dx := -1; dx <= 1; dx++ {
@@ -1511,7 +1508,7 @@ func TestFrontendCacheInconsistency(t *testing.T) {
 
 	// Server should reject chord because adjacent mines != adjacent flags
 	chordAck := client.WaitForRevealAck(12002, 3*time.Second)
-	
+
 	// The key test: if server rejects chord, it means there's a mismatch
 	// between what server knows and what client cached
 	if !chordAck.Ok {
@@ -1539,13 +1536,13 @@ func TestFrontendCacheInconsistency(t *testing.T) {
 		}
 	}
 
-	t.Logf("Mine distribution: %d in same chunk, %d cross-chunk, %d total", 
+	t.Logf("Mine distribution: %d in same chunk, %d cross-chunk, %d total",
 		sameChunkMines, crossChunkMines, serverCount)
 
 	if crossChunkMines > 0 {
 		t.Logf("✅ CACHE BUG SCENARIO FOUND: %d mines in unsubscribed chunks", crossChunkMines)
 		t.Logf("Frontend would undercount by %d mines if adjacent chunks not cached", crossChunkMines)
-		
+
 		// This test successfully reproduced the cache bug scenario
 		// but we don't want to fail the test suite for this known issue
 		t.Logf("REPRODUCTION SUCCESS: Found scenario where frontend cache miss causes mine undercount")
@@ -1556,10 +1553,10 @@ func TestFrontendCacheInconsistency(t *testing.T) {
 func findEdgeCell(server *Server, chunkX, chunkY int64) uint32 {
 	const ChunkSize = 64
 	chunkID := ChunkID{X: chunkX, Y: chunkY}
-	
+
 	// Look at cells on edges of the chunk
 	candidates := []uint32{}
-	
+
 	// Right edge (x = 63)
 	for y := 10; y < ChunkSize-10; y++ {
 		cell := uint32(y*ChunkSize + 63)
@@ -1569,8 +1566,8 @@ func findEdgeCell(server *Server, chunkX, chunkY int64) uint32 {
 			}
 		}
 	}
-	
-	// Bottom edge (y = 63) 
+
+	// Bottom edge (y = 63)
 	for x := 10; x < ChunkSize-10; x++ {
 		cell := uint32(63*ChunkSize + x)
 		if !server.isMine(chunkID, cell) {
@@ -1579,11 +1576,11 @@ func findEdgeCell(server *Server, chunkX, chunkY int64) uint32 {
 			}
 		}
 	}
-	
+
 	if len(candidates) == 0 {
 		return ^uint32(0)
 	}
-	
+
 	// Return first candidate
 	return candidates[0]
 }

@@ -10,7 +10,6 @@ export class CanvasRenderer {
     this.baseCell = 16; // offscreen raster base size per cell
   }
 
-
   // 3D Cell Drawing Functions
   draw3DCell(ctx, x, y, size, isRevealed) {
     const borderWidth = Math.max(1, size * 0.08);
@@ -31,13 +30,13 @@ export class CanvasRenderer {
         x + size - borderWidth,
         y + borderWidth,
         borderWidth,
-        size - borderWidth,
+        size - borderWidth
       );
       ctx.fillRect(
         x + borderWidth,
         y + size - borderWidth,
         size - borderWidth,
-        borderWidth,
+        borderWidth
       );
     } else {
       // Unrevealed cell - raised 3D appearance
@@ -46,7 +45,7 @@ export class CanvasRenderer {
         x + borderWidth,
         y + borderWidth,
         size - 2 * borderWidth,
-        size - 2 * borderWidth,
+        size - 2 * borderWidth
       );
 
       // Top and left highlights
@@ -59,13 +58,13 @@ export class CanvasRenderer {
         x + borderWidth,
         y + borderWidth,
         size - 2 * borderWidth,
-        innerBorderWidth,
+        innerBorderWidth
       );
       ctx.fillRect(
         x + borderWidth,
         y + borderWidth,
         innerBorderWidth,
-        size - 2 * borderWidth,
+        size - 2 * borderWidth
       );
 
       // Bottom and right shadows
@@ -74,13 +73,13 @@ export class CanvasRenderer {
         x + borderWidth,
         y + size - borderWidth,
         size - borderWidth,
-        borderWidth,
+        borderWidth
       );
       ctx.fillRect(
         x + size - borderWidth,
         y + borderWidth,
         borderWidth,
-        size - borderWidth,
+        size - borderWidth
       );
 
       ctx.fillStyle = "rgba(128, 128, 128, 0.6)";
@@ -89,13 +88,13 @@ export class CanvasRenderer {
         x + innerShadowOffset,
         y + size - innerShadowOffset,
         size - 2 * innerShadowOffset,
-        innerBorderWidth,
+        innerBorderWidth
       );
       ctx.fillRect(
         x + size - innerShadowOffset,
         y + innerShadowOffset,
         innerBorderWidth,
-        size - 2 * innerShadowOffset,
+        size - 2 * innerShadowOffset
       );
 
       // Corner highlights/shadows
@@ -107,7 +106,7 @@ export class CanvasRenderer {
         x + size - borderWidth,
         y + size - borderWidth,
         borderWidth,
-        borderWidth,
+        borderWidth
       );
     }
   }
@@ -129,7 +128,6 @@ export class CanvasRenderer {
     ctx.shadowColor = "transparent";
   }
 
-
   // Simple LRU touch and evict helpers
   _touch(key) {
     const v = this.chunkCache.get(key);
@@ -147,9 +145,13 @@ export class CanvasRenderer {
   _rasterizeChunk(cx, cy, refs) {
     const { revealedCellsRef, flaggedCellsRef, getNumberColor } = refs;
     const size = this.baseCell;
-    const off = typeof OffscreenCanvas !== "undefined"
-      ? new OffscreenCanvas(CHUNK * size, CHUNK * size)
-      : Object.assign(document.createElement("canvas"), { width: CHUNK * size, height: CHUNK * size });
+    const off =
+      typeof OffscreenCanvas !== "undefined"
+        ? new OffscreenCanvas(CHUNK * size, CHUNK * size)
+        : Object.assign(document.createElement("canvas"), {
+            width: CHUNK * size,
+            height: CHUNK * size,
+          });
     const ctx = off.getContext("2d");
     ctx.imageSmoothingEnabled = false;
     // Draw background
@@ -186,7 +188,11 @@ export class CanvasRenderer {
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             ctx.fillStyle = getNumberColor(cellData.adjacentMines);
-            ctx.fillText(String(cellData.adjacentMines), dx + size / 2, dy + size / 2 + 1);
+            ctx.fillText(
+              String(cellData.adjacentMines),
+              dx + size / 2,
+              dy + size / 2 + 1
+            );
           }
         }
         if (isFlagged) {
@@ -202,12 +208,22 @@ export class CanvasRenderer {
           // Make flags larger and more visible in cached chunks
           const flagPadding = Math.max(0, size * 0.1);
           ctx.fillStyle = flagColor;
-          ctx.fillRect(dx + flagPadding, dy + flagPadding, size - 2 * flagPadding, size - 2 * flagPadding);
+          ctx.fillRect(
+            dx + flagPadding,
+            dy + flagPadding,
+            size - 2 * flagPadding,
+            size - 2 * flagPadding
+          );
 
           // Add a subtle border for better definition
           ctx.strokeStyle = "rgba(0, 0, 0, 0.3)";
           ctx.lineWidth = Math.max(0.5, size * 0.05);
-          ctx.strokeRect(dx + flagPadding, dy + flagPadding, size - 2 * flagPadding, size - 2 * flagPadding);
+          ctx.strokeRect(
+            dx + flagPadding,
+            dy + flagPadding,
+            size - 2 * flagPadding,
+            size - 2 * flagPadding
+          );
         }
       }
     }
@@ -231,7 +247,7 @@ export class CanvasRenderer {
     cellData,
     isRevealed,
     getNumberColor,
-    LOD,
+    LOD
   ) {
     // Base cell: beveled for LOD 0, flat for higher LODs
     if (LOD === 0) {
@@ -257,7 +273,13 @@ export class CanvasRenderer {
         ctx.fillStyle = "#101010";
         const r = Math.max(1, cellSize * 0.25);
         ctx.beginPath();
-        ctx.arc(screenX + cellSize / 2, screenY + cellSize / 2, r, 0, Math.PI * 2);
+        ctx.arc(
+          screenX + cellSize / 2,
+          screenY + cellSize / 2,
+          r,
+          0,
+          Math.PI * 2
+        );
         ctx.fill();
       }
     } else if (cellData.adjacentMines > 0 && LOD === 0) {
@@ -267,7 +289,7 @@ export class CanvasRenderer {
         screenY,
         cellSize,
         cellData.adjacentMines,
-        getNumberColor,
+        getNumberColor
       );
     }
   }
@@ -315,12 +337,15 @@ export class CanvasRenderer {
     const effPx = CELL_SIZE * zoom * dpr;
 
     // Thresholds are in effective pixels per cell
-    const MINIMAL_RENDERING_THRESHOLD = 5;   // below this: minimal cached chunks
-    const FULL_QUALITY_THRESHOLD = 20;       // above this: per-cell rendering
+    const MINIMAL_RENDERING_THRESHOLD = 5; // below this: minimal cached chunks
+    const FULL_QUALITY_THRESHOLD = 20; // above this: per-cell rendering
 
-    const LOD = effPx < MINIMAL_RENDERING_THRESHOLD ? 2
-              : effPx < FULL_QUALITY_THRESHOLD ? 1
-              : 0;
+    const LOD =
+      effPx < MINIMAL_RENDERING_THRESHOLD
+        ? 2
+        : effPx < FULL_QUALITY_THRESHOLD
+          ? 1
+          : 0;
 
     // Clear background
     ctx.fillStyle = "#c0c0c0";
@@ -333,7 +358,7 @@ export class CanvasRenderer {
     const startWorldY = Math.floor(viewRef.current.y / CELL_SIZE);
     const endWorldX = Math.ceil((viewRef.current.x + width / zoom) / CELL_SIZE);
     const endWorldY = Math.ceil(
-      (viewRef.current.y + height / zoom) / CELL_SIZE,
+      (viewRef.current.y + height / zoom) / CELL_SIZE
     );
 
     // At close zoom (LOD 0), draw per-cell with beveled tiles and high detail
@@ -366,11 +391,18 @@ export class CanvasRenderer {
             cellData,
             isRevealedForRender,
             getNumberColor,
-            LOD,
+            LOD
           );
 
           if (isFlagged) {
-            this.drawSprite(ctx, flagForCell, screenX, screenY, CELL_SIZE, CELL_SIZE);
+            this.drawSprite(
+              ctx,
+              flagForCell,
+              screenX,
+              screenY,
+              CELL_SIZE,
+              CELL_SIZE
+            );
           }
         }
       }
@@ -410,10 +442,9 @@ export class CanvasRenderer {
           chunkScreenX,
           chunkScreenY,
           CHUNK * CELL_SIZE,
-          CHUNK * CELL_SIZE,
+          CHUNK * CELL_SIZE
         );
       }
     }
-
   }
 }

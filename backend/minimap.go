@@ -43,74 +43,74 @@ func newMinimapTile(resolution uint32) *MinimapTile {
 
 // hash64 is a small 64-bit mixer (xorshift/murmur-inspired) for deterministic PRNG
 func hash64(x uint64) uint64 {
-    x ^= x >> 33
-    x *= 0xff51afd7ed558ccd
-    x ^= x >> 33
-    x *= 0xc4ceb9fe1a85ec53
-    x ^= x >> 33
-    return x
+	x ^= x >> 33
+	x *= 0xff51afd7ed558ccd
+	x ^= x >> 33
+	x *= 0xc4ceb9fe1a85ec53
+	x ^= x >> 33
+	return x
 }
 
 // probabilisticDownsample chooses a representative palette index for a lower-res pixel
 // by sampling from the per-block histogram with probability proportional to counts.
 // The RNG is deterministic per (chunk, blockX, blockY) so the image is stable over time.
 func probabilisticDownsample(cid ChunkID, fullData []byte, blockX, blockY, blockSize int) byte {
-    // Build histogram of palette indices in this block
-    var counts [256]uint32
-    total := uint32(0)
-    for dy := 0; dy < blockSize; dy++ {
-        sy := blockY*blockSize + dy
-        if sy >= ChunkSize {
-            continue
-        }
-        base := sy * ChunkSize
-        for dx := 0; dx < blockSize; dx++ {
-            sx := blockX*blockSize + dx
-            if sx >= ChunkSize {
-                continue
-            }
-            idx := fullData[base+sx]
-            counts[idx]++
-            total++
-        }
-    }
-    if total == 0 {
-        return mmUnseen
-    }
+	// Build histogram of palette indices in this block
+	var counts [256]uint32
+	total := uint32(0)
+	for dy := 0; dy < blockSize; dy++ {
+		sy := blockY*blockSize + dy
+		if sy >= ChunkSize {
+			continue
+		}
+		base := sy * ChunkSize
+		for dx := 0; dx < blockSize; dx++ {
+			sx := blockX*blockSize + dx
+			if sx >= ChunkSize {
+				continue
+			}
+			idx := fullData[base+sx]
+			counts[idx]++
+			total++
+		}
+	}
+	if total == 0 {
+		return mmUnseen
+	}
 
-    // Bayer 8x8 threshold matrix to decorrelate patterns across blocks (0..63)
-    var bayer8 = [64]uint8{
-        0, 32, 8, 40, 2, 34, 10, 42,
-        48, 16, 56, 24, 50, 18, 58, 26,
-        12, 44, 4, 36, 14, 46, 6, 38,
-        60, 28, 52, 20, 62, 30, 54, 22,
-        3, 35, 11, 43, 1, 33, 9, 41,
-        51, 19, 59, 27, 49, 17, 57, 25,
-        15, 47, 7, 39, 13, 45, 5, 37,
-        63, 31, 55, 23, 61, 29, 53, 21,
-    }
+	// Bayer 8x8 threshold matrix to decorrelate patterns across blocks (0..63)
+	var bayer8 = [64]uint8{
+		0, 32, 8, 40, 2, 34, 10, 42,
+		48, 16, 56, 24, 50, 18, 58, 26,
+		12, 44, 4, 36, 14, 46, 6, 38,
+		60, 28, 52, 20, 62, 30, 54, 22,
+		3, 35, 11, 43, 1, 33, 9, 41,
+		51, 19, 59, 27, 49, 17, 57, 25,
+		15, 47, 7, 39, 13, 45, 5, 37,
+		63, 31, 55, 23, 61, 29, 53, 21,
+	}
 
-    // Deterministic base in [0,total)
-    seed := hash64(uint64(cid.X)) ^ hash64((uint64(cid.Y) << 1)) ^ hash64((uint64(blockX) << 2)) ^ hash64((uint64(blockY) << 3))
-    base := uint32(seed % uint64(total))
-    // Deterministic offset from Bayer cell scaled to [0,total)
-    bn := bayer8[(blockY&7)*8+(blockX&7)]
-    offset := (uint32(bn) * total) >> 6 // divide by 64
-    r := (base + offset) % total
+	// Deterministic base in [0,total)
+	seed := hash64(uint64(cid.X)) ^ hash64((uint64(cid.Y) << 1)) ^ hash64((uint64(blockX) << 2)) ^ hash64((uint64(blockY) << 3))
+	base := uint32(seed % uint64(total))
+	// Deterministic offset from Bayer cell scaled to [0,total)
+	bn := bayer8[(blockY&7)*8+(blockX&7)]
+	offset := (uint32(bn) * total) >> 6 // divide by 64
+	r := (base + offset) % total
 
-    // Walk cumulative distribution to pick index proportionally to counts
-    cum := uint32(0)
-    for idx := 0; idx < len(counts); idx++ {
-        c := counts[idx]
-        if c == 0 {
-            continue
-        }
-        cum += c
-        if r < cum {
-            return byte(idx)
-        }
-    }
-    return mmUnseen
+	// Walk cumulative distribution to pick index proportionally to counts
+	cum := uint32(0)
+	for idx := 0; idx < len(counts); idx++ {
+		c := counts[idx]
+		if c == 0 {
+			continue
+		}
+		cum += c
+		if r < cum {
+			return byte(idx)
+		}
+	}
+	return mmUnseen
 }
 
 func minimapFlagBucket(flagID uint32) int {
@@ -133,14 +133,14 @@ func (s *Server) minimapSetCell(cid ChunkID, cell uint32, idx byte) {
 	if s.minimapTiles[cid] == nil {
 		s.minimapTiles[cid] = make(map[uint32]*MinimapTile)
 	}
-	
+
 	// Always maintain the full-resolution (64x64) tile as the master
 	t := s.minimapTiles[cid][64]
 	if t == nil {
 		t = newMinimapTile(64)
 		s.minimapTiles[cid][64] = t
 	}
-	
+
 	pos := int(cell)
 	if pos < 0 || pos >= ChunkSize*ChunkSize {
 		return
@@ -149,22 +149,22 @@ func (s *Server) minimapSetCell(cid ChunkID, cell uint32, idx byte) {
 		t.Data[pos] = idx
 		t.Dirty[pos] = true
 		s.minimapDirtyTiles[cid] = struct{}{}
-		
+
 		// Mark lower resolution tiles as dirty too
 		if t32, ok := s.minimapTiles[cid][32]; ok {
 			// Calculate which lower-res cell this affects
 			localX := pos % ChunkSize
 			localY := pos / ChunkSize
-			lrX := localX / 2  // 64->32 downsampling
+			lrX := localX / 2 // 64->32 downsampling
 			lrY := localY / 2
 			lrPos := lrY*32 + lrX
 			t32.Dirty[lrPos] = true
 		}
-		
+
 		if t16, ok := s.minimapTiles[cid][16]; ok {
 			localX := pos % ChunkSize
 			localY := pos / ChunkSize
-			lrX := localX / 4  // 64->16 downsampling
+			lrX := localX / 4 // 64->16 downsampling
 			lrY := localY / 4
 			lrPos := lrY*16 + lrX
 			t16.Dirty[lrPos] = true
@@ -214,13 +214,13 @@ func (s *Server) minimapRebuildTile(cid ChunkID, resolution uint32) *MinimapTile
 	if s.minimapTiles[cid] == nil {
 		s.minimapTiles[cid] = make(map[uint32]*MinimapTile)
 	}
-	
+
 	t := s.minimapTiles[cid][resolution]
 	if t == nil {
 		t = newMinimapTile(resolution)
 		s.minimapTiles[cid][resolution] = t
 	}
-	
+
 	if resolution == 64 {
 		// Full resolution - direct mapping
 		for i := 0; i < ChunkSize*ChunkSize; i++ {
@@ -228,20 +228,20 @@ func (s *Server) minimapRebuildTile(cid ChunkID, resolution uint32) *MinimapTile
 			t.Data[i] = idx
 			t.Dirty[i] = false
 		}
-    } else {
-        // Lower resolution - rebuild from full resolution using probabilistic downsampling
-        fullTile := s.minimapRebuildTile(cid, 64) // Ensure full resolution exists
-        blockSize := int(64 / resolution)        // 64/32=2, 64/16=4
+	} else {
+		// Lower resolution - rebuild from full resolution using probabilistic downsampling
+		fullTile := s.minimapRebuildTile(cid, 64) // Ensure full resolution exists
+		blockSize := int(64 / resolution)         // 64/32=2, 64/16=4
 
-        for y := 0; y < int(resolution); y++ {
-            for x := 0; x < int(resolution); x++ {
-                idx := probabilisticDownsample(cid, fullTile.Data, x, y, blockSize)
-                pos := y*int(resolution) + x
-                t.Data[pos] = idx
-                t.Dirty[pos] = false
-            }
-        }
-    }
+		for y := 0; y < int(resolution); y++ {
+			for x := 0; x < int(resolution); x++ {
+				idx := probabilisticDownsample(cid, fullTile.Data, x, y, blockSize)
+				pos := y*int(resolution) + x
+				t.Data[pos] = idx
+				t.Dirty[pos] = false
+			}
+		}
+	}
 	return t
 }
 
@@ -260,7 +260,7 @@ func minimapCollectRects(t *MinimapTile) (rects []struct {
 	rows       []byte
 }, deltaBytes int) {
 	resolution := int(t.Resolution)
-	
+
 	// First, find horizontal runs per row
 	type run struct{ x0, x1 int }
 	runs := make([][]run, resolution)
@@ -333,7 +333,7 @@ func (s *Server) minimapSendFullTo(playerID uint32, cid ChunkID) {
 	if playerRes, ok := s.minimapPlayerRes[playerID]; ok {
 		resolution = playerRes
 	}
-	
+
 	// Rebuild from authoritative state to avoid stale or missing tiles
 	t := s.minimapRebuildTile(cid, resolution)
 	isAllUnseen := true
@@ -384,7 +384,7 @@ func (s *Server) runMinimapBroadcaster() {
 			if len(subs) == 0 {
 				continue
 			}
-			
+
 			// Group subscribers by resolution
 			playersByRes := make(map[uint32][]uint32)
 			for pid := range subs {
@@ -394,23 +394,23 @@ func (s *Server) runMinimapBroadcaster() {
 				}
 				playersByRes[res] = append(playersByRes[res], pid)
 			}
-			
+
 			// Process each resolution group
 			for resolution, players := range playersByRes {
 				tileMap := s.minimapTiles[cid]
 				if tileMap == nil {
 					continue
 				}
-				
+
 				t := tileMap[resolution]
 				if t == nil {
 					// Need to create/rebuild this resolution
 					t = s.minimapRebuildTile(cid, resolution)
 				}
-				
+
 				rects, deltaBytes := minimapCollectRects(t)
 				tileSize := int(resolution * resolution)
-				
+
 				// Heuristic: if over half of tile, send full
 				if deltaBytes > tileSize/2 {
 					// clear dirties, bump version, send full
@@ -433,11 +433,11 @@ func (s *Server) runMinimapBroadcaster() {
 					s.stateMu.Lock()
 					continue
 				}
-				
+
 				if len(rects) == 0 {
 					continue
 				}
-				
+
 				// build TileDelta
 				pRects := make([]*pb.DeltaRect, 0, len(rects))
 				for _, r := range rects {
