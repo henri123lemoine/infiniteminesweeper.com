@@ -7,6 +7,7 @@ func TestMinimapSetAndCollectRects(t *testing.T) {
     cid := ChunkID{X: 0, Y: 0}
 
     s.stateMu.Lock()
+    s.minimapSubs[cid] = map[uint32]struct{}{1: {}}
     // Mark three adjacent cells dirty in first row and two in second row aligned, expecting a 2x3 rect
     s.minimapSetCell(cid, 0, 5)
     s.minimapSetCell(cid, 1, 5)

@@ -666,6 +666,8 @@ func (s *Server) readPump(player *Player) {
 						delete(subs, player.ID)
 						if len(subs) == 0 {
 							delete(s.minimapSubs, cid)
+							delete(s.minimapTiles, cid)
+							delete(s.minimapDirtyTiles, cid)
 						}
 					}
 				}
@@ -926,9 +928,20 @@ func (s *Server) removePlayer(p *Player) {
 				}
 			}
 		}
+		for chunkID, subs := range s.minimapSubs {
+			if _, exists := subs[p.ID]; exists {
+				delete(subs, p.ID)
+				if len(subs) == 0 {
+					delete(s.minimapSubs, chunkID)
+					delete(s.minimapTiles, chunkID)
+					delete(s.minimapDirtyTiles, chunkID)
+				}
+			}
+		}
 		// Clear reverse index for this player so next connection starts fresh
 		delete(s.playerSubs, p.ID)
 		delete(s.playerSubLastSeen, p.ID)
+		delete(s.minimapPlayerRes, p.ID)
 		s.stateMu.Unlock()
 	}
 

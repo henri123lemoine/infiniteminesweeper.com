@@ -104,6 +104,9 @@ func (s *Server) getChunkDensity(chunkID ChunkID) float64 {
 	}
 
 	s.densityCacheMu.Lock()
+	if len(s.densityCache) >= densityCacheMaxEntries {
+		s.densityCache = make(map[ChunkID]float64, densityCacheMaxEntries)
+	}
 	s.densityCache[chunkID] = dens
 	s.densityCacheMu.Unlock()
 	return dens
