@@ -688,6 +688,60 @@ func (s *Server) readPump(player *Player) {
 	}
 }
 
+func (s *Server) serializeChunk(chunkID ChunkID) *pb.ChunkSync {
+	chunk, chunkExists := s.chunks[chunkID]
+	flagsMap := s.flags[chunkID]
+	seed64 := s.generateChunkSeed(chunkID)
+	var seedBytes [8]byte
+	binary.LittleEndian.PutUint64(seedBytes[:], seed64)
+
+	var bits ChunkBits
+	if chunkExists {
+		bits = *chunk
+	}
+
+	// Treat flags as revealed for transmission (compression-friendly):
+	// overlay flag positions into the reveals bitset we send.
+	for cell := range flagsMap {
+		x := int(cell % ChunkSize)
+		y := int(cell / ChunkSize)
+		if y >= 0 && y < ChunkSize && x >= 0 && x < ChunkSize {
+			bits[y] |= (1 << uint(x))
+		}
+	}
+
+	groups := make(map[uint32]*pb.RevealedCells)
+	for cell, fl := range flagsMap {
+		if groups[fl.FlagID] == nil {
+			groups[fl.FlagID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
+		}
+		groups[fl.FlagID].Cells = append(groups[fl.FlagID].Cells, cell)
+	}
+
+	flagGroups := make([]*pb.FlagGroup, 0, len(groups))
+	for flagID, cells := range groups {
+		flagGroups = append(flagGroups, &pb.FlagGroup{
+			FlagID: flagID,
+			Cells:  cells,
+		})
+	}
+
+	revealsBytes := make([]byte, len(bits)*8)
+	for i, word := range bits {
+		binary.LittleEndian.PutUint64(revealsBytes[i*8:], word)
+	}
+
+	density := s.getChunkDensity(chunkID)
+
+	return &pb.ChunkSync{
+		ChunkId:    &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
+		Seed:       seedBytes[:],
+		Reveals:    revealsBytes,
+		FlagGroups: flagGroups,
+		Density:    float32(density),
+	}
+}
+
 func (s *Server) writePump(player *Player) {
 	defer player.Conn.Close()
 
@@ -759,59 +813,7 @@ func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
 		}
 	}
 
-	chunk, chunkExists := s.chunks[chunkID]
-	flagsMap := s.flags[chunkID]
-	seed64 := s.generateChunkSeed(chunkID)
-	var seedBytes [8]byte
-	binary.LittleEndian.PutUint64(seedBytes[:], seed64)
-
-	var bits ChunkBits
-	if chunkExists {
-		bits = *chunk
-	}
-
-	// Treat flags as revealed for transmission (compression-friendly):
-	// overlay flag positions into the reveals bitset we send.
-	for cell := range flagsMap {
-		// cell is 0..4095; map to (x,y) and set bit in row y at column x
-		x := int(cell % ChunkSize)
-		y := int(cell / ChunkSize)
-		if y >= 0 && y < ChunkSize && x >= 0 && x < ChunkSize {
-			bits[y] |= (1 << uint(x))
-		}
-	}
-
-	// Group flags by their flagID (appearance)
-	groups := make(map[uint32]*pb.RevealedCells)
-	for cell, fl := range flagsMap {
-		if groups[fl.FlagID] == nil {
-			groups[fl.FlagID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
-		}
-		groups[fl.FlagID].Cells = append(groups[fl.FlagID].Cells, cell)
-	}
-
-	flagGroups := make([]*pb.FlagGroup, 0, len(groups))
-	for flagID, cells := range groups {
-		flagGroups = append(flagGroups, &pb.FlagGroup{
-			FlagID: flagID,
-			Cells:  cells,
-		})
-	}
-
-	revealsBytes := make([]byte, len(bits)*8)
-	for i, word := range bits {
-		binary.LittleEndian.PutUint64(revealsBytes[i*8:], word)
-	}
-
-	density := s.getChunkDensity(chunkID)
-
-	cs := &pb.Msg{Payload: &pb.Msg_ChunkSync{ChunkSync: &pb.ChunkSync{
-		ChunkId:    &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
-		Seed:       seedBytes[:],
-		Reveals:    revealsBytes,
-		FlagGroups: flagGroups,
-		Density:    float32(density),
-	}}}
+	cs := &pb.Msg{Payload: &pb.Msg_ChunkSync{ChunkSync: s.serializeChunk(chunkID)}}
 
 	// Unlock the state mutex *before* sending data to avoid deadlocks.
 	s.stateMu.Unlock()
@@ -845,47 +847,7 @@ func (s *Server) sendChunkRegionSync(playerID uint32, chunkIDs []ChunkID) {
 		if chunkID.Y > maxY {
 			maxY = chunkID.Y
 		}
-
-		chunk, chunkExists := s.chunks[chunkID]
-		flagsMap := s.flags[chunkID]
-		seed64 := s.generateChunkSeed(chunkID)
-		var seedBytes [8]byte
-		binary.LittleEndian.PutUint64(seedBytes[:], seed64)
-
-		var bits ChunkBits
-		if chunkExists {
-			bits = *chunk
-		}
-
-		groups := make(map[uint32]*pb.RevealedCells)
-		for cell, fl := range flagsMap {
-			if groups[fl.FlagID] == nil {
-				groups[fl.FlagID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
-			}
-			groups[fl.FlagID].Cells = append(groups[fl.FlagID].Cells, cell)
-		}
-
-		flagGroups := make([]*pb.FlagGroup, 0, len(groups))
-		for flagID, cells := range groups {
-			flagGroups = append(flagGroups, &pb.FlagGroup{
-				FlagID: flagID,
-				Cells:  cells,
-			})
-		}
-
-		revealsBytes := make([]byte, len(bits)*8)
-		for i, word := range bits {
-			binary.LittleEndian.PutUint64(revealsBytes[i*8:], word)
-		}
-
-		density := s.getChunkDensity(chunkID)
-		chunks = append(chunks, &pb.ChunkSync{
-			ChunkId:    &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
-			Seed:       seedBytes[:],
-			Reveals:    revealsBytes,
-			FlagGroups: flagGroups,
-			Density:    float32(density),
-		})
+		chunks = append(chunks, s.serializeChunk(chunkID))
 	}
 
 	s.stateMu.Unlock()

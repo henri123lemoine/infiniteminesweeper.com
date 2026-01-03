@@ -188,45 +188,7 @@ func (s *Server) handleReveal(
 			// Wrong flag: deduct points, and perform a flood-fill reveal like a normal reveal.
 			scoreDelta = -20 // wrong flag penalty (no positive points even if many cells revealed)
 			s.applyScore(playerID, scoreDelta)
-
-			// Re-use standard reveal flood-fill, but we will not add to scoreDelta for revealed cells here
-			q := []struct {
-				CId  ChunkID
-				CIdx uint32
-			}{{chunkID, cell}}
-			visited := make(map[struct {
-				CId  ChunkID
-				CIdx uint32
-			}]struct{})
-
-			for len(q) > 0 {
-				curr := q[0]
-				q = q[1:]
-
-				if _, exists := visited[curr]; exists || s.isCellRevealed(curr.CId, curr.CIdx) || s.isCellFlagged(curr.CId, curr.CIdx) {
-					continue
-				}
-				visited[curr] = struct{}{}
-				s.setCellRevealed(curr.CId, curr.CIdx, playerID, &allRevealedCells)
-
-				if s.countAdjacentMines(curr.CId, curr.CIdx) == 0 {
-					currX, currY := cellIndexToXY(curr.CIdx)
-					for dy := -1; dy <= 1; dy++ {
-						for dx := -1; dx <= 1; dx++ {
-							if dx == 0 && dy == 0 {
-								continue
-							}
-							wX, wY := int(curr.CId.X)*ChunkSize+currX+dx, int(curr.CId.Y)*ChunkSize+currY+dy
-							nCId, nCIdx := worldToChunk(wX, wY)
-							q = append(q, struct {
-								CId  ChunkID
-								CIdx uint32
-							}{nCId, nCIdx})
-						}
-					}
-				}
-			}
-
+			s.floodFillReveal(chunkID, cell, playerID, &allRevealedCells)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
 		}
@@ -352,43 +314,9 @@ func (s *Server) handleReveal(
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
 		} else {
 			// Flood fill logic for empty cells
-			q := []struct {
-				CId  ChunkID
-				CIdx uint32
-			}{{chunkID, cell}}
-			visited := make(map[struct {
-				CId  ChunkID
-				CIdx uint32
-			}]struct{})
-
-			for len(q) > 0 {
-				curr := q[0]
-				q = q[1:]
-
-				if _, exists := visited[curr]; exists || s.isCellRevealed(curr.CId, curr.CIdx) || s.isCellFlagged(curr.CId, curr.CIdx) {
-					continue
-				}
-				visited[curr] = struct{}{}
-				s.setCellRevealed(curr.CId, curr.CIdx, playerID, &allRevealedCells)
-
-				if s.countAdjacentMines(curr.CId, curr.CIdx) == 0 {
-					currX, currY := cellIndexToXY(curr.CIdx)
-					for dy := -1; dy <= 1; dy++ {
-						for dx := -1; dx <= 1; dx++ {
-							if dx == 0 && dy == 0 {
-								continue
-							}
-							wX, wY := int(curr.CId.X)*ChunkSize+currX+dx, int(curr.CId.Y)*ChunkSize+currY+dy
-							nCId, nCIdx := worldToChunk(wX, wY)
-							q = append(q, struct {
-								CId  ChunkID
-								CIdx uint32
-							}{nCId, nCIdx})
-						}
-					}
-				}
-			}
-			scoreDelta = int32(len(visited))
+			startCount := countAllRevealedCells(allRevealedCells)
+			s.floodFillReveal(chunkID, cell, playerID, &allRevealedCells)
+			scoreDelta = int32(countAllRevealedCells(allRevealedCells) - startCount)
 			if scoreDelta > 0 {
 				m := s.getScoreMultiplier(chunkID)
 				scoreDelta = int32(math.Round(float64(scoreDelta) * m))
@@ -442,6 +370,50 @@ func (s *Server) handleReveal(
 }
 
 // Logic Helpers
+
+type bfsItem struct {
+	CId  ChunkID
+	CIdx uint32
+}
+
+func countAllRevealedCells(m map[ChunkID]*pb.RevealedCells) int {
+	total := 0
+	for _, cells := range m {
+		total += len(cells.GetCells())
+	}
+	return total
+}
+
+func (s *Server) floodFillReveal(startChunk ChunkID, startCell uint32, playerID uint32, collector *map[ChunkID]*pb.RevealedCells) {
+	queue := []bfsItem{{startChunk, startCell}}
+	visited := make(map[bfsItem]struct{})
+
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+
+		if _, exists := visited[curr]; exists || s.isCellRevealed(curr.CId, curr.CIdx) || s.isCellFlagged(curr.CId, curr.CIdx) {
+			continue
+		}
+		visited[curr] = struct{}{}
+		s.setCellRevealed(curr.CId, curr.CIdx, playerID, collector)
+
+		if s.countAdjacentMines(curr.CId, curr.CIdx) == 0 {
+			currX, currY := cellIndexToXY(curr.CIdx)
+			for dy := -1; dy <= 1; dy++ {
+				for dx := -1; dx <= 1; dx++ {
+					if dx == 0 && dy == 0 {
+						continue
+					}
+					wX := int(curr.CId.X)*ChunkSize + currX + dx
+					wY := int(curr.CId.Y)*ChunkSize + currY + dy
+					nCId, nCIdx := worldToChunk(wX, wY)
+					queue = append(queue, bfsItem{nCId, nCIdx})
+				}
+			}
+		}
+	}
+}
 
 func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, collector *map[ChunkID]*pb.RevealedCells) {
 	if s.chunks[chunkID] == nil {

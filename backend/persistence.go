@@ -417,9 +417,10 @@ func (s *Server) initPersistence() {
 	go s.periodicWALFlush()     // flush WAL every 30 seconds
 }
 
-func (s *Server) saveSnapshotToS3() error {
+func (s *Server) captureSnapshotData() snapshotData {
 	s.stateMu.RLock()
-	data := snapshotData{
+	defer s.stateMu.RUnlock()
+	return snapshotData{
 		Chunks:        s.chunks,
 		Flags:         s.flags,
 		Scores:        s.scores,
@@ -429,7 +430,10 @@ func (s *Server) saveSnapshotToS3() error {
 		NextPlayerID:  s.nextPlayerID,
 		SessionTokens: s.sessionTokens,
 	}
-	s.stateMu.RUnlock()
+}
+
+func (s *Server) saveSnapshotToS3() error {
+	data := s.captureSnapshotData()
 
 	// Create compressed snapshot in memory
 	var buf strings.Builder
@@ -466,18 +470,7 @@ func (s *Server) saveSnapshotToDisk() error {
 		return err
 	}
 
-	s.stateMu.RLock()
-	data := snapshotData{
-		Chunks:        s.chunks,
-		Flags:         s.flags,
-		Scores:        s.scores,
-		PlayerNames:   s.playerNames,
-		PlayerFlags:   s.playerFlags,
-		PlayerViews:   s.playerViews,
-		NextPlayerID:  s.nextPlayerID,
-		SessionTokens: s.sessionTokens,
-	}
-	s.stateMu.RUnlock()
+	data := s.captureSnapshotData()
 
 	tmpPath := filepath.Join(s.dataDir, snapshotTmpName)
 	f, err := os.Create(tmpPath)
@@ -508,94 +501,10 @@ func (s *Server) saveSnapshotToDisk() error {
 	return nil
 }
 
-func (s *Server) loadSnapshotFromS3() error {
-	result, err := s.s3Client.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String(s.bucketName),
-		Key:    aws.String(snapshotKey),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to download snapshot from S3: %v", err)
-	}
-	defer result.Body.Close()
-
-	gz, err := gzip.NewReader(result.Body)
-	if err != nil {
-		return fmt.Errorf("failed to create gzip reader: %v", err)
-	}
-	defer gz.Close()
-
-	dec := gob.NewDecoder(gz)
-	var data snapshotData
-	if err := dec.Decode(&data); err != nil {
-		return fmt.Errorf("failed to decode snapshot: %v", err)
-	}
-
+func (s *Server) restoreSnapshotData(data snapshotData) {
 	s.stateMu.Lock()
-	s.chunks = data.Chunks
-	if data.Flags != nil {
-		s.flags = data.Flags
-	} else {
-		s.flags = make(map[ChunkID]map[uint32]Flag)
-	}
-	s.scores = data.Scores
-	if data.PlayerNames != nil {
-		s.playerNames = data.PlayerNames
-	} else {
-		s.playerNames = make(map[uint32]string)
-	}
-	if data.PlayerFlags != nil {
-		s.playerFlags = data.PlayerFlags
-	} else {
-		s.playerFlags = make(map[uint32]uint32)
-	}
-	if data.PlayerViews != nil {
-		s.playerViews = data.PlayerViews
-	} else {
-		s.playerViews = make(map[uint32]PlayerView)
-	}
-	if data.NextPlayerID != 0 {
-		s.nextPlayerID = data.NextPlayerID
-	}
-	if data.SessionTokens != nil {
-		s.sessionTokens = data.SessionTokens
-	} else if s.sessionTokens == nil {
-		s.sessionTokens = make(map[string]uint32)
-	}
-	// Rebuild fast name lookup index
-	idx := make(map[string]uint32, len(s.playerNames))
-	for pid, name := range s.playerNames {
-		if name != "" {
-			idx[name] = pid
-		}
-	}
-	s.nameToPlayerID = idx
-	s.lbDirty = true // force rebuild of leaderboard on first tick
-	s.stateMu.Unlock()
-	return nil
-}
+	defer s.stateMu.Unlock()
 
-func (s *Server) loadSnapshotFromDisk() error {
-	path := filepath.Join(s.dataDir, snapshotFileName)
-	fmt.Println("Loading snapshot from disk:", path)
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
-
-	dec := gob.NewDecoder(gz)
-	var data snapshotData
-	if err := dec.Decode(&data); err != nil {
-		return err
-	}
-
-	s.stateMu.Lock()
 	s.chunks = data.Chunks
 	if data.Flags != nil {
 		s.flags = data.Flags
@@ -635,10 +544,57 @@ func (s *Server) loadSnapshotFromDisk() error {
 	}
 	s.nameToPlayerID = idx
 	s.lbDirty = true
-	numChunks := len(s.chunks)
-	s.stateMu.Unlock()
+}
 
-	log.Printf("[snapshot] loaded from disk: %d chunks", numChunks)
+func (s *Server) loadSnapshotFromS3() error {
+	result, err := s.s3Client.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(snapshotKey),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to download snapshot from S3: %v", err)
+	}
+	defer result.Body.Close()
+
+	gz, err := gzip.NewReader(result.Body)
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %v", err)
+	}
+	defer gz.Close()
+
+	dec := gob.NewDecoder(gz)
+	var data snapshotData
+	if err := dec.Decode(&data); err != nil {
+		return fmt.Errorf("failed to decode snapshot: %v", err)
+	}
+
+	s.restoreSnapshotData(data)
+	return nil
+}
+
+func (s *Server) loadSnapshotFromDisk() error {
+	path := filepath.Join(s.dataDir, snapshotFileName)
+	fmt.Println("Loading snapshot from disk:", path)
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+
+	dec := gob.NewDecoder(gz)
+	var data snapshotData
+	if err := dec.Decode(&data); err != nil {
+		return err
+	}
+
+	s.restoreSnapshotData(data)
+	log.Printf("[snapshot] loaded from disk: %d chunks", len(s.chunks))
 	return nil
 }
 

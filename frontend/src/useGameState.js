@@ -1085,22 +1085,9 @@ export const useGameState = () => {
             }
         } else if (type === "leaderboard") {
             const entries = Array.isArray(data.entries) ? data.entries : [];
-            // De-duplicate by name on the client defensively; keep the highest score
-            const byName = new Map();
-            for (const e of entries) {
-              const prev = byName.get(e.name);
-              if (!prev || (e.score ?? 0) > (prev.score ?? 0)) byName.set(e.name, e);
-            }
-            // Use stable sorting to match server-side behavior
-            const uniqueEntries = Array.from(byName.values()).sort((a, b) => {
-                if (a.score !== b.score) {
-                    return b.score - a.score;
-                }
-                return a.name.localeCompare(b.name);
-            });
-            setLeaderboard(uniqueEntries);
+            setLeaderboard(entries);
             playerFlagsRef.current.clear();
-            for (const entry of uniqueEntries) {
+            for (const entry of entries) {
                 playerFlagsRef.current.set(entry.name, entry.flagID);
             }
         }
