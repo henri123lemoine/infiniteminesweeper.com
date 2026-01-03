@@ -5,7 +5,6 @@
 MODE          ?= development
 ENVFILE        = .env.$(MODE)
 SHELL          := bash
-NVM_ENV        = . ~/.nvm/nvm.sh && nvm use --silent
 
 FRONTEND_SRCS  := $(shell find frontend/src -type f)
 ENVFILE_PATH   := $(wildcard $(ENVFILE))
@@ -50,13 +49,13 @@ frontend/src/gen/messages_pb.js: proto/messages.proto
 	npx pbjs -t static-module -w es6 -o $@ $<
 
 deps:
-	cd frontend && $(NVM_ENV) && npm ci
+	cd frontend && npm ci
 	go mod tidy
 
 # front-end bundle
 frontend-build: spritesheet $(FRONTEND_SRCS) frontend/vite.config.mjs $(ENVFILE_PATH) | proto deps
 	@echo "Building front-end (Vite) for $(MODE)"
-	cd frontend && $(NVM_ENV) && npm run build:$(MODE)
+	cd frontend && npm run build:$(MODE)
 
 # back-end binary
 go-build: proto frontend-build
