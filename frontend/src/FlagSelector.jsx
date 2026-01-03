@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { initSprites, getFlagIdsSortedByCost, drawSprite, frames } from "./sprites/index.js";
+import {
+  initSprites,
+  getFlagIdsSortedByCost,
+  drawSprite,
+  frames,
+} from "./sprites/index.js";
 
 export default function FlagSelector({ value, onChange }) {
   const [ready, setReady] = useState(false);
@@ -11,7 +16,7 @@ export default function FlagSelector({ value, onChange }) {
 
   // Get sorted flag IDs from centralized sprite system
   const sortedKeys = useMemo(() => {
-    return getFlagIdsSortedByCost().map(id => String(id));
+    return getFlagIdsSortedByCost().map((id) => String(id));
   }, []);
 
   if (!ready) return <p>Loading flags...</p>;
@@ -42,9 +47,7 @@ export default function FlagSelector({ value, onChange }) {
           alignItems: "center",
           justifyContent: "center",
           border:
-            value === idNum
-              ? "2px solid #4CAF50"
-              : "1px solid rgba(0,0,0,.2)",
+            value === idNum ? "2px solid #4CAF50" : "1px solid rgba(0,0,0,.2)",
           borderRadius: 6,
           background: "white",
           cursor: "pointer",

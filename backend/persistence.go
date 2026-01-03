@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-    "math/bits"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,10 +40,10 @@ const (
 
 // WAL entry types
 type WALEntry struct {
-    Timestamp time.Time `json:"timestamp"`
-    Type      string    `json:"type"` // "reveal", "flag", or "score_update"
-    Data      []byte    `json:"data"` // JSON encoded data
-    Sequence  uint64    `json:"sequence"`
+	Timestamp time.Time `json:"timestamp"`
+	Type      string    `json:"type"` // "reveal", "flag", or "score_update"
+	Data      []byte    `json:"data"` // JSON encoded data
+	Sequence  uint64    `json:"sequence"`
 }
 
 // snapshotData is what actually gets serialized. Gob can handle maps with
@@ -268,30 +268,30 @@ func (s *Server) replayWAL() error {
 
 	log.Printf("[wal] replaying %d WAL entries", len(entries))
 
-    for _, entry := range entries {
-        switch entry.Type {
-        case "reveal":
-            var revealData struct {
-                ChunkID ChunkID  `json:"chunk_id"`
-                Cells   []uint32 `json:"cells"`
-            }
-            if err := json.Unmarshal(entry.Data, &revealData); err != nil {
-                log.Printf("[wal] failed to unmarshal reveal: %v", err)
-                continue
-            }
-            s.replayReveal(revealData.ChunkID, revealData.Cells)
+	for _, entry := range entries {
+		switch entry.Type {
+		case "reveal":
+			var revealData struct {
+				ChunkID ChunkID  `json:"chunk_id"`
+				Cells   []uint32 `json:"cells"`
+			}
+			if err := json.Unmarshal(entry.Data, &revealData); err != nil {
+				log.Printf("[wal] failed to unmarshal reveal: %v", err)
+				continue
+			}
+			s.replayReveal(revealData.ChunkID, revealData.Cells)
 
-        case "flag":
-            var flagData struct {
-                ChunkID ChunkID `json:"chunk_id"`
-                Cell    uint32  `json:"cell"`
-                FlagID  uint32  `json:"flag_id"`
-            }
-            if err := json.Unmarshal(entry.Data, &flagData); err != nil {
-                log.Printf("[wal] failed to unmarshal flag: %v", err)
-                continue
-            }
-            s.replayFlag(flagData.ChunkID, flagData.Cell, flagData.FlagID)
+		case "flag":
+			var flagData struct {
+				ChunkID ChunkID `json:"chunk_id"`
+				Cell    uint32  `json:"cell"`
+				FlagID  uint32  `json:"flag_id"`
+			}
+			if err := json.Unmarshal(entry.Data, &flagData); err != nil {
+				log.Printf("[wal] failed to unmarshal flag: %v", err)
+				continue
+			}
+			s.replayFlag(flagData.ChunkID, flagData.Cell, flagData.FlagID)
 
 		case "score_update":
 			var scoreData struct {
@@ -311,25 +311,25 @@ func (s *Server) replayWAL() error {
 		}
 	}
 
-    return nil
+	return nil
 }
 
 func (s *Server) replayReveal(chunkID ChunkID, cells []uint32) {
-    s.stateMu.Lock()
-    defer s.stateMu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 
-    if s.chunks[chunkID] == nil {
-        s.chunks[chunkID] = &ChunkBits{}
-    }
+	if s.chunks[chunkID] == nil {
+		s.chunks[chunkID] = &ChunkBits{}
+	}
 
-    for _, cell := range cells {
-        bitIndex := cell
-        mask := uint64(1) << (bitIndex % 64)
-        if (s.chunks[chunkID][bitIndex/64] & mask) == 0 {
-            s.chunks[chunkID][bitIndex/64] |= mask
-            s.totalRevealed++
-        }
-    }
+	for _, cell := range cells {
+		bitIndex := cell
+		mask := uint64(1) << (bitIndex % 64)
+		if (s.chunks[chunkID][bitIndex/64] & mask) == 0 {
+			s.chunks[chunkID][bitIndex/64] |= mask
+			s.totalRevealed++
+		}
+	}
 }
 
 func (s *Server) replayFlag(chunkID ChunkID, cell uint32, flagID uint32) {
@@ -357,60 +357,60 @@ func (s *Server) initPersistence() {
 			log.Fatalf("Failed to initialize AWS: %v", err)
 		}
 
-        if err := s.loadSnapshotFromS3(); err != nil {
-            log.Printf("[snapshot] no previous snapshot loaded from S3: %v (starting fresh)", err)
-            // Even without a snapshot, attempt to recover state from WAL
-            if err := s.replayWAL(); err != nil {
-                log.Printf("[wal] failed to replay WAL: %v", err)
-            } else {
-                log.Printf("[wal] successfully replayed WAL")
-                // After successful WAL replay, persist a snapshot so one always exists
-                if err := s.saveSnapshotToS3(); err != nil {
-                    log.Printf("[snapshot] failed to save initial snapshot to S3: %v", err)
-                } else {
-                    log.Printf("[snapshot] wrote initial snapshot to S3 after WAL replay")
-                }
-                s.logStartupSummary("boot (S3, WAL only)")
-            }
-        } else {
-            log.Printf("[snapshot] loaded snapshot from S3")
+		if err := s.loadSnapshotFromS3(); err != nil {
+			log.Printf("[snapshot] no previous snapshot loaded from S3: %v (starting fresh)", err)
+			// Even without a snapshot, attempt to recover state from WAL
+			if err := s.replayWAL(); err != nil {
+				log.Printf("[wal] failed to replay WAL: %v", err)
+			} else {
+				log.Printf("[wal] successfully replayed WAL")
+				// After successful WAL replay, persist a snapshot so one always exists
+				if err := s.saveSnapshotToS3(); err != nil {
+					log.Printf("[snapshot] failed to save initial snapshot to S3: %v", err)
+				} else {
+					log.Printf("[snapshot] wrote initial snapshot to S3 after WAL replay")
+				}
+				s.logStartupSummary("boot (S3, WAL only)")
+			}
+		} else {
+			log.Printf("[snapshot] loaded snapshot from S3")
 
-            if err := s.replayWAL(); err != nil {
-                log.Printf("[wal] failed to replay WAL: %v", err)
-            } else {
-                log.Printf("[wal] successfully replayed WAL")
-                s.logStartupSummary("boot (S3, snapshot + WAL)")
-            }
-        }
+			if err := s.replayWAL(); err != nil {
+				log.Printf("[wal] failed to replay WAL: %v", err)
+			} else {
+				log.Printf("[wal] successfully replayed WAL")
+				s.logStartupSummary("boot (S3, snapshot + WAL)")
+			}
+		}
 	} else {
 		if dir := os.Getenv("DATA_DIR"); dir != "" {
 			s.dataDir = dir
 		}
-        if err := s.loadSnapshotFromDisk(); err != nil {
-            log.Printf("[snapshot] no previous snapshot loaded from disk: %v (starting fresh)", err)
-            // Even without a snapshot, attempt to recover state from WAL
-            if err := s.replayWAL(); err != nil {
-                log.Printf("[wal] failed to replay WAL: %v", err)
-            } else {
-                log.Printf("[wal] successfully replayed WAL")
-                // After successful WAL replay, persist a snapshot so one always exists
-                if err := s.saveSnapshotToDisk(); err != nil {
-                    log.Printf("[snapshot] failed to save initial snapshot to disk: %v", err)
-                } else {
-                    log.Printf("[snapshot] wrote initial snapshot to disk after WAL replay")
-                }
-                s.logStartupSummary("boot (disk, WAL only)")
-            }
-        } else {
-            log.Printf("[snapshot] loaded snapshot from disk")
+		if err := s.loadSnapshotFromDisk(); err != nil {
+			log.Printf("[snapshot] no previous snapshot loaded from disk: %v (starting fresh)", err)
+			// Even without a snapshot, attempt to recover state from WAL
+			if err := s.replayWAL(); err != nil {
+				log.Printf("[wal] failed to replay WAL: %v", err)
+			} else {
+				log.Printf("[wal] successfully replayed WAL")
+				// After successful WAL replay, persist a snapshot so one always exists
+				if err := s.saveSnapshotToDisk(); err != nil {
+					log.Printf("[snapshot] failed to save initial snapshot to disk: %v", err)
+				} else {
+					log.Printf("[snapshot] wrote initial snapshot to disk after WAL replay")
+				}
+				s.logStartupSummary("boot (disk, WAL only)")
+			}
+		} else {
+			log.Printf("[snapshot] loaded snapshot from disk")
 
-            if err := s.replayWAL(); err != nil {
-                log.Printf("[wal] failed to replay WAL: %v", err)
-            } else {
-                log.Printf("[wal] successfully replayed WAL")
-                s.logStartupSummary("boot (disk, snapshot + WAL)")
-            }
-        }
+			if err := s.replayWAL(); err != nil {
+				log.Printf("[wal] failed to replay WAL: %v", err)
+			} else {
+				log.Printf("[wal] successfully replayed WAL")
+				s.logStartupSummary("boot (disk, snapshot + WAL)")
+			}
+		}
 	}
 
 	go s.periodicSnapshotLoop() // fire‑and‑forget
@@ -620,24 +620,24 @@ func (s *Server) periodicSnapshotLoop() {
 
 // logStartupSummary prints a one-line summary of recovered state after boot.
 func (s *Server) logStartupSummary(context string) {
-    s.stateMu.RLock()
-    // Count chunks
-    chunkCount := len(s.chunks)
-    // Count revealed cells by popcount across all chunk bitmaps
-    var revealed uint64
-    for _, cb := range s.chunks {
-        for _, word := range *cb {
-            revealed += uint64(bits.OnesCount64(word))
-        }
-    }
-    // Count flags across all chunks
-    var flagsTotal int
-    for _, fm := range s.flags {
-        flagsTotal += len(fm)
-    }
-    players := len(s.scores)
-    walSeq := s.walSeq
-    s.stateMu.RUnlock()
+	s.stateMu.RLock()
+	// Count chunks
+	chunkCount := len(s.chunks)
+	// Count revealed cells by popcount across all chunk bitmaps
+	var revealed uint64
+	for _, cb := range s.chunks {
+		for _, word := range *cb {
+			revealed += uint64(bits.OnesCount64(word))
+		}
+	}
+	// Count flags across all chunks
+	var flagsTotal int
+	for _, fm := range s.flags {
+		flagsTotal += len(fm)
+	}
+	players := len(s.scores)
+	walSeq := s.walSeq
+	s.stateMu.RUnlock()
 
-    log.Printf("[startup] %s: chunks=%d revealed=%d flags=%d players=%d walSeq=%d", context, chunkCount, revealed, flagsTotal, players, walSeq)
+	log.Printf("[startup] %s: chunks=%d revealed=%d flags=%d players=%d walSeq=%d", context, chunkCount, revealed, flagsTotal, players, walSeq)
 }

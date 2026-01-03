@@ -98,12 +98,14 @@ function App() {
         });
       }
     },
-    [commitViewRef],
+    [commitViewRef]
   );
   const [zoom, setZoom] = useState(initialZoom);
   const [mainViewMoveToken, setMainViewMoveToken] = useState(0);
-  const bumpMainViewMove = useCallback(() => setMainViewMoveToken((t) => t + 1), []);
-
+  const bumpMainViewMove = useCallback(
+    () => setMainViewMoveToken((t) => t + 1),
+    []
+  );
 
   // Rendering optimization refs
   const lastRenderTime = useRef(0);
@@ -207,7 +209,7 @@ function App() {
 
       return { x: worldX, y: worldY };
     },
-    [CELL_SIZE],
+    [CELL_SIZE]
   );
 
   // Add getNumberColor for Minesweeper number coloring
@@ -268,40 +270,58 @@ function App() {
     const z = zoomRef.current;
     const worldWidthCells = Math.ceil(width / z / CELL_SIZE);
     const worldHeightCells = Math.ceil(height / z / CELL_SIZE);
-    const centerWorldX = Math.floor((viewRef.current.x + (width / z) / 2) / CELL_SIZE);
-    const centerWorldY = Math.floor((viewRef.current.y + (height / z) / 2) / CELL_SIZE);
+    const centerWorldX = Math.floor(
+      (viewRef.current.x + width / z / 2) / CELL_SIZE
+    );
+    const centerWorldY = Math.floor(
+      (viewRef.current.y + height / z / 2) / CELL_SIZE
+    );
     return { worldWidthCells, worldHeightCells, centerWorldX, centerWorldY };
   }, [CELL_SIZE]);
 
   // Send authoritative viewport update to the server (chunks for gameplay)
   const sendViewportUpdate = useCallback(() => {
-    if (!connected && typeof sendViewUpdateRef?.current !== 'function') return;
+    if (!connected && typeof sendViewUpdateRef?.current !== "function") return;
     requestAnimationFrame(() => {
-      const { worldWidthCells, worldHeightCells, centerWorldX, centerWorldY } = getViewportInfo();
+      const { worldWidthCells, worldHeightCells, centerWorldX, centerWorldY } =
+        getViewportInfo();
       const { chunkX, chunkY, cell } = worldToChunk(centerWorldX, centerWorldY);
-      if (typeof sendViewUpdateRef?.current === 'function') {
-        sendViewUpdateRef.current(chunkX, chunkY, cell, worldWidthCells, worldHeightCells);
+      if (typeof sendViewUpdateRef?.current === "function") {
+        sendViewUpdateRef.current(
+          chunkX,
+          chunkY,
+          cell,
+          worldWidthCells,
+          worldHeightCells
+        );
       }
     });
   }, [connected, worldToChunk, getViewportInfo]);
 
   // Send minimap streaming subscriptions matching the current viewport
   const sendMinimapViewportUpdate = useCallback(() => {
-    if (typeof updateMinimapSubscriptions !== 'function') return;
+    if (typeof updateMinimapSubscriptions !== "function") return;
     requestAnimationFrame(() => {
-      const { worldWidthCells, worldHeightCells, centerWorldX, centerWorldY } = getViewportInfo();
-      updateMinimapSubscriptions(centerWorldX, centerWorldY, worldWidthCells, worldHeightCells, 2, 'viewport');
+      const { worldWidthCells, worldHeightCells, centerWorldX, centerWorldY } =
+        getViewportInfo();
+      updateMinimapSubscriptions(
+        centerWorldX,
+        centerWorldY,
+        worldWidthCells,
+        worldHeightCells,
+        2,
+        "viewport"
+      );
     });
   }, [getViewportInfo, updateMinimapSubscriptions]);
-
-
 
   // Keyboard panning with Arrow keys (and optional WASD)
   useEffect(() => {
     if (!connected) return;
     const handleKeyDown = (e) => {
       // Ignore if typing into inputs or contentEditable elements
-      const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : "";
+      const tag =
+        e.target && e.target.tagName ? e.target.tagName.toLowerCase() : "";
       if (tag === "input" || tag === "textarea" || tag === "select") return;
       if (e.target && e.target.isContentEditable) return;
 
@@ -461,25 +481,36 @@ function App() {
       sendMinimapViewportUpdate();
     }, 500);
     return () => clearInterval(id);
-  }, [username, showHomeOverlay, sendViewportUpdate, sendMinimapViewportUpdate, seedCache]);
+  }, [
+    username,
+    showHomeOverlay,
+    sendViewportUpdate,
+    sendMinimapViewportUpdate,
+    seedCache,
+  ]);
 
   // Clear viewport-based minimap subscriptions on unmount
   useEffect(() => {
     return () => {
-      if (typeof clearMinimapSubscriptionsFor === 'function') {
-        try { clearMinimapSubscriptionsFor('viewport'); } catch { }
+      if (typeof clearMinimapSubscriptionsFor === "function") {
+        try {
+          clearMinimapSubscriptionsFor("viewport");
+        } catch {}
       }
     };
   }, [clearMinimapSubscriptionsFor]);
 
   // Handle page visibility changes for mobile reconnection
   useEffect(() => {
-    if (typeof handleVisibilityChange === 'function') {
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-      window.addEventListener('focus', handleVisibilityChange);
+    if (typeof handleVisibilityChange === "function") {
+      document.addEventListener("visibilitychange", handleVisibilityChange);
+      window.addEventListener("focus", handleVisibilityChange);
       return () => {
-        document.removeEventListener('visibilitychange', handleVisibilityChange);
-        window.removeEventListener('focus', handleVisibilityChange);
+        document.removeEventListener(
+          "visibilitychange",
+          handleVisibilityChange
+        );
+        window.removeEventListener("focus", handleVisibilityChange);
       };
     }
   }, [handleVisibilityChange]);
@@ -509,23 +540,32 @@ function App() {
   }, [render, tick, viewX, viewY, zoom]);
 
   // Center camera helper
-  const centerCameraOnWorld = useCallback((worldX, worldY) => {
-    const container = containerRef.current;
-    if (!container) return;
-    const centerX = container.clientWidth / 2;
-    const centerY = container.clientHeight / 2;
-    const z = zoomRef.current;
-    const newViewX = worldX * CELL_SIZE - centerX / z;
-    const newViewY = worldY * CELL_SIZE - centerY / z;
-    scheduleViewUpdate(newViewX, newViewY);
-  }, [CELL_SIZE, scheduleViewUpdate]);
+  const centerCameraOnWorld = useCallback(
+    (worldX, worldY) => {
+      const container = containerRef.current;
+      if (!container) return;
+      const centerX = container.clientWidth / 2;
+      const centerY = container.clientHeight / 2;
+      const z = zoomRef.current;
+      const newViewX = worldX * CELL_SIZE - centerX / z;
+      const newViewY = worldY * CELL_SIZE - centerY / z;
+      scheduleViewUpdate(newViewX, newViewY);
+    },
+    [CELL_SIZE, scheduleViewUpdate]
+  );
 
   // Pan/zoom/drag handler using the unified hook
   const { bind } = usePinchPanZoom({
     elementRef: containerRef,
     getPointToWorld: (screenX, screenY) => {
       const world = screenToWorld(screenX, screenY);
-      return { x: world.x, y: world.y, viewX: viewRef.current.x, viewY: viewRef.current.y, zoom: zoomRef.current };
+      return {
+        x: world.x,
+        y: world.y,
+        viewX: viewRef.current.x,
+        viewY: viewRef.current.y,
+        zoom: zoomRef.current,
+      };
     },
     onPan: (deltaX, deltaY, context) => {
       if (!connected) return;
@@ -553,7 +593,10 @@ function App() {
       } else {
         // Wheel zoom
         const prevZoom = zoomRef.current;
-        const targetZoom = Math.min(Math.max(prevZoom * zoomFactor, MIN_ZOOM), MAX_ZOOM);
+        const targetZoom = Math.min(
+          Math.max(prevZoom * zoomFactor, MIN_ZOOM),
+          MAX_ZOOM
+        );
 
         const container = containerRef.current;
         if (!container) return;
@@ -596,19 +639,19 @@ function App() {
     },
     minZoom: 0.1,
     maxZoom: 5,
-    dragDelayMs: 150
+    dragDelayMs: 150,
   });
 
   // Fetch hotspot metadata (no auto-centering; user must drag to move the camera)
   useEffect(() => {
     let canceled = false;
     fetch("/hotspot")
-      .then(r => (r.ok ? r.json() : null))
-      .then(data => {
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
         if (canceled || !data) return;
         setHotspotInfo(data);
       })
-      .catch(() => { });
+      .catch(() => {});
     return () => {
       canceled = true;
     };
@@ -665,20 +708,29 @@ function App() {
   const containerWidth = container.clientWidth;
   const containerHeight = container.clientHeight;
   const debugZoom = zoomRef.current;
-  const centerWorldX = Math.floor((viewX + containerWidth / 2 / debugZoom) / CELL_SIZE);
-  const centerWorldY = Math.floor((viewY + containerHeight / 2 / debugZoom) / CELL_SIZE);
-  const { chunkX: centerChunkX, chunkY: centerChunkY, cell: centerCell } = worldToChunk(
-    centerWorldX,
-    centerWorldY,
+  const centerWorldX = Math.floor(
+    (viewX + containerWidth / 2 / debugZoom) / CELL_SIZE
   );
-  const centerDensity = densityCache.current.get(`${centerChunkX},${centerChunkY}`);
+  const centerWorldY = Math.floor(
+    (viewY + containerHeight / 2 / debugZoom) / CELL_SIZE
+  );
+  const {
+    chunkX: centerChunkX,
+    chunkY: centerChunkY,
+    cell: centerCell,
+  } = worldToChunk(centerWorldX, centerWorldY);
+  const centerDensity = densityCache.current.get(
+    `${centerChunkX},${centerChunkY}`
+  );
 
   const handleJoinGame = useCallback(() => {
     setValidationError("");
     const trimmedName = (nameInput || "").trim();
     const valid = /^[A-Za-z0-9 ._'-]{1,30}$/.test(trimmedName);
     if (!valid) {
-      setValidationError("Enter 1-30 characters: letters, numbers, spaces, _ . ' or -");
+      setValidationError(
+        "Enter 1-30 characters: letters, numbers, spaces, _ . ' or -"
+      );
       return;
     }
 
@@ -706,19 +758,30 @@ function App() {
             // Suggest a contrasting flag based on visible flags near center
             try {
               const z = zoomRef.current;
-              const centerX = Math.floor((viewRef.current.x + (containerRef.current?.clientWidth || 0) / 2 / z) / CELL_SIZE);
-              const centerY = Math.floor((viewRef.current.y + (containerRef.current?.clientHeight || 0) / 2 / z) / CELL_SIZE);
+              const centerX = Math.floor(
+                (viewRef.current.x +
+                  (containerRef.current?.clientWidth || 0) / 2 / z) /
+                  CELL_SIZE
+              );
+              const centerY = Math.floor(
+                (viewRef.current.y +
+                  (containerRef.current?.clientHeight || 0) / 2 / z) /
+                  CELL_SIZE
+              );
               const R = 8; // radius in cells to scan for flags
               const nearby = new Set();
               for (let dy = -R; dy <= R; dy++) {
                 for (let dx = -R; dx <= R; dx++) {
-                  const id = flaggedCellsRef.current.get(`${centerX + dx},${centerY + dy}`);
+                  const id = flaggedCellsRef.current.get(
+                    `${centerX + dx},${centerY + dy}`
+                  );
                   if (Number.isFinite(id)) nearby.add(id);
                 }
               }
-              const pick = FLAG_IDS.find(id => !nearby.has(id)) ?? FLAG_IDS[0];
+              const pick =
+                FLAG_IDS.find((id) => !nearby.has(id)) ?? FLAG_IDS[0];
               if (Number.isFinite(pick)) setFlagID(pick);
-            } catch { }
+            } catch {}
           }}
           style={{
             position: "fixed",
@@ -739,11 +802,21 @@ function App() {
       )}
       {showMinimapOverlay && (
         <div
-          style={{ position: "fixed", inset: 0, background: "#111", zIndex: 30 }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "#111",
+            zIndex: 30,
+          }}
           onDoubleClick={() => setShowMinimapOverlay(false)}
         >
           <div style={{ position: "absolute", top: 8, right: 8, zIndex: 31 }}>
-            <button onClick={() => setShowMinimapOverlay(false)} style={{ padding: "6px 10px" }}>Close</button>
+            <button
+              onClick={() => setShowMinimapOverlay(false)}
+              style={{ padding: "6px 10px" }}
+            >
+              Close
+            </button>
           </div>
           <Minimap
             mode="overlay"
@@ -809,16 +882,25 @@ function App() {
           >
             <h1 style={{ marginTop: 0 }}>Infinite Minesweeper</h1>
             <p style={{ margin: "8px 0 16px", color: "#555" }}>
-              Discover an endless world together. You are currently spectating live explorers.
+              Discover an endless world together. You are currently spectating
+              live explorers.
               {hotspotInfo && hotspotInfo.count > 0 && (
                 <>
-                  {" "}There are <b>{hotspotInfo.count}</b> players near the hotspot.
+                  {" "}
+                  There are <b>{hotspotInfo.count}</b> players near the hotspot.
                 </>
               )}
             </p>
 
             {/* Tabs */}
-            <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 16 }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "center",
+                marginBottom: 16,
+              }}
+            >
               {[
                 { k: "play", label: "Play" },
                 { k: "leaderboard", label: "Leaderboard" },
@@ -829,14 +911,21 @@ function App() {
                   key={t.k}
                   onClick={() => {
                     setActiveTab(t.k);
-                    if (t.k === "leaderboard" && fullLeaderboard == null && !lbLoading) {
+                    if (
+                      t.k === "leaderboard" &&
+                      fullLeaderboard == null &&
+                      !lbLoading
+                    ) {
                       fetchHomeLeaderboard();
                     }
                   }}
                   style={{
                     padding: "6px 10px",
                     borderRadius: 6,
-                    border: activeTab === t.k ? "2px solid #1976d2" : "1px solid #ccc",
+                    border:
+                      activeTab === t.k
+                        ? "2px solid #1976d2"
+                        : "1px solid #ccc",
                     background: activeTab === t.k ? "#e3f2fd" : "#fafafa",
                     cursor: "pointer",
                   }}
@@ -848,7 +937,9 @@ function App() {
 
             {activeTab === "play" && (
               <>
-                <h3>{connected ? "Change your name" : "Choose a name to join"}</h3>
+                <h3>
+                  {connected ? "Change your name" : "Choose a name to join"}
+                </h3>
                 <input
                   value={nameInput}
                   onChange={(e) => setNameInput(e.target.value)}
@@ -879,7 +970,9 @@ function App() {
                   {connected ? "Update Name" : "Join Game"}
                 </button>
                 <div style={{ margin: "15px 0" }}>
-                  <div style={{ marginBottom: "10px", fontWeight: "bold" }}>Choose your flag:</div>
+                  <div style={{ marginBottom: "10px", fontWeight: "bold" }}>
+                    Choose your flag:
+                  </div>
                   <FlagSelector
                     value={flagID}
                     onChange={(id) => {
@@ -893,7 +986,11 @@ function App() {
                   />
                 </div>
                 {connected && (
-                  <div style={{ fontSize: 12, color: "#777", marginBottom: 10 }}>Score: {playerScore}</div>
+                  <div
+                    style={{ fontSize: 12, color: "#777", marginBottom: 10 }}
+                  >
+                    Score: {playerScore}
+                  </div>
                 )}
                 {(validationError || joinError || updateError) && (
                   <div style={{ color: "#c00", marginTop: 8 }}>
@@ -904,14 +1001,31 @@ function App() {
             )}
 
             {activeTab === "leaderboard" && (
-              <div style={{ textAlign: "left", maxWidth: 720, margin: "0 auto" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <div
+                style={{ textAlign: "left", maxWidth: 720, margin: "0 auto" }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginBottom: 8,
+                  }}
+                >
                   <div style={{ fontSize: 12, color: "#666" }}>
-                    {Array.isArray(fullLeaderboard) && fullLeaderboard.length > 0 && (
-                      <>Players: {fullLeaderboard.length}</>
-                    )}
+                    {Array.isArray(fullLeaderboard) &&
+                      fullLeaderboard.length > 0 && (
+                        <>Players: {fullLeaderboard.length}</>
+                      )}
                   </div>
-                  <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                  <label
+                    style={{
+                      fontSize: 12,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
                     <input
                       type="checkbox"
                       checked={lbFollowMe}
@@ -920,62 +1034,81 @@ function App() {
                     Follow me
                   </label>
                 </div>
-                {lbLoading && fullLeaderboard == null && <p>Loading leaderboard…</p>}
-                {!lbLoading && fullLeaderboard && fullLeaderboard.length === 0 && <p>No players yet.</p>}
-                {!lbLoading && Array.isArray(fullLeaderboard) && fullLeaderboard.length > 0 && (
-                  <ol style={{
-                    maxHeight: "60vh",
-                    overflow: "auto",
-                    paddingRight: 8,
-                    WebkitOverflowScrolling: "touch",
-                    scrollbarWidth: "thin"
-                  }}>
-                    {fullLeaderboard.map((row) => {
-                      const myName = (localStorage.getItem("username") || username || "").trim();
-                      const isMe = myName && row.name === myName;
-                      return (
-                        <li
-                          key={row.name}
-                          ref={isMe ? myLbRowRef : null}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            padding: "2px 4px",
-                            borderRadius: 4,
-                            background: isMe ? "#fff8d5" : "transparent",
-                          }}
-                        >
-                          <canvas
-                            ref={(c) => {
-                              if (!c) return;
-                              const ctx = c.getContext("2d");
-                              const cssSize = 20;
-                              const dpr = window.devicePixelRatio || 1;
-                              c.width = Math.round(cssSize * dpr);
-                              c.height = Math.round(cssSize * dpr);
-                              c.style.width = `${cssSize}px`;
-                              c.style.height = `${cssSize}px`;
-                              ctx.imageSmoothingEnabled = false;
-                              ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                              rendererRef.current.drawSprite(
-                                ctx,
-                                row.flagID ?? 0,
-                                0,
-                                0,
-                                cssSize,
-                                cssSize,
-                              );
-                            }}
-                            style={{ imageRendering: "pixelated" }}
-                          />
-                          <span style={{ flex: 1, fontWeight: isMe ? "600" : undefined }}>{row.name}</span>
-                          <b>{formatFullScore(row.score ?? 0)}</b>
-                        </li>
-                      );
-                    })}
-                  </ol>
+                {lbLoading && fullLeaderboard == null && (
+                  <p>Loading leaderboard…</p>
                 )}
+                {!lbLoading &&
+                  fullLeaderboard &&
+                  fullLeaderboard.length === 0 && <p>No players yet.</p>}
+                {!lbLoading &&
+                  Array.isArray(fullLeaderboard) &&
+                  fullLeaderboard.length > 0 && (
+                    <ol
+                      style={{
+                        maxHeight: "60vh",
+                        overflow: "auto",
+                        paddingRight: 8,
+                        WebkitOverflowScrolling: "touch",
+                        scrollbarWidth: "thin",
+                      }}
+                    >
+                      {fullLeaderboard.map((row) => {
+                        const myName = (
+                          localStorage.getItem("username") ||
+                          username ||
+                          ""
+                        ).trim();
+                        const isMe = myName && row.name === myName;
+                        return (
+                          <li
+                            key={row.name}
+                            ref={isMe ? myLbRowRef : null}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              padding: "2px 4px",
+                              borderRadius: 4,
+                              background: isMe ? "#fff8d5" : "transparent",
+                            }}
+                          >
+                            <canvas
+                              ref={(c) => {
+                                if (!c) return;
+                                const ctx = c.getContext("2d");
+                                const cssSize = 20;
+                                const dpr = window.devicePixelRatio || 1;
+                                c.width = Math.round(cssSize * dpr);
+                                c.height = Math.round(cssSize * dpr);
+                                c.style.width = `${cssSize}px`;
+                                c.style.height = `${cssSize}px`;
+                                ctx.imageSmoothingEnabled = false;
+                                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                                rendererRef.current.drawSprite(
+                                  ctx,
+                                  row.flagID ?? 0,
+                                  0,
+                                  0,
+                                  cssSize,
+                                  cssSize
+                                );
+                              }}
+                              style={{ imageRendering: "pixelated" }}
+                            />
+                            <span
+                              style={{
+                                flex: 1,
+                                fontWeight: isMe ? "600" : undefined,
+                              }}
+                            >
+                              {row.name}
+                            </span>
+                            <b>{formatFullScore(row.score ?? 0)}</b>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  )}
               </div>
             )}
 
@@ -1037,11 +1170,7 @@ function App() {
       </div>
 
       <div className="board-container">
-        <div
-          ref={containerRef}
-          className="canvas-container"
-          {...bind}
-        >
+        <div ref={containerRef} className="canvas-container" {...bind}>
           <canvas ref={canvasRef} id="game-canvas" />
 
           {scorePopups.map((p) => {
@@ -1105,7 +1234,8 @@ function App() {
               {Math.round(viewRef.current.y)})<br />
               Center: ({centerWorldX}, {centerWorldY})<br />
               Chunk: ({centerChunkX}, {centerChunkY})<br />
-              Density: {centerDensity != null ? centerDensity.toFixed(3) : "n/a"}
+              Density:{" "}
+              {centerDensity != null ? centerDensity.toFixed(3) : "n/a"}
             </div>
           )}
         </div>
@@ -1160,32 +1290,39 @@ function App() {
                       c.style.height = `${cssSize}px`;
                       ctx.imageSmoothingEnabled = false;
                       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                      rendererRef.current
-                        .drawSprite(
-                          ctx,
-                          playerFlagsRef.current.get(p.name) ?? 0,
-                          0,
-                          0,
-                          cssSize,
-                          cssSize,
-                        );
+                      rendererRef.current.drawSprite(
+                        ctx,
+                        playerFlagsRef.current.get(p.name) ?? 0,
+                        0,
+                        0,
+                        cssSize,
+                        cssSize
+                      );
                     }}
                     key={`flag-${p.name}-${playerFlagsRef.current.get(p.name) ?? 0}`}
-                    style={{ marginRight: 6, verticalAlign: "middle", imageRendering: "pixelated" }}
+                    style={{
+                      marginRight: 6,
+                      verticalAlign: "middle",
+                      imageRendering: "pixelated",
+                    }}
                   />
                   {p.name}
                 </span>
-                <span style={{ fontWeight: "bold" }}>{formatScore(p.score ?? 0)}</span>
+                <span style={{ fontWeight: "bold" }}>
+                  {formatScore(p.score ?? 0)}
+                </span>
               </li>
             ))}
             {userRank > 10 && (
               <>
-                <li style={{
-                  borderTop: "1px solid #ccc",
-                  marginTop: 4,
-                  paddingTop: 4,
-                  marginBottom: 2
-                }}>
+                <li
+                  style={{
+                    borderTop: "1px solid #ccc",
+                    marginTop: 4,
+                    paddingTop: 4,
+                    marginBottom: 2,
+                  }}
+                >
                   <span style={{ fontSize: "12px", color: "#666" }}>
                     You: #{userRank} ({formatScore(playerScore)})
                   </span>

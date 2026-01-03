@@ -190,11 +190,11 @@ func TestChunkGenerationPerformance(t *testing.T) {
 
 		// Make a reveal to ensure chunk is fully generated
 		client.Reveal(chunkX, chunkY, 0, uint64(i+1000))
-		
+
 		// Brief delay to allow server to process the reveal
 		time.Sleep(2 * time.Millisecond)
 	}
-	
+
 	// Allow additional time for all operations to complete
 	time.Sleep(100 * time.Millisecond)
 
@@ -372,4 +372,3 @@ func BenchmarkChunkSubscription(b *testing.B) {
 		client.Subscribe(chunkX, chunkY)
 	}
 }
-
