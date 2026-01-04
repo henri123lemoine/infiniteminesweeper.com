@@ -192,6 +192,19 @@ message SpawnHint {
   uint32 cell = 2;
 }
 
+// Position of a single player for location indicators
+message PlayerPosition {
+  uint32 playerId = 1;
+  ChunkID chunkId = 2;
+  uint32 cell = 3;
+  uint32 flagId = 4;
+}
+
+// Broadcast of nearby player positions
+message PlayerPositions {
+  repeated PlayerPosition players = 1;
+}
+
 // Chunk seed information for pre-emptive caching
 message ChunkSeed {
   ChunkID chunkId = 1;
@@ -226,6 +239,7 @@ message Msg {
     JoinAck joinAck = 19; // FSM: Response to Join
     UpdateAck updateAck = 20; // FSM: Response to UpdateProfile
     SpawnHint spawnHint = 23; // Sent to spectators on connect
+    PlayerPositions playerPositions = 24; // Nearby player locations
 
     // Minimap streaming (client -> server)
     SubscribeTiles minimapSubscribe = 12;

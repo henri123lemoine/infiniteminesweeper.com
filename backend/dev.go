@@ -166,6 +166,11 @@ func (s *Server) devStartCountingBot(cfg BotConfig) {
 			// Update focus to where we just acted
 			focusCID, focusCell = cid, cell
 			hasFocus = true
+
+			// Update playerViews so bots appear on minimap
+			s.stateMu.Lock()
+			s.playerViews[botID] = PlayerView{Chunk: cid, Cell: cell}
+			s.stateMu.Unlock()
 		}
 	}()
 }

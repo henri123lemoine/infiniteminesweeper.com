@@ -17,6 +17,7 @@ export default function Minimap({
   updateMinimapSubscriptions,
   clearMinimapSubscriptionsFor,
   minimapTilesRef,
+  activePlayersRef,
 }) {
   const canvasRef = useRef(null);
   const localContainerRef = useRef(null);
@@ -183,6 +184,20 @@ export default function Minimap({
             viewHeightCells * scale
           );
         }
+
+        // Draw red dots for nearby players
+        if (activePlayersRef?.current) {
+          ctx.fillStyle = "rgba(255, 0, 0, 0.7)";
+          for (const [, player] of activePlayersRef.current) {
+            const dotX = (player.worldX - startWorldX) * scale;
+            const dotY = (player.worldY - startWorldY) * scale;
+            if (dotX >= 0 && dotX < cssSize && dotY >= 0 && dotY < cssSize) {
+              ctx.beginPath();
+              ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+        }
       } else {
         // Overlay mode rendering
         const w = container.clientWidth;
@@ -249,6 +264,20 @@ export default function Minimap({
             ctx.strokeStyle = "rgba(0,0,0,0.9)";
             ctx.lineWidth = 2;
             ctx.strokeRect(boxLeft, boxTop, boxWidth, boxHeight);
+          }
+        }
+
+        // Draw red dots for nearby players in overlay mode
+        if (activePlayersRef?.current) {
+          ctx.fillStyle = "rgba(255, 0, 0, 0.7)";
+          for (const [, player] of activePlayersRef.current) {
+            const dotX = (player.worldX - x) * overlayZoom;
+            const dotY = (player.worldY - y) * overlayZoom;
+            if (dotX >= 0 && dotX < w && dotY >= 0 && dotY < h) {
+              ctx.beginPath();
+              ctx.arc(dotX, dotY, 4, 0, Math.PI * 2);
+              ctx.fill();
+            }
           }
         }
       }

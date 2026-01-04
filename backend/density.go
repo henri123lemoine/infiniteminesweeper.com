@@ -175,9 +175,9 @@ func (s *Server) getBombDensityMultiplier(chunkID ChunkID) float64 {
 }
 
 func (s *Server) getScoreMultiplier(chunkID ChunkID) float64 {
-    active := s.getActivePlayerMultiplier(chunkID)
-    dens := s.getBombDensityMultiplier(chunkID)
-    return active * dens
+	active := s.getActivePlayerMultiplier(chunkID)
+	dens := s.getBombDensityMultiplier(chunkID)
+	return active * dens
 }
 
 // findMostPopulatedChunk returns the chunk with the most players currently viewing it.

@@ -992,3 +992,92 @@ func (s *Server) removePlayer(p *Player) {
 
 	log.Printf("Player %d disconnected", p.ID)
 }
+
+// runPlayerPositionBroadcaster periodically sends nearby player positions to each client.
+// Runs every 500ms, sending positions of players within a 10-chunk radius.
+func (s *Server) runPlayerPositionBroadcaster() {
+	const broadcastInterval = 500 * time.Millisecond
+	const chunkRadius = 10
+
+	ticker := time.NewTicker(broadcastInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.broadcastPlayerPositions(chunkRadius)
+	}
+}
+
+// broadcastPlayerPositions sends nearby player positions to each connected client.
+func (s *Server) broadcastPlayerPositions(chunkRadius int64) {
+	// Collect all player positions under read lock
+	s.stateMu.RLock()
+	type playerPos struct {
+		id     uint32
+		view   PlayerView
+		flagID uint32
+	}
+	positions := make([]playerPos, 0, len(s.playerViews))
+	for pid, view := range s.playerViews {
+		flagID := s.playerFlags[pid]
+		positions = append(positions, playerPos{id: pid, view: view, flagID: flagID})
+	}
+	s.stateMu.RUnlock()
+
+	// For each player, find nearby players and send their positions
+	s.playersMu.RLock()
+	defer s.playersMu.RUnlock()
+
+	for _, set := range s.players {
+		for p := range set {
+			select {
+			case <-p.done:
+				continue
+			default:
+			}
+
+			// Find this player's position
+			var myView *PlayerView
+			for i := range positions {
+				if positions[i].id == p.ID {
+					myView = &positions[i].view
+					break
+				}
+			}
+			if myView == nil {
+				continue // Player has no known view position
+			}
+
+			// Collect nearby players (excluding self)
+			nearby := make([]*pb.PlayerPosition, 0)
+			for _, other := range positions {
+				if other.id == p.ID {
+					continue // Skip self
+				}
+				dx := other.view.Chunk.X - myView.Chunk.X
+				dy := other.view.Chunk.Y - myView.Chunk.Y
+				if dx < 0 {
+					dx = -dx
+				}
+				if dy < 0 {
+					dy = -dy
+				}
+				if dx <= chunkRadius && dy <= chunkRadius {
+					nearby = append(nearby, &pb.PlayerPosition{
+						PlayerId: other.id,
+						ChunkId:  &pb.ChunkID{X: other.view.Chunk.X, Y: other.view.Chunk.Y},
+						Cell:     other.view.Cell,
+						FlagId:   other.flagID,
+					})
+				}
+			}
+
+			// Send if there are any nearby players
+			if len(nearby) > 0 {
+				msg := &pb.Msg{Payload: &pb.Msg_PlayerPositions{PlayerPositions: &pb.PlayerPositions{
+					Players: nearby,
+				}}}
+				s.sendToPlayer(p.ID, mustProto(msg))
+			}
+		}
+	}
+}

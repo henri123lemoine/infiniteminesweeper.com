@@ -73,6 +73,7 @@ func main() {
 
 	go server.runLeaderboardBroadcaster()
 	go server.runMinimapBroadcaster()
+	go server.runPlayerPositionBroadcaster()
 
 	fmt.Printf("Server running at: http://%s/\n", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))

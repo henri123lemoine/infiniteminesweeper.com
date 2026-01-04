@@ -307,6 +307,7 @@ export class CanvasRenderer {
     worldToChunk,
     getNumberColor,
     flagID,
+    activePlayersRef,
   }) {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -405,6 +406,30 @@ export class CanvasRenderer {
             );
           }
         }
+      }
+
+      // Draw player icons at LOD 0
+      if (activePlayersRef?.current) {
+        ctx.save();
+        ctx.globalAlpha = 0.5;
+        const iconSize = CELL_SIZE * 0.7;
+        const offset = (CELL_SIZE - iconSize) / 2;
+        for (const [, player] of activePlayersRef.current) {
+          // Check if player is within viewport
+          if (
+            player.worldX < startWorldX - 1 ||
+            player.worldX > endWorldX + 1 ||
+            player.worldY < startWorldY - 1 ||
+            player.worldY > endWorldY + 1
+          ) {
+            continue;
+          }
+          const px = player.worldX * CELL_SIZE - viewRef.current.x + offset;
+          const py = player.worldY * CELL_SIZE - viewRef.current.y + offset;
+          // Draw the player's flag sprite
+          this.drawSprite(ctx, player.flagId || 0, px, py, iconSize, iconSize);
+        }
+        ctx.restore();
       }
       return;
     }

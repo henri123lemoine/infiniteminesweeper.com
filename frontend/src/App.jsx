@@ -59,6 +59,7 @@ function App() {
     minimapTilesRef,
     handleVisibilityChange,
     serverSpawnRef,
+    activePlayersRef,
   } = useGameState();
 
   const canvasRef = useRef(null);
@@ -260,6 +261,7 @@ function App() {
       worldToChunk,
       getNumberColor,
       flagID,
+      activePlayersRef,
     });
   }, [tick, getNumberColor, worldToChunk, flagID]);
 
@@ -846,6 +848,7 @@ function App() {
             updateMinimapSubscriptions={updateMinimapSubscriptions}
             clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
             minimapTilesRef={minimapTilesRef}
+            activePlayersRef={activePlayersRef}
           />
         </div>
       )}
@@ -1142,6 +1145,7 @@ function App() {
                   updateMinimapSubscriptions={updateMinimapSubscriptions}
                   clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
                   minimapTilesRef={minimapTilesRef}
+                  activePlayersRef={activePlayersRef}
                 />
               </div>
             )}
@@ -1284,6 +1288,7 @@ function App() {
         minimapTilesRef={minimapTilesRef}
         onOpenOverlay={() => setShowMinimapOverlay(true)}
         mainViewMoveToken={mainViewMoveToken}
+        activePlayersRef={activePlayersRef}
       />
 
       <div className="leaderboard">
