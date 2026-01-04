@@ -186,6 +186,12 @@ message UpdateAck {
   sint32 score = 5;
 }
 
+// Server hint for where to spawn/center camera
+message SpawnHint {
+  ChunkID chunkId = 1;
+  uint32 cell = 2;
+}
+
 // Chunk seed information for pre-emptive caching
 message ChunkSeed {
   ChunkID chunkId = 1;
@@ -219,6 +225,7 @@ message Msg {
     SeedResponse seedResponse = 22; // Response to SeedRequest
     JoinAck joinAck = 19; // FSM: Response to Join
     UpdateAck updateAck = 20; // FSM: Response to UpdateProfile
+    SpawnHint spawnHint = 23; // Sent to spectators on connect
 
     // Minimap streaming (client -> server)
     SubscribeTiles minimapSubscribe = 12;

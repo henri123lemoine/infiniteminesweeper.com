@@ -331,6 +331,15 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	}}}
 	s.sendToPlayer(playerID, mustProto(ackMsg))
 
+	// Send spawn hint pointing to most populated chunk
+	best := s.findMostPopulatedChunk()
+	centerCell := uint32(32 + 32*ChunkSize) // center of 64x64 chunk
+	spawnMsg := &pb.Msg{Payload: &pb.Msg_SpawnHint{SpawnHint: &pb.SpawnHint{
+		ChunkId: &pb.ChunkID{X: best.X, Y: best.Y},
+		Cell:    centerCell,
+	}}}
+	s.sendToPlayer(playerID, mustProto(spawnMsg))
+
 	// Send initial leaderboard state
 	lbBytes := s.lbProto
 	lbVer := s.lbVersion
