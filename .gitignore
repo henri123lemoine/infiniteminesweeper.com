@@ -21,7 +21,4 @@ frontend/src/gen/
 
 # Misc
 .claude
-
-# Worktrees
-worktrees/
-
+dash
