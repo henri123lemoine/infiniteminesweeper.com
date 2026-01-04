@@ -994,9 +994,8 @@ func (s *Server) removePlayer(p *Player) {
 }
 
 // runPlayerPositionBroadcaster periodically sends nearby player positions to each client.
-// Runs every 500ms, sending positions of players within a 10-chunk radius.
 func (s *Server) runPlayerPositionBroadcaster() {
-	const broadcastInterval = 500 * time.Millisecond
+	const broadcastInterval = 100 * time.Millisecond
 	const chunkRadius = 10
 
 	ticker := time.NewTicker(broadcastInterval)
@@ -1009,7 +1008,15 @@ func (s *Server) runPlayerPositionBroadcaster() {
 
 // broadcastPlayerPositions sends nearby player positions to each connected client.
 func (s *Server) broadcastPlayerPositions(chunkRadius int64) {
-	// Collect all player positions under read lock
+	// First get the set of connected player IDs
+	s.playersMu.RLock()
+	connectedIDs := make(map[uint32]bool)
+	for pid := range s.players {
+		connectedIDs[pid] = true
+	}
+	s.playersMu.RUnlock()
+
+	// Collect positions only for connected players or bots
 	s.stateMu.RLock()
 	type playerPos struct {
 		id     uint32
@@ -1018,6 +1025,10 @@ func (s *Server) broadcastPlayerPositions(chunkRadius int64) {
 	}
 	positions := make([]playerPos, 0, len(s.playerViews))
 	for pid, view := range s.playerViews {
+		// Only include if player is still connected or is a bot
+		if !connectedIDs[pid] && !s.botIDs[pid] {
+			continue
+		}
 		flagID := s.playerFlags[pid]
 		positions = append(positions, playerPos{id: pid, view: view, flagID: flagID})
 	}

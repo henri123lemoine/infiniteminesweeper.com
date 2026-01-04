@@ -183,8 +183,16 @@ func (s *Server) getScoreMultiplier(chunkID ChunkID) float64 {
 // findMostPopulatedChunk returns the chunk with the most players currently viewing it.
 // Falls back to (0,0) if no players are online. Caller must hold s.stateMu (at least RLock).
 func (s *Server) findMostPopulatedChunk() ChunkID {
+	connectedIDs := make(map[uint32]bool, len(s.players))
+	for pid := range s.players {
+		connectedIDs[pid] = true
+	}
+
 	counts := make(map[ChunkID]int)
-	for _, view := range s.playerViews {
+	for pid, view := range s.playerViews {
+		if !connectedIDs[pid] && !s.botIDs[pid] {
+			continue
+		}
 		counts[view.Chunk]++
 	}
 	if len(counts) == 0 {

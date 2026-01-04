@@ -60,6 +60,8 @@ func (s *Server) devEnsureBotUser(name string, flagID uint32) uint32 {
 	defer s.stateMu.Unlock()
 
 	if pid, ok := s.nameToPlayerID[name]; ok {
+		s.botIDs[pid] = true
+		delete(s.playerViews, pid)
 		return pid
 	}
 
@@ -69,6 +71,7 @@ func (s *Server) devEnsureBotUser(name string, flagID uint32) uint32 {
 	s.playerFlags[pid] = flagID
 	s.scores[pid] = 0
 	s.nameToPlayerID[name] = pid
+	s.botIDs[pid] = true
 	s.lbDirty = true
 	return pid
 }
@@ -122,6 +125,10 @@ func (s *Server) devStartCountingBot(cfg BotConfig) {
 		seed = time.Now().UnixNano()
 	}
 	rng := rand.New(rand.NewSource(seed))
+
+	s.stateMu.Lock()
+	s.playerViews[botID] = PlayerView{Chunk: ChunkID{X: 0, Y: 0}, Cell: uint32(32 + 32*ChunkSize)}
+	s.stateMu.Unlock()
 
 	go func() {
 		var requestID uint64 = 1
