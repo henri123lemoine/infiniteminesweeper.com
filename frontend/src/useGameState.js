@@ -162,7 +162,7 @@ export const useGameState = () => {
   const [updateSuccess, setUpdateSuccess] = useState(false);
   // Server-suggested spawn location (world cell coordinates)
   const serverSpawnRef = useRef(null);
-  // Active nearby players: Map<playerId, {worldX, worldY, flagId}>
+  // Active nearby players: Map<playerId, {x, y, targetX, targetY, flagId}>
   const activePlayersRef = useRef(new Map());
 
   // Minimap streaming store and helpers
@@ -961,6 +961,7 @@ export const useGameState = () => {
         }
       } else if (type === "playerPositions") {
         // Update active player positions
+        const oldPlayers = activePlayersRef.current;
         const newPlayers = new Map();
         for (const p of data.players || []) {
           if (p.chunkId != null) {
@@ -968,11 +969,24 @@ export const useGameState = () => {
             const cell = Number(p.cell || 0) | 0;
             const localX = cell % CHUNK;
             const localY = Math.floor(cell / CHUNK);
-            const worldX = (Number(cid.X) | 0) * CHUNK + localX;
-            const worldY = (Number(cid.Y) | 0) * CHUNK + localY;
+            const targetX = (Number(cid.X) | 0) * CHUNK + localX;
+            const targetY = (Number(cid.Y) | 0) * CHUNK + localY;
+
+            const existing = oldPlayers.get(p.playerId);
+            let x, y;
+            if (existing) {
+              x = existing.x;
+              y = existing.y;
+            } else {
+              x = targetX;
+              y = targetY;
+            }
+
             newPlayers.set(p.playerId, {
-              worldX,
-              worldY,
+              x,
+              y,
+              targetX,
+              targetY,
               flagId: p.flagId || 0,
             });
           }
