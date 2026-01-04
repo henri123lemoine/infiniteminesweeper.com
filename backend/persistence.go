@@ -524,6 +524,12 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 	}
 	if data.PlayerViews != nil {
 		s.playerViews = data.PlayerViews
+		// Clean up orphaned playerViews entries
+		for pid := range s.playerViews {
+			if _, hasName := s.playerNames[pid]; !hasName {
+				delete(s.playerViews, pid)
+			}
+		}
 	} else {
 		s.playerViews = make(map[uint32]PlayerView)
 	}

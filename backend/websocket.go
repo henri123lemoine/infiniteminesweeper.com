@@ -987,6 +987,7 @@ func (s *Server) removePlayer(p *Player) {
 		delete(s.playerSubs, p.ID)
 		delete(s.playerSubLastSeen, p.ID)
 		delete(s.minimapPlayerRes, p.ID)
+		delete(s.playerViews, p.ID)
 		s.stateMu.Unlock()
 	}
 
