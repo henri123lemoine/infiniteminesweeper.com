@@ -59,6 +59,7 @@ type Server struct {
 	// Ephemeral spectator IDs (separate space, no identity/state persisted)
 	nextSpectatorID uint32
 	sessionTokens   map[string]uint32 // session_token -> playerID
+	botIDs          map[uint32]bool   // track which player IDs are bots
 
 	// Seed cache for performance
 	seedCache   map[ChunkID]uint64
@@ -110,6 +111,7 @@ func NewServer() *Server {
 		playerFlags:       make(map[uint32]uint32),
 		playerViews:       make(map[uint32]PlayerView),
 		sessionTokens:     make(map[string]uint32), // Initialize the new map
+		botIDs:            make(map[uint32]bool),
 		seedCache:         make(map[ChunkID]uint64),
 		densityCache:      make(map[ChunkID]float64),
 		nextPlayerID:      1,

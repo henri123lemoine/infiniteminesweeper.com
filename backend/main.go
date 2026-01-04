@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
@@ -18,15 +19,34 @@ const (
 	SendBufSize = 4096 // outbound msgs kept per player before back‑pressure
 )
 
+// findAvailablePort scans ports 8080-8099 and returns the first available one.
+func findAvailablePort() string {
+	for p := 8080; p <= 8099; p++ {
+		addr := fmt.Sprintf(":%d", p)
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			ln.Close()
+			return fmt.Sprintf("%d", p)
+		}
+	}
+	log.Fatal("No available port in range 8080-8099")
+	return ""
+}
+
 func main() {
 	mustLoadEnv()
 
 	runtime.GOMAXPROCS(1)
 
-	// honour $PORT for Heroku/Fly style deploys
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	var port string
+	if os.Getenv("MODE") == "development" {
+		port = findAvailablePort()
+	} else {
+		// honour $PORT for Heroku/Fly style deploys
+		port = os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
 	}
 	addr := "0.0.0.0:" + port
 
@@ -41,24 +61,28 @@ func main() {
 			{
 				Name:             "CalmBot",
 				FlagID:           56,
-				ActionsPerSecond: 5,
+				ActionsPerSecond: 2,
+				FocusRadius:      4,
 			},
 			{
 				Name:                "SpeedBot",
 				FlagID:              38,
-				ActionsPerSecond:    12,
+				ActionsPerSecond:    3,
 				FailFlagProbability: 0.08,
+				FocusRadius:         6,
 			},
 			{
 				Name:                "BBot",
 				FlagID:              69,
-				ActionsPerSecond:    40,
+				ActionsPerSecond:    2,
 				FailFlagProbability: 0.14,
+				FocusRadius:         5,
 			},
 			{
 				Name:             "OPBot",
 				FlagID:           80,
-				ActionsPerSecond: 40,
+				ActionsPerSecond: 3,
+				FocusRadius:      6,
 			},
 		}
 		server.devStartCountingBots(cfgs)
@@ -73,6 +97,7 @@ func main() {
 
 	go server.runLeaderboardBroadcaster()
 	go server.runMinimapBroadcaster()
+	go server.runPlayerPositionBroadcaster()
 
 	fmt.Printf("Server running at: http://%s/\n", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))

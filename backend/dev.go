@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
 func (s *Server) devRevealOriginArea(radius int) {
 	r2 := radius * radius
 	for y := -radius; y <= radius; y++ {
@@ -60,6 +67,8 @@ func (s *Server) devEnsureBotUser(name string, flagID uint32) uint32 {
 	defer s.stateMu.Unlock()
 
 	if pid, ok := s.nameToPlayerID[name]; ok {
+		s.botIDs[pid] = true
+		delete(s.playerViews, pid)
 		return pid
 	}
 
@@ -69,6 +78,7 @@ func (s *Server) devEnsureBotUser(name string, flagID uint32) uint32 {
 	s.playerFlags[pid] = flagID
 	s.scores[pid] = 0
 	s.nameToPlayerID[name] = pid
+	s.botIDs[pid] = true
 	s.lbDirty = true
 	return pid
 }
@@ -123,6 +133,10 @@ func (s *Server) devStartCountingBot(cfg BotConfig) {
 	}
 	rng := rand.New(rand.NewSource(seed))
 
+	s.stateMu.Lock()
+	s.playerViews[botID] = PlayerView{Chunk: ChunkID{X: 0, Y: 0}, Cell: uint32(32 + 32*ChunkSize)}
+	s.stateMu.Unlock()
+
 	go func() {
 		var requestID uint64 = 1
 		// Focus on the last action's location (world coordinates via cid+cell)
@@ -138,8 +152,8 @@ func (s *Server) devStartCountingBot(cfg BotConfig) {
 		for {
 			// Exponential inter-arrival → natural bursts
 			dt := rng.ExpFloat64() / rate
-			if dt < 0.02 { // clamp to avoid hot loop
-				dt = 0.02
+			if dt < 0.25 { // clamp to 4 actions/sec max burst
+				dt = 0.25
 			}
 			time.Sleep(time.Duration(dt * float64(time.Second)))
 
@@ -151,6 +165,16 @@ func (s *Server) devStartCountingBot(cfg BotConfig) {
 			// Human-ish counting action near focus first
 			cid, cell, rightClick, isChord, ok := s.devPickCountingActionHumanish(rng, hasFocus, focusCID, focusCell, cfg.FocusRadius, cfg.GuessProbability)
 			if !ok {
+				// No certain action found - take one Brownian step to explore
+				if hasFocus {
+					newCID, newCell, found := s.devBrownianStep(rng, focusCID, focusCell)
+					if found {
+						focusCID, focusCell = newCID, newCell
+					}
+					s.stateMu.Lock()
+					s.playerViews[botID] = PlayerView{Chunk: focusCID, Cell: focusCell}
+					s.stateMu.Unlock()
+				}
 				continue
 			}
 
@@ -166,6 +190,11 @@ func (s *Server) devStartCountingBot(cfg BotConfig) {
 			// Update focus to where we just acted
 			focusCID, focusCell = cid, cell
 			hasFocus = true
+
+			// Update playerViews so bots appear on minimap
+			s.stateMu.Lock()
+			s.playerViews[botID] = PlayerView{Chunk: cid, Cell: cell}
+			s.stateMu.Unlock()
 		}
 	}()
 }
@@ -241,26 +270,57 @@ func (s *Server) devPickCountingActionHumanish(rng *rand.Rand, hasFocus bool, fo
 		}
 	}
 
-	// Strategy A: scan within a small radius of focus first
+	// Strategy A: scan in expanding rings from focus
 	if hasFocus {
 		fx := int(focusCID.X)*ChunkSize + int(focusCell%ChunkSize)
 		fy := int(focusCID.Y)*ChunkSize + int(focusCell/ChunkSize)
 
-		// Iterate chunks near focus (map order is randomized)
+		// Search in expanding rings: first adjacent cells (dist 1), then dist 2, etc.
+		for dist := 1; dist <= focusRadius; dist++ {
+			// Collect all cells at this distance (ring perimeter)
+			var candidates []struct {
+				wx, wy int
+			}
+			for dx := -dist; dx <= dist; dx++ {
+				for dy := -dist; dy <= dist; dy++ {
+					// Only include cells on the perimeter of this ring
+					if abs(dx) != dist && abs(dy) != dist {
+						continue
+					}
+					candidates = append(candidates, struct{ wx, wy int }{fx + dx, fy + dy})
+				}
+			}
+			// Shuffle candidates at this distance
+			for i := range candidates {
+				j := rng.Intn(i + 1)
+				candidates[i], candidates[j] = candidates[j], candidates[i]
+			}
+			// Try each candidate
+			for _, c := range candidates {
+				cid, cell := worldToChunk(c.wx, c.wy)
+				bits := s.chunks[cid]
+				if bits == nil {
+					continue
+				}
+				row := int(cell / ChunkSize)
+				col := int(cell % ChunkSize)
+				if ((*bits)[row] & (1 << uint(col))) == 0 {
+					continue
+				}
+				if actCID, actCell, rc, chord, ok := evalCenter(cid, row, col); ok {
+					return actCID, actCell, rc, chord, true
+				}
+			}
+		}
+	}
+
+	// Strategy B: global sweep - only when bot has no focus yet (initial search)
+	// When focused, we don't want to jump across the map; let Brownian walk explore locally
+	if !hasFocus {
 		for cid, bits := range s.chunks {
 			if bits == nil {
 				continue
 			}
-			// Quick reject using chunk bounding box
-			minX := int(cid.X) * ChunkSize
-			minY := int(cid.Y) * ChunkSize
-			maxX := minX + ChunkSize - 1
-			maxY := minY + ChunkSize - 1
-			if fx < minX-focusRadius || fx > maxX+focusRadius || fy < minY-focusRadius || fy > maxY+focusRadius {
-				continue
-			}
-
-			// Randomize row/col start to avoid lines
 			rowStart := rng.Intn(ChunkSize)
 			for ro := 0; ro < ChunkSize; ro++ {
 				row := (rowStart + ro) % ChunkSize
@@ -282,30 +342,46 @@ func (s *Server) devPickCountingActionHumanish(rng *rand.Rand, hasFocus bool, fo
 		}
 	}
 
-	// Strategy B: global sweep with randomized row/col order
-	for cid, bits := range s.chunks {
-		if bits == nil {
-			continue
-		}
-		rowStart := rng.Intn(ChunkSize)
-		for ro := 0; ro < ChunkSize; ro++ {
-			row := (rowStart + ro) % ChunkSize
-			rowBits := (*bits)[row]
-			if rowBits == 0 {
+	return ChunkID{}, 0, false, false, false
+}
+
+// devBrownianStep moves focus to a random adjacent revealed cell.
+// Used for exploration when no certain action is available.
+func (s *Server) devBrownianStep(rng *rand.Rand, focusCID ChunkID, focusCell uint32) (ChunkID, uint32, bool) {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+
+	// Get world coordinates of current focus
+	fx := int(focusCID.X)*ChunkSize + int(focusCell%ChunkSize)
+	fy := int(focusCID.Y)*ChunkSize + int(focusCell/ChunkSize)
+
+	// Collect adjacent revealed cells
+	var candidates []struct {
+		cid  ChunkID
+		cell uint32
+	}
+
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			if dx == 0 && dy == 0 {
 				continue
 			}
-			colStart := rng.Intn(ChunkSize)
-			for co := 0; co < ChunkSize; co++ {
-				col := (colStart + co) % ChunkSize
-				if (rowBits & (1 << uint(col))) == 0 {
-					continue
-				}
-				if actCID, actCell, rc, chord, ok := evalCenter(cid, row, col); ok {
-					return actCID, actCell, rc, chord, true
-				}
+			nx, ny := fx+dx, fy+dy
+			ncid, ncell := worldToChunk(nx, ny)
+			if s.isCellRevealed(ncid, ncell) {
+				candidates = append(candidates, struct {
+					cid  ChunkID
+					cell uint32
+				}{ncid, ncell})
 			}
 		}
 	}
 
-	return ChunkID{}, 0, false, false, false
+	if len(candidates) == 0 {
+		return ChunkID{}, 0, false
+	}
+
+	// Pick a random adjacent revealed cell
+	choice := candidates[rng.Intn(len(candidates))]
+	return choice.cid, choice.cell, true
 }

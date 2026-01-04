@@ -12,7 +12,7 @@ SNAPFREE       ?= 0
 SNAPSHOT_FILE  ?= data/snapshot.gob.gz
 WAL_FILE       ?= data/wal.log
 
-.PHONY: help proto deps frontend-build go-build go-run docker-build docker-run deploy clean fmt lint check
+.PHONY: help proto deps frontend-build go-build go-run docker-build docker-run deploy clean fmt lint check dash
 
 help:
 	@echo "Targets:"
@@ -101,3 +101,7 @@ lint:
 
 check: fmt lint
 	@echo "✓ All checks passed"
+
+# dev dashboard
+dash:
+	@go run ./tools/dash

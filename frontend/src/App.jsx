@@ -58,6 +58,8 @@ function App() {
     clearMinimapSubscriptionsFor,
     minimapTilesRef,
     handleVisibilityChange,
+    serverSpawnRef,
+    activePlayersRef,
   } = useGameState();
 
   const canvasRef = useRef(null);
@@ -259,6 +261,7 @@ function App() {
       worldToChunk,
       getNumberColor,
       flagID,
+      activePlayersRef,
     });
   }, [tick, getNumberColor, worldToChunk, flagID]);
 
@@ -554,6 +557,22 @@ function App() {
     [CELL_SIZE, scheduleViewUpdate]
   );
 
+  // On server-suggested spawn, center the camera once
+  const lastAppliedSpawnRef = useRef(0);
+  useEffect(() => {
+    const maybeApply = () => {
+      const rec = serverSpawnRef?.current;
+      if (!rec) return;
+      if (rec.at && rec.at === lastAppliedSpawnRef.current) return;
+      lastAppliedSpawnRef.current = rec.at || Date.now();
+      centerCameraOnWorld(rec.x | 0, rec.y | 0);
+      sendViewportUpdate();
+    };
+    maybeApply();
+    const id = requestAnimationFrame(maybeApply);
+    return () => cancelAnimationFrame(id);
+  }, [serverSpawnRef, centerCameraOnWorld, sendViewportUpdate]);
+
   // Pan/zoom/drag handler using the unified hook
   const { bind } = usePinchPanZoom({
     elementRef: containerRef,
@@ -829,6 +848,7 @@ function App() {
             updateMinimapSubscriptions={updateMinimapSubscriptions}
             clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
             minimapTilesRef={minimapTilesRef}
+            activePlayersRef={activePlayersRef}
           />
         </div>
       )}
@@ -1125,6 +1145,7 @@ function App() {
                   updateMinimapSubscriptions={updateMinimapSubscriptions}
                   clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
                   minimapTilesRef={minimapTilesRef}
+                  activePlayersRef={activePlayersRef}
                 />
               </div>
             )}
@@ -1267,6 +1288,7 @@ function App() {
         minimapTilesRef={minimapTilesRef}
         onOpenOverlay={() => setShowMinimapOverlay(true)}
         mainViewMoveToken={mainViewMoveToken}
+        activePlayersRef={activePlayersRef}
       />
 
       <div className="leaderboard">

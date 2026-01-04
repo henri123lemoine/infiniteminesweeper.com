@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { CHUNK } from "./useGameState.js";
 import { usePinchPanZoom } from "./hooks/usePinchPanZoom.js";
+import { getHexForFlag } from "./sprites/index.js";
 
 export default function Minimap({
   mode = "hud", // "hud" or "overlay"
@@ -17,6 +18,7 @@ export default function Minimap({
   updateMinimapSubscriptions,
   clearMinimapSubscriptionsFor,
   minimapTilesRef,
+  activePlayersRef,
 }) {
   const canvasRef = useRef(null);
   const localContainerRef = useRef(null);
@@ -183,6 +185,28 @@ export default function Minimap({
             viewHeightCells * scale
           );
         }
+
+        // Draw colored dots for nearby players
+        if (activePlayersRef?.current) {
+          const smoothing = 0.15;
+          const dotRadius = Math.max(2, Math.min(6, 2 * scale));
+          for (const [, player] of activePlayersRef.current) {
+            player.x += (player.targetX - player.x) * smoothing;
+            player.y += (player.targetY - player.y) * smoothing;
+
+            const dotX = (player.x - startWorldX) * scale;
+            const dotY = (player.y - startWorldY) * scale;
+            if (dotX >= 0 && dotX < cssSize && dotY >= 0 && dotY < cssSize) {
+              const flagColor = getHexForFlag(player.flagId || 0);
+              ctx.fillStyle = flagColor;
+              ctx.globalAlpha = 0.85;
+              ctx.beginPath();
+              ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.globalAlpha = 1.0;
+            }
+          }
+        }
       } else {
         // Overlay mode rendering
         const w = container.clientWidth;
@@ -249,6 +273,28 @@ export default function Minimap({
             ctx.strokeStyle = "rgba(0,0,0,0.9)";
             ctx.lineWidth = 2;
             ctx.strokeRect(boxLeft, boxTop, boxWidth, boxHeight);
+          }
+        }
+
+        // Draw colored dots for nearby players in overlay mode
+        if (activePlayersRef?.current) {
+          const smoothing = 0.15;
+          const dotRadius = Math.max(2, Math.min(8, 2 * overlayZoom));
+          for (const [, player] of activePlayersRef.current) {
+            player.x += (player.targetX - player.x) * smoothing;
+            player.y += (player.targetY - player.y) * smoothing;
+
+            const dotX = (player.x - x) * overlayZoom;
+            const dotY = (player.y - y) * overlayZoom;
+            if (dotX >= 0 && dotX < w && dotY >= 0 && dotY < h) {
+              const flagColor = getHexForFlag(player.flagId || 0);
+              ctx.fillStyle = flagColor;
+              ctx.globalAlpha = 0.85;
+              ctx.beginPath();
+              ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.globalAlpha = 1.0;
+            }
           }
         }
       }

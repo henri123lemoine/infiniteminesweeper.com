@@ -179,3 +179,32 @@ func (s *Server) getScoreMultiplier(chunkID ChunkID) float64 {
 	dens := s.getBombDensityMultiplier(chunkID)
 	return active * dens
 }
+
+// findMostPopulatedChunk returns the chunk with the most players currently viewing it.
+// Falls back to (0,0) if no players are online. Caller must hold s.stateMu (at least RLock).
+func (s *Server) findMostPopulatedChunk() ChunkID {
+	connectedIDs := make(map[uint32]bool, len(s.players))
+	for pid := range s.players {
+		connectedIDs[pid] = true
+	}
+
+	counts := make(map[ChunkID]int)
+	for pid, view := range s.playerViews {
+		if !connectedIDs[pid] && !s.botIDs[pid] {
+			continue
+		}
+		counts[view.Chunk]++
+	}
+	if len(counts) == 0 {
+		return ChunkID{X: 0, Y: 0}
+	}
+	best := ChunkID{X: 0, Y: 0}
+	bestCount := 0
+	for cid, n := range counts {
+		if n > bestCount {
+			bestCount = n
+			best = cid
+		}
+	}
+	return best
+}

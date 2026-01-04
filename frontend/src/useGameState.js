@@ -160,6 +160,10 @@ export const useGameState = () => {
   const [joinError, setJoinError] = useState("");
   const [serverFlagID, setServerFlagID] = useState(null);
   const [updateSuccess, setUpdateSuccess] = useState(false);
+  // Server-suggested spawn location (world cell coordinates)
+  const serverSpawnRef = useRef(null);
+  // Active nearby players: Map<playerId, {x, y, targetX, targetY, flagId}>
+  const activePlayersRef = useRef(new Map());
 
   // Minimap streaming store and helpers
   const minimapTilesRef = useRef(new Map()); // key "x,y" -> { version, data: Uint8Array, canvas, resolution }
@@ -944,6 +948,50 @@ export const useGameState = () => {
           setUpdateError(data.error || "Profile update failed");
           console.error("Profile update failed:", data.error);
         }
+      } else if (type === "spawnHint") {
+        // Server-suggested spawn location for spectators
+        if (data.chunkId != null) {
+          const cid = data.chunkId;
+          const cell = Number(data.cell || 0) | 0;
+          const localX = cell % CHUNK;
+          const localY = Math.floor(cell / CHUNK);
+          const spawnX = (Number(cid.X) | 0) * CHUNK + localX;
+          const spawnY = (Number(cid.Y) | 0) * CHUNK + localY;
+          serverSpawnRef.current = { x: spawnX, y: spawnY, at: Date.now() };
+        }
+      } else if (type === "playerPositions") {
+        // Update active player positions
+        const oldPlayers = activePlayersRef.current;
+        const newPlayers = new Map();
+        for (const p of data.players || []) {
+          if (p.chunkId != null) {
+            const cid = p.chunkId;
+            const cell = Number(p.cell || 0) | 0;
+            const localX = cell % CHUNK;
+            const localY = Math.floor(cell / CHUNK);
+            const targetX = (Number(cid.X) | 0) * CHUNK + localX;
+            const targetY = (Number(cid.Y) | 0) * CHUNK + localY;
+
+            const existing = oldPlayers.get(p.playerId);
+            let x, y;
+            if (existing) {
+              x = existing.x;
+              y = existing.y;
+            } else {
+              x = targetX;
+              y = targetY;
+            }
+
+            newPlayers.set(p.playerId, {
+              x,
+              y,
+              targetX,
+              targetY,
+              flagId: p.flagId || 0,
+            });
+          }
+        }
+        activePlayersRef.current = newPlayers;
       } else if (type === "chunkSync") {
         applyChunkSync(data);
         setTick((t) => t + 1);
@@ -1482,5 +1530,9 @@ export const useGameState = () => {
         toDel.forEach((k) => minimapActiveSubsRef.current.delete(k));
       }
     }, []),
+    // Server-suggested spawn location
+    serverSpawnRef,
+    // Nearby player positions for rendering
+    activePlayersRef,
   };
 };

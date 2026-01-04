@@ -331,6 +331,15 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	}}}
 	s.sendToPlayer(playerID, mustProto(ackMsg))
 
+	// Send spawn hint pointing to most populated chunk
+	best := s.findMostPopulatedChunk()
+	centerCell := uint32(32 + 32*ChunkSize) // center of 64x64 chunk
+	spawnMsg := &pb.Msg{Payload: &pb.Msg_SpawnHint{SpawnHint: &pb.SpawnHint{
+		ChunkId: &pb.ChunkID{X: best.X, Y: best.Y},
+		Cell:    centerCell,
+	}}}
+	s.sendToPlayer(playerID, mustProto(spawnMsg))
+
 	// Send initial leaderboard state
 	lbBytes := s.lbProto
 	lbVer := s.lbVersion
@@ -978,8 +987,107 @@ func (s *Server) removePlayer(p *Player) {
 		delete(s.playerSubs, p.ID)
 		delete(s.playerSubLastSeen, p.ID)
 		delete(s.minimapPlayerRes, p.ID)
+		delete(s.playerViews, p.ID)
 		s.stateMu.Unlock()
 	}
 
 	log.Printf("Player %d disconnected", p.ID)
+}
+
+// runPlayerPositionBroadcaster periodically sends nearby player positions to each client.
+func (s *Server) runPlayerPositionBroadcaster() {
+	const broadcastInterval = 100 * time.Millisecond
+	const chunkRadius = 10
+
+	ticker := time.NewTicker(broadcastInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.broadcastPlayerPositions(chunkRadius)
+	}
+}
+
+// broadcastPlayerPositions sends nearby player positions to each connected client.
+func (s *Server) broadcastPlayerPositions(chunkRadius int64) {
+	// First get the set of connected player IDs
+	s.playersMu.RLock()
+	connectedIDs := make(map[uint32]bool)
+	for pid := range s.players {
+		connectedIDs[pid] = true
+	}
+	s.playersMu.RUnlock()
+
+	// Collect positions only for connected players or bots
+	s.stateMu.RLock()
+	type playerPos struct {
+		id     uint32
+		view   PlayerView
+		flagID uint32
+	}
+	positions := make([]playerPos, 0, len(s.playerViews))
+	for pid, view := range s.playerViews {
+		// Only include if player is still connected or is a bot
+		if !connectedIDs[pid] && !s.botIDs[pid] {
+			continue
+		}
+		flagID := s.playerFlags[pid]
+		positions = append(positions, playerPos{id: pid, view: view, flagID: flagID})
+	}
+	s.stateMu.RUnlock()
+
+	// For each player, find nearby players and send their positions
+	s.playersMu.RLock()
+	defer s.playersMu.RUnlock()
+
+	for _, set := range s.players {
+		for p := range set {
+			select {
+			case <-p.done:
+				continue
+			default:
+			}
+
+			// Find this player's position
+			var myView *PlayerView
+			for i := range positions {
+				if positions[i].id == p.ID {
+					myView = &positions[i].view
+					break
+				}
+			}
+			if myView == nil {
+				continue // Player has no known view position
+			}
+
+			// Collect nearby players (excluding self)
+			nearby := make([]*pb.PlayerPosition, 0)
+			for _, other := range positions {
+				if other.id == p.ID {
+					continue // Skip self
+				}
+				dx := other.view.Chunk.X - myView.Chunk.X
+				dy := other.view.Chunk.Y - myView.Chunk.Y
+				if dx < 0 {
+					dx = -dx
+				}
+				if dy < 0 {
+					dy = -dy
+				}
+				if dx <= chunkRadius && dy <= chunkRadius {
+					nearby = append(nearby, &pb.PlayerPosition{
+						PlayerId: other.id,
+						ChunkId:  &pb.ChunkID{X: other.view.Chunk.X, Y: other.view.Chunk.Y},
+						Cell:     other.view.Cell,
+						FlagId:   other.flagID,
+					})
+				}
+			}
+
+			// Always send (even if empty) so clients can clear stale positions
+			msg := &pb.Msg{Payload: &pb.Msg_PlayerPositions{PlayerPositions: &pb.PlayerPositions{
+				Players: nearby,
+			}}}
+			s.sendToPlayer(p.ID, mustProto(msg))
+		}
+	}
 }
