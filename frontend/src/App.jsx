@@ -1165,6 +1165,19 @@ function App() {
             >
               Watch on YouTube
             </a>
+            <div
+              style={{
+                marginTop: 16,
+                paddingTop: 12,
+                borderTop: "1px solid #ddd",
+                fontSize: 12,
+                color: "#888",
+              }}
+            >
+              Website by Henri Lemoine
+              <br />
+              Art by Johara Goni
+            </div>
           </div>
         )}
       </div>
