@@ -1083,13 +1083,11 @@ func (s *Server) broadcastPlayerPositions(chunkRadius int64) {
 				}
 			}
 
-			// Send if there are any nearby players
-			if len(nearby) > 0 {
-				msg := &pb.Msg{Payload: &pb.Msg_PlayerPositions{PlayerPositions: &pb.PlayerPositions{
-					Players: nearby,
-				}}}
-				s.sendToPlayer(p.ID, mustProto(msg))
-			}
+			// Always send (even if empty) so clients can clear stale positions
+			msg := &pb.Msg{Payload: &pb.Msg_PlayerPositions{PlayerPositions: &pb.PlayerPositions{
+				Players: nearby,
+			}}}
+			s.sendToPlayer(p.ID, mustProto(msg))
 		}
 	}
 }
