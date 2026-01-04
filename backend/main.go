@@ -61,24 +61,28 @@ func main() {
 			{
 				Name:             "CalmBot",
 				FlagID:           56,
-				ActionsPerSecond: 5,
+				ActionsPerSecond: 2,
+				FocusRadius:      4,
 			},
 			{
 				Name:                "SpeedBot",
 				FlagID:              38,
-				ActionsPerSecond:    12,
+				ActionsPerSecond:    3,
 				FailFlagProbability: 0.08,
+				FocusRadius:         6,
 			},
 			{
 				Name:                "BBot",
 				FlagID:              69,
-				ActionsPerSecond:    40,
+				ActionsPerSecond:    2,
 				FailFlagProbability: 0.14,
+				FocusRadius:         5,
 			},
 			{
 				Name:             "OPBot",
 				FlagID:           80,
-				ActionsPerSecond: 40,
+				ActionsPerSecond: 3,
+				FocusRadius:      6,
 			},
 		}
 		server.devStartCountingBots(cfgs)
