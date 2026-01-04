@@ -5,11 +5,11 @@ import (
 	"compress/gzip"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -17,6 +17,20 @@ import (
 
 	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
+
+var gzipWriterPool = sync.Pool{
+	New: func() any {
+		return gzip.NewWriter(nil)
+	},
+}
+
+var gzipReaderPool = sync.Pool{}
+
+var bufferPool = sync.Pool{
+	New: func() any {
+		return new(bytes.Buffer)
+	},
+}
 
 func debugLogMessage(msg *pb.Msg, playerID uint32) {
 	if os.Getenv("MODE") != "development" {
@@ -66,13 +80,20 @@ func mustProto(m *pb.Msg) []byte {
 		panic(err)
 	}
 
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	gz := gzipWriterPool.Get().(*gzip.Writer)
+	gz.Reset(buf)
 	if _, err := gz.Write(b); err != nil {
 		panic(err)
 	}
 	gz.Close()
-	return buf.Bytes()
+	gzipWriterPool.Put(gz)
+
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	bufferPool.Put(buf)
+	return result
 }
 
 func (s *Server) sendToPlayer(playerID uint32, data []byte) {
@@ -423,24 +444,39 @@ func (s *Server) readPump(player *Player) {
 	// The connection is now established; reset the read deadline.
 	player.Conn.SetReadDeadline(time.Time{})
 
+	readBuf := bufferPool.Get().(*bytes.Buffer)
+	defer bufferPool.Put(readBuf)
+
 	for {
 		_, data, err := player.Conn.ReadMessage()
 		if err != nil {
 			break
 		}
 
-		gz, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			continue
+		var gz *gzip.Reader
+		if pooled := gzipReaderPool.Get(); pooled != nil {
+			gz = pooled.(*gzip.Reader)
+			if err := gz.Reset(bytes.NewReader(data)); err != nil {
+				gzipReaderPool.Put(gz)
+				continue
+			}
+		} else {
+			gz, err = gzip.NewReader(bytes.NewReader(data))
+			if err != nil {
+				continue
+			}
 		}
-		pbData, err := io.ReadAll(gz)
+
+		readBuf.Reset()
+		_, err = readBuf.ReadFrom(gz)
 		gz.Close()
+		gzipReaderPool.Put(gz)
 		if err != nil {
 			continue
 		}
 
 		var msg pb.Msg
-		if err := proto.Unmarshal(pbData, &msg); err != nil {
+		if err := proto.Unmarshal(readBuf.Bytes(), &msg); err != nil {
 			continue
 		}
 
