@@ -301,17 +301,15 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	player.Score = s.scores[playerID]
 	player.State = ClientStatePlayer
 
-	// Move player from spectator ID space to player ID space.
-	// Note: any state the client populated while spectating (playerViews,
-	// playerSubs, minimapSubs, etc.) keyed by the old spectator ID stays
-	// orphaned. It's a small per-Join leak (~hundreds of bytes) and the next
-	// snapshot reload prunes orphans whose ID has no playerName. Not worth
-	// the migration code at our traffic.
+	// Move player from spectator ID space to player ID space and drop any
+	// spectator-ID-keyed state. We don't migrate it — the frontend re-sends
+	// ViewUpdate on every pan, so subs rebuild on the next tick.
+	oldID := player.ID
 	s.playersMu.Lock()
-	if playerSet, exists := s.players[player.ID]; exists {
-		delete(playerSet, player)
-		if len(playerSet) == 0 {
-			delete(s.players, player.ID)
+	if set := s.players[oldID]; set != nil {
+		delete(set, player)
+		if len(set) == 0 {
+			delete(s.players, oldID)
 		}
 	}
 	if s.players[playerID] == nil {
@@ -320,6 +318,30 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	s.players[playerID][player] = struct{}{}
 	player.ID = playerID
 	s.playersMu.Unlock()
+
+	// Clear spectator ID's accumulated state (we hold stateMu here).
+	delete(s.playerViews, oldID)
+	delete(s.playerSubs, oldID)
+	delete(s.playerSubLastSeen, oldID)
+	delete(s.minimapPlayerRes, oldID)
+	delete(s.minimapSubCount, oldID)
+	for cid, set := range s.subs {
+		if _, ok := set[oldID]; ok {
+			delete(set, oldID)
+			if len(set) == 0 {
+				delete(s.subs, cid)
+			}
+		}
+	}
+	for cid, set := range s.minimapSubs {
+		if _, ok := set[oldID]; ok {
+			delete(set, oldID)
+			if len(set) == 0 {
+				delete(s.minimapSubs, cid)
+				delete(s.minimapTiles, cid)
+			}
+		}
+	}
 
 	s.lbDirty = true
 
