@@ -112,6 +112,45 @@ func TestTotalRevealedRecomputedFromSnapshot(t *testing.T) {
 	}
 }
 
+// TestWALBufferThresholdSignal verifies that writeWALEntry signals the flush
+// worker once the in-memory buffer crosses the threshold, so a heavy burst
+// between periodic ticks can't let walBuffer grow unboundedly.
+func TestWALBufferThresholdSignal(t *testing.T) {
+	s := NewServer()
+	s.useS3 = false
+	s.dataDir = t.TempDir()
+
+	select {
+	case <-s.walFlushSignal:
+		t.Fatal("walFlushSignal should start empty")
+	default:
+	}
+
+	for i := 0; i < walBufferFlushThreshold-1; i++ {
+		s.writeWALEntry("reveal", struct{ I int }{i})
+	}
+	select {
+	case <-s.walFlushSignal:
+		t.Fatal("signal fired before threshold reached")
+	default:
+	}
+
+	s.writeWALEntry("reveal", struct{ I int }{99999})
+	select {
+	case <-s.walFlushSignal:
+	default:
+		t.Fatal("signal did not fire after crossing threshold")
+	}
+
+	// Buffer is still over threshold; next write should re-signal.
+	s.writeWALEntry("reveal", struct{ I int }{1000000})
+	select {
+	case <-s.walFlushSignal:
+	default:
+		t.Fatal("signal did not re-fire while buffer stayed over threshold")
+	}
+}
+
 // TestMinimapBroadcastAfterRefactor drives the refactored broadcaster end-to-end:
 // mark cells dirty on multiple chunks at multiple resolutions, then verify a
 // broadcast pass drains dirty tracking without panicking. The minimap

@@ -79,6 +79,10 @@ type Server struct {
 	walBuffer  []WALEntry
 	walMutex   sync.Mutex
 	walSeq     uint64
+	// Signal used to wake the WAL flush worker when walBuffer grows past a
+	// threshold. Buffered size 1 + non-blocking send = signals are coalesced
+	// and writers never block.
+	walFlushSignal chan struct{}
 
 	// Gameplay rules
 	// Chebyshev distance for proximity-limited actions (reveal/flag).
@@ -116,6 +120,7 @@ func NewServer() *Server {
 		botIDs:            make(map[uint32]bool),
 		seedCache:         make(map[ChunkID]uint64),
 		densityCache:      make(map[ChunkID]float64),
+		walFlushSignal:    make(chan struct{}, 1),
 		nextPlayerID:      1,
 		nextSpectatorID:   1,
 		dataDir:           "data",

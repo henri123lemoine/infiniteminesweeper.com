@@ -43,6 +43,13 @@ const (
 	snapshotFileName = "snapshot.gob.gz"
 	snapshotTmpName  = "snapshot.tmp.gz"
 	walFileName      = "wal.log"
+
+	// Nudge the flush worker to drain the WAL once the in-memory buffer
+	// holds this many entries, regardless of the wall-clock flush tick. Caps
+	// walBuffer memory under heavy bursts — at ~200 bytes per entry this
+	// bounds peak WAL memory near 2 MB, versus potentially tens of MB across
+	// the whole 2-minute tick window under load.
+	walBufferFlushThreshold = 10000
 )
 
 // WAL entry types
@@ -101,7 +108,18 @@ func (s *Server) writeWALEntry(entryType string, data interface{}) {
 		Sequence:  s.walSeq,
 	}
 	s.walBuffer = append(s.walBuffer, entry)
+	shouldSignal := len(s.walBuffer) >= walBufferFlushThreshold
 	s.walMutex.Unlock()
+
+	if shouldSignal && s.walFlushSignal != nil {
+		// Coalesced non-blocking signal — if a flush is already queued we
+		// leave it be. The flusher drains whatever is in the buffer when it
+		// runs, so a single wake-up covers any number of overshoots.
+		select {
+		case s.walFlushSignal <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (s *Server) flushWAL() error {
@@ -311,7 +329,11 @@ func (s *Server) periodicWALFlush() {
 	ticker := time.NewTicker(walFlushInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-ticker.C:
+		case <-s.walFlushSignal:
+		}
 		if err := s.flushWAL(); err != nil {
 			log.Printf("[wal] flush error: %v", err)
 		}
