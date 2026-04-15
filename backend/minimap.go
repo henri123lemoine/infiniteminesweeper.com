@@ -19,7 +19,7 @@ type MinimapTile struct {
 	Dirty [64]uint64
 }
 
-// Palette indices. mmEmpty0..mmNum7Plus must be sequential — computePaletteFor
+// Palette indices. mmEmpty0..mmNum7Plus must be sequential — computeFullTileData
 // computes mmEmpty0+n directly. n=1..6 → palette 3..8 (numbers); n≥7 → 9.
 const (
 	mmUnseen   = 0
@@ -199,35 +199,35 @@ func (s *Server) minimapMarkDirty(cid ChunkID, cell uint32) {
 	s.minimapDirtyTiles[cid] = struct{}{}
 }
 
-// computePaletteFor computes the palette index for a single cell directly from
-// authoritative world state. Palette is mmEmpty0+n for n ≤ 6, mmNum7Plus for
-// n ≥ 7; if you change those constants, keep this in sync.
-func (s *Server) computePaletteFor(cid ChunkID, cell uint32) byte {
-	if fl, ok := s.flags[cid][cell]; ok {
-		return byte(mmFlagBase + minimapFlagBucket(fl.FlagID))
-	}
-	if !s.isCellRevealed(cid, cell) {
-		return mmUnseen
-	}
-	if s.isMine(cid, cell) {
-		return mmMine
-	}
-	n := s.countAdjacentMines(cid, cell)
-	if n >= 7 {
-		return mmNum7Plus
-	}
-	return byte(mmEmpty0 + n)
-}
-
 // computeFullTileData renders a chunk's full 64×64 palette from authoritative
 // world state. Returns nil if the chunk is all unseen.
 func (s *Server) computeFullTileData(cid ChunkID) []byte {
 	if !s.chunkHasAnyState(cid) {
 		return nil
 	}
+	reveals := s.chunks[cid]
+	flags := s.flags[cid]
+	mines := s.getMineBitmap(cid)
 	data := make([]byte, ChunkSize*ChunkSize)
 	for i := uint32(0); i < ChunkSize*ChunkSize; i++ {
-		data[i] = s.computePaletteFor(cid, i)
+		if fl, ok := flags[i]; ok {
+			data[i] = byte(mmFlagBase + minimapFlagBucket(fl.FlagID))
+			continue
+		}
+		if reveals == nil || reveals[i>>6]&(1<<(i&63)) == 0 {
+			data[i] = mmUnseen
+			continue
+		}
+		if mines[i>>3]&(1<<(i&7)) != 0 {
+			data[i] = mmMine
+			continue
+		}
+		n := s.countAdjacentMines(cid, i)
+		if n >= 7 {
+			data[i] = mmNum7Plus
+		} else {
+			data[i] = byte(mmEmpty0 + n)
+		}
 	}
 	return data
 }
