@@ -160,7 +160,7 @@ func generateSessionToken() string {
 }
 
 func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
-	// Cache seeds to avoid repeated HMAC calculations
+	// Cache seeds to avoid repeated HMAC calculations.
 	s.seedCacheMu.RLock()
 	if seed, exists := s.seedCache[chunkID]; exists {
 		s.seedCacheMu.RUnlock()
@@ -175,8 +175,16 @@ func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
 	seed := binary.LittleEndian.Uint64(hash[:8])
 
 	s.seedCacheMu.Lock()
+	// Random eviction when full: Go's `for k := range m; break` yields a
+	// randomly-chosen key (map iteration starts at a random bucket on each
+	// call), which is approximately competitive with LRU for our access
+	// pattern — hot chunks get re-inserted faster than they get evicted,
+	// cold chunks drop out naturally, and we pay zero per-entry overhead.
 	if len(s.seedCache) >= seedCacheMaxEntries {
-		s.seedCache = make(map[ChunkID]uint64, seedCacheMaxEntries)
+		for k := range s.seedCache {
+			delete(s.seedCache, k)
+			break
+		}
 	}
 	s.seedCache[chunkID] = seed
 	s.seedCacheMu.Unlock()
