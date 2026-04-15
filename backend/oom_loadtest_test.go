@@ -53,7 +53,7 @@ func TestLoadRealisticSustained(t *testing.T) {
 	baseHeap, baseGoroutines := snapshot(t, s, "T=0")
 	for elapsed := time.Duration(0); elapsed < duration; elapsed += duration / 4 {
 		time.Sleep(duration / 4)
-		snapshot(t, s, fmt.Sprintf("T=%v", time.Since(time.Now().Add(-elapsed-duration/4)).Round(time.Second)))
+		snapshot(t, s, fmt.Sprintf("T=%v", (elapsed + duration/4).Round(time.Second)))
 	}
 	lastHeap, _ := snapshot(t, s, "T=end-of-load")
 
@@ -331,10 +331,10 @@ func simulatePlayer(c *LoadClient, seed int64, stop <-chan struct{}) {
 	}()
 
 	// Phase-stagger tickers per-seed so players aren't synchronized.
-	time.Sleep(time.Duration(seed*23%250) * time.Millisecond)
+	time.Sleep(time.Duration((seed*23)%250) * time.Millisecond)
 
-	view := time.NewTicker(time.Duration(200+seed*13%100) * time.Millisecond)
-	reveal := time.NewTicker(time.Duration(800+seed*29%400) * time.Millisecond)
+	view := time.NewTicker(time.Duration(200+(seed*13)%100) * time.Millisecond)
+	reveal := time.NewTicker(time.Duration(800+(seed*29)%400) * time.Millisecond)
 	mini := time.NewTicker(time.Duration(15+seed%15) * time.Second)
 	defer view.Stop()
 	defer reveal.Stop()

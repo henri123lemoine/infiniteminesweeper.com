@@ -111,7 +111,7 @@ func (s *Server) writeWALEntry(entryType string, data interface{}) {
 	shouldSignal := len(s.walBuffer) >= walBufferFlushThreshold
 	s.walMutex.Unlock()
 
-	if shouldSignal && s.walFlushSignal != nil {
+	if shouldSignal {
 		// Coalesced non-blocking signal — if a flush is already queued we
 		// leave it be. The flusher drains whatever is in the buffer when it
 		// runs, so a single wake-up covers any number of overshoots.
@@ -138,10 +138,9 @@ func (s *Server) flushWAL() error {
 	s.walMutex.Unlock()
 
 	if s.useS3 {
-		// Encode ONLY the new batch into a unique segment object. We avoid the
-		// legacy read-append-rewrite flow because it pulled the entire WAL into
-		// memory on every flush — which is the primary WAL-related OOM
-		// contributor under load.
+		// One S3 object per flush under walPrefix; truncate deletes the whole
+		// set after a snapshot. Avoids pulling the cumulative WAL into memory
+		// on every flush.
 		var buf bytes.Buffer
 		encoder := json.NewEncoder(&buf)
 		for _, entry := range entries {

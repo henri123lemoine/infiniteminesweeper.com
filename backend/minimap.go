@@ -69,18 +69,16 @@ func (t *MinimapTile) deriveDirtyAtResolution(res uint32) []bool {
 	block := int(64 / res)
 	for by := 0; by < int(res); by++ {
 		for bx := 0; bx < int(res); bx++ {
+		scan:
 			for dy := 0; dy < block; dy++ {
-				sy := by*block + dy
-				rowBase := sy * 64
 				for dx := 0; dx < block; dx++ {
-					pos := rowBase + bx*block + dx
+					pos := (by*block+dy)*64 + bx*block + dx
 					if t.Dirty[pos>>6]&(uint64(1)<<(uint(pos)&63)) != 0 {
 						out[by*int(res)+bx] = true
-						goto next
+						break scan
 					}
 				}
 			}
-		next:
 		}
 	}
 	return out
@@ -202,12 +200,8 @@ func (s *Server) minimapMarkDirty(cid ChunkID, cell uint32) {
 }
 
 // computePaletteFor computes the palette index for a single cell directly from
-// authoritative world state. Cheap — a couple of map lookups and a local seed
-// lookup per isMine call.
-//
-// Palette layout depends on mmEmpty0..mmNum7Plus being consecutive: mmEmpty0
-// (n=0) … mmNum6 (n=6), then mmNum7Plus for n ≥ 7. If you renumber the
-// palette constants, update this accordingly.
+// authoritative world state. Palette is mmEmpty0+n for n ≤ 6, mmNum7Plus for
+// n ≥ 7; if you change those constants, keep this in sync.
 func (s *Server) computePaletteFor(cid ChunkID, cell uint32) byte {
 	if fl, ok := s.flags[cid][cell]; ok {
 		return byte(mmFlagBase + minimapFlagBucket(fl.FlagID))
@@ -239,7 +233,8 @@ func (s *Server) computeFullTileData(cid ChunkID) []byte {
 }
 
 // downsampleTo reshapes a 64×64 palette buffer to res×res via per-block
-// probabilistic sampling. Returns full unchanged for res=64.
+// probabilistic sampling. Returns full *unchanged and aliased* when res=64 —
+// callers must not mutate the returned slice.
 func downsampleTo(cid ChunkID, full []byte, res uint32) []byte {
 	if full == nil || res == 64 {
 		return full
@@ -367,7 +362,18 @@ func (s *Server) minimapSendFullTo(playerID uint32, cid ChunkID) {
 
 // runMinimapBroadcaster drains the dirty tile set and sends deltas (or full
 // tiles when delta would exceed half the tile size). Runs in its own goroutine.
+//
+// Work split into two phases to minimize stateMu hold time:
+//   Phase 1 (under stateMu):  read state, compute palette + dirty rects,
+//                             build unmarshaled protobuf messages.
+//   Phase 2 (no lock):        gzip-marshal each message, send to subscribers.
+// Marshal is the biggest CPU cost per tile (gzip dominates) and touches no
+// shared state, so it doesn't need the lock.
 func (s *Server) runMinimapBroadcaster() {
+	type pendingSend struct {
+		msg  *pb.Msg
+		pids []uint32
+	}
 	for {
 		s.stateMu.Lock()
 		if len(s.minimapDirtyTiles) == 0 {
@@ -381,18 +387,11 @@ func (s *Server) runMinimapBroadcaster() {
 		}
 		s.minimapDirtyTiles = make(map[ChunkID]struct{})
 
-		// Collect per-resolution messages to send OUTSIDE the lock.
-		type pendingSend struct {
-			data []byte
-			pids []uint32
-		}
 		var pending []pendingSend
-
 		for _, cid := range dirty {
 			subs := s.minimapSubs[cid]
 			if len(subs) == 0 {
-				// Tile became unsubscribed while we were queued; drop state.
-				delete(s.minimapTiles, cid)
+				delete(s.minimapTiles, cid) // tile became unsubscribed while queued
 				continue
 			}
 			t := s.minimapTiles[cid]
@@ -400,7 +399,6 @@ func (s *Server) runMinimapBroadcaster() {
 				continue
 			}
 
-			// Group subscribers by their chosen resolution.
 			playersByRes := make(map[uint32][]uint32)
 			for pid := range subs {
 				res := uint32(64)
@@ -410,7 +408,6 @@ func (s *Server) runMinimapBroadcaster() {
 				playersByRes[res] = append(playersByRes[res], pid)
 			}
 
-			// Precompute full data once; we'll downsample as needed.
 			fullData := s.computeFullTileData(cid)
 			t.Version++
 			version := t.Version
@@ -418,49 +415,39 @@ func (s *Server) runMinimapBroadcaster() {
 			for res, players := range playersByRes {
 				data := downsampleTo(cid, fullData, res)
 				if data == nil {
-					continue // chunk has no state; nothing to send
+					continue
 				}
 				dirtyLR := t.deriveDirtyAtResolution(res)
 				rects, deltaBytes := collectRectsFromDirty(dirtyLR, data, int(res))
-				tileSize := int(res * res)
+				tileRef := &pb.TileRef{X: int32(cid.X), Y: int32(cid.Y)}
 
 				var payload *pb.Msg
-				if deltaBytes > tileSize/2 {
+				if deltaBytes > int(res*res)/2 {
 					payload = &pb.Msg{Payload: &pb.Msg_MinimapFullTile{MinimapFullTile: &pb.FullTile{
-						Tile:       &pb.TileRef{X: int32(cid.X), Y: int32(cid.Y)},
-						Version:    version,
-						Data:       data,
-						Resolution: res,
+						Tile: tileRef, Version: version, Data: data, Resolution: res,
 					}}}
 				} else if len(rects) > 0 {
-					pRects := make([]*pb.DeltaRect, 0, len(rects))
-					for _, r := range rects {
-						pRects = append(pRects, &pb.DeltaRect{
-							X:    uint32(r.x),
-							Y:    uint32(r.y),
-							W:    uint32(r.w),
-							H:    uint32(r.h),
-							Rows: r.rows,
-						})
+					pRects := make([]*pb.DeltaRect, len(rects))
+					for i, r := range rects {
+						pRects[i] = &pb.DeltaRect{X: uint32(r.x), Y: uint32(r.y), W: uint32(r.w), H: uint32(r.h), Rows: r.rows}
 					}
 					payload = &pb.Msg{Payload: &pb.Msg_MinimapTileDelta{MinimapTileDelta: &pb.TileDelta{
-						Tile:       &pb.TileRef{X: int32(cid.X), Y: int32(cid.Y)},
-						Version:    version,
-						Rects:      pRects,
-						Resolution: res,
+						Tile: tileRef, Version: version, Rects: pRects, Resolution: res,
 					}}}
 				}
 				if payload != nil {
-					pending = append(pending, pendingSend{data: mustProto(payload), pids: players})
+					pending = append(pending, pendingSend{msg: payload, pids: players})
 				}
 			}
 			t.clearDirty()
 		}
 		s.stateMu.Unlock()
 
+		// Phase 2: marshal + send out of lock.
 		for _, p := range pending {
+			data := mustProto(p.msg)
 			for _, pid := range p.pids {
-				s.sendToPlayer(pid, p.data)
+				s.sendToPlayer(pid, data)
 			}
 		}
 	}
