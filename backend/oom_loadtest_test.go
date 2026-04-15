@@ -264,6 +264,60 @@ func TestLoadConcurrentZoomOuts(t *testing.T) {
 	}
 }
 
+// TestLoadFloodFillCascade: 8 observers + heavy reveals on the same 5x5
+// region. Exercises the broadcast fan-out path specifically — an O(N²)
+// regression in broadcasting would show here before the realistic test.
+func TestLoadFloodFillCascade(t *testing.T) {
+	s, wsURL, cleanup := startLoadTestServer(t)
+	defer cleanup()
+
+	tiles := make([]*pb.TileRef, 0, 25)
+	for dy := int32(-2); dy <= 2; dy++ {
+		for dx := int32(-2); dx <= 2; dx++ {
+			tiles = append(tiles, &pb.TileRef{X: dx, Y: dy})
+		}
+	}
+	for i := range 8 {
+		c, err := NewLoadClient(wsURL)
+		if err != nil {
+			t.Fatalf("obs %d: %v", i, err)
+		}
+		defer c.Close()
+		if err := c.Join(fmt.Sprintf("obs-%d", i)); err != nil {
+			t.Fatalf("obs %d join: %v", i, err)
+		}
+		_ = c.ViewUpdate(0, 0, 5*ChunkSize)
+		_ = c.MinimapSubscribe(tiles, 64)
+		go func() {
+			for range c.recv {
+			}
+		}()
+	}
+
+	rv, err := NewLoadClient(wsURL)
+	if err != nil {
+		t.Fatalf("revealer: %v", err)
+	}
+	defer rv.Close()
+	if err := rv.Join("revealer"); err != nil {
+		t.Fatalf("revealer join: %v", err)
+	}
+	go func() {
+		for range rv.recv {
+		}
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for reqID := uint64(1); time.Now().Before(deadline); reqID++ {
+		_ = rv.Reveal(int64(reqID%5)-2, int64((reqID/5)%5)-2, uint32(reqID*97)%4096, reqID)
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if peak, _ := snapshot(t, s, "after flood cascade"); peak > 80 {
+		t.Errorf("flood-cascade heap %d MB exceeds 80 MB ceiling", peak)
+	}
+}
+
 // simulatePlayer is the realistic-gameplay loop for TestLoadRealisticSustained.
 // Single goroutine: ticks for view-pan, reveals, occasional minimap opens.
 // Just enough randomness to avoid synchronized lockstep across clients.
@@ -276,9 +330,12 @@ func simulatePlayer(c *LoadClient, seed int64, stop <-chan struct{}) {
 		}
 	}()
 
-	view := time.NewTicker(250 * time.Millisecond)
-	reveal := time.NewTicker(time.Second)
-	mini := time.NewTicker(20 * time.Second)
+	// Phase-stagger tickers per-seed so players aren't synchronized.
+	time.Sleep(time.Duration(seed*23%250) * time.Millisecond)
+
+	view := time.NewTicker(time.Duration(200+seed*13%100) * time.Millisecond)
+	reveal := time.NewTicker(time.Duration(800+seed*29%400) * time.Millisecond)
+	mini := time.NewTicker(time.Duration(15+seed%15) * time.Second)
 	defer view.Stop()
 	defer reveal.Stop()
 	defer mini.Stop()

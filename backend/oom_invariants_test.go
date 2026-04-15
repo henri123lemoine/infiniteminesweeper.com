@@ -326,3 +326,34 @@ func TestConcurrentPlayerMinimapMemory(t *testing.T) {
 	runtime.KeepAlive(s)
 }
 
+// TestSimulatedLongRunMemory: 100k reveals + 5 disk snapshot/WAL cycles
+// stays under 100 MB. Catches regressions where captureSnapshotData grows
+// unboundedly (e.g. new state fields added without bounds).
+func TestSimulatedLongRunMemory(t *testing.T) {
+	s := NewServer()
+	s.useS3 = false
+	s.dataDir = t.TempDir()
+	s.proximityRadius = -1
+	for pid := uint32(1); pid <= 1000; pid++ {
+		s.playerNames[pid] = "p"
+		s.playerFlags[pid] = 1
+	}
+
+	before := readHeapAlloc()
+	for pid := uint32(1); pid <= 1000; pid++ {
+		for k := range 100 {
+			s.handleReveal(pid, uint64(k), ChunkID{X: int64(pid) % 100, Y: int64(k) % 100}, uint32(k*13)%4096, false, false)
+		}
+	}
+	for range 5 {
+		if err := s.flushWAL(); err != nil {
+			t.Fatalf("flushWAL: %v", err)
+		}
+		if err := s.saveSnapshotToDisk(); err != nil {
+			t.Fatalf("saveSnapshotToDisk: %v", err)
+		}
+	}
+	if mb := (int64(readHeapAlloc()) - int64(before)) / 1024 / 1024; mb > 100 {
+		t.Errorf("long-run heap %d MB exceeds 100 MB", mb)
+	}
+}
