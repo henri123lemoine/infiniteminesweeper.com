@@ -626,6 +626,21 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 		}
 	}
 	s.nameToPlayerID = idx
+
+	// Recompute totalRevealed from persisted bitsets. Without this, after a
+	// restart hasRevealedWithinTwo trivially returns true and the proximity
+	// rule is silently disabled until at least one new reveal occurs.
+	var totalRevealed uint64
+	for _, cb := range s.chunks {
+		if cb == nil {
+			continue
+		}
+		for _, word := range *cb {
+			totalRevealed += uint64(bits.OnesCount64(word))
+		}
+	}
+	s.totalRevealed = totalRevealed
+
 	s.lbDirty = true
 }
 
