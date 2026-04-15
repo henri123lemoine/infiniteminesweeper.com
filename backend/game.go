@@ -435,6 +435,7 @@ func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, 
 
 	// Update minimap tile (under the same lock)
 	s.minimapOnReveal(chunkID, cell)
+	s.invalidateChunkSync(chunkID)
 }
 
 func (s *Server) setCellFlagged(chunkID ChunkID, cell uint32, playerID uint32, flagID uint32, collector *map[ChunkID][]*pb.FlagPlacement) {
@@ -451,6 +452,17 @@ func (s *Server) setCellFlagged(chunkID ChunkID, cell uint32, playerID uint32, f
 
 	// Update minimap tile (under the same lock)
 	s.minimapOnFlag(chunkID, cell)
+	s.invalidateChunkSync(chunkID)
+}
+
+// invalidateChunkSync drops a cached serialized ChunkSync for chunkID after
+// a mutation. Always called under stateMu.Lock; readers (serializeChunk) are
+// blocked, so no one can repopulate a stale entry before we release the
+// state lock. Safe to call for chunks not currently cached.
+func (s *Server) invalidateChunkSync(chunkID ChunkID) {
+	s.chunkSyncCacheMu.Lock()
+	delete(s.chunkSyncCache, chunkID)
+	s.chunkSyncCacheMu.Unlock()
 }
 
 func (s *Server) isCellRevealed(chunkID ChunkID, cell uint32) bool {

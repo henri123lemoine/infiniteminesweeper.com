@@ -750,6 +750,13 @@ func (s *Server) readPump(player *Player) {
 }
 
 func (s *Server) serializeChunk(chunkID ChunkID) *pb.ChunkSync {
+	s.chunkSyncCacheMu.Lock()
+	if cs, ok := s.chunkSyncCache[chunkID]; ok {
+		s.chunkSyncCacheMu.Unlock()
+		return cs
+	}
+	s.chunkSyncCacheMu.Unlock()
+
 	chunk, chunkExists := s.chunks[chunkID]
 	flagsMap := s.flags[chunkID]
 	seed64 := s.generateChunkSeed(chunkID)
@@ -790,13 +797,26 @@ func (s *Server) serializeChunk(chunkID ChunkID) *pb.ChunkSync {
 
 	density := s.getChunkDensity(chunkID)
 
-	return &pb.ChunkSync{
+	cs := &pb.ChunkSync{
 		ChunkId:    &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
 		Seed:       seedBytes[:],
 		Reveals:    revealsBytes,
 		FlagGroups: flagGroups,
 		Density:    float32(density),
 	}
+
+	s.chunkSyncCacheMu.Lock()
+	// Random eviction keeps the cache bounded; hot chunks re-enter faster
+	// than they drop out, cold ones naturally fall off.
+	if len(s.chunkSyncCache) >= chunkSyncCacheMaxEntries {
+		for k := range s.chunkSyncCache {
+			delete(s.chunkSyncCache, k)
+			break
+		}
+	}
+	s.chunkSyncCache[chunkID] = cs
+	s.chunkSyncCacheMu.Unlock()
+	return cs
 }
 
 func (s *Server) writePump(player *Player) {

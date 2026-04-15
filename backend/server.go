@@ -14,11 +14,16 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+
+	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
 const (
-	seedCacheMaxEntries    = 200000
-	densityCacheMaxEntries = 200000
+	seedCacheMaxEntries      = 200000
+	densityCacheMaxEntries   = 200000
+	// ~2KB/entry avg, ~8KB on heavily-flagged chunks — 8000 entries is
+	// ~16MB typical, ~64MB worst case, well within the 256MB fly machine.
+	chunkSyncCacheMaxEntries = 8000
 )
 
 type Server struct {
@@ -68,6 +73,14 @@ type Server struct {
 	// Density cache for per-chunk bomb densities
 	densityCache   map[ChunkID]float64
 	densityCacheMu sync.RWMutex
+
+	// Cached serialized ChunkSync, invalidated on reveal/flag. Many players
+	// panning over the same region re-serialize the same chunk; the cache
+	// collapses that duplicate work. Accessed under chunkSyncCacheMu only —
+	// stateMu is already held by callers, but that doesn't protect the map
+	// from concurrent populate-on-miss by parallel RLock readers.
+	chunkSyncCache   map[ChunkID]*pb.ChunkSync
+	chunkSyncCacheMu sync.Mutex
 
 	// Persistence configuration
 	useS3   bool
@@ -120,6 +133,7 @@ func NewServer() *Server {
 		botIDs:            make(map[uint32]bool),
 		seedCache:         make(map[ChunkID]uint64),
 		densityCache:      make(map[ChunkID]float64),
+		chunkSyncCache:    make(map[ChunkID]*pb.ChunkSync),
 		walFlushSignal:    make(chan struct{}, 1),
 		nextPlayerID:      1,
 		nextSpectatorID:   1,
