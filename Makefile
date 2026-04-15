@@ -89,6 +89,16 @@ loadtest:
 loadtest-long:
 	cd backend && go test -v -tags integration -count=1 -timeout 600s -run "TestLoad" ./... -args -loadtest-long
 
+# stress-clients spawns N external WebSocket clients against a running server.
+# Usage:
+#   Terminal 1:  make go-run                     # server + in-process bots on :8080
+#   Terminal 2:  make stress-clients N=20        # 20 WebSocket clients doing realistic gameplay
+#   Browser:     http://localhost:8080/          # play alongside the swarm
+N   ?= 20
+URL ?= ws://localhost:8080/ws
+stress-clients:
+	go run ./tools/stress -n $(N) -url $(URL)
+
 # deploy / clean
 deploy:
 	go test ./...
