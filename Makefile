@@ -99,6 +99,21 @@ URL ?= ws://localhost:8080/ws
 stress-clients:
 	go run ./tools/stress -n $(N) -url $(URL)
 
+# Pull the prod snapshot + WAL from fly.io into local data/. `make go-run`
+# will boot from it, giving you the real world (tens of thousands of revealed
+# cells) to play with — much better than the empty dev world for zoom-out
+# stress testing. Wakes a fly machine if one isn't already running.
+snapshot-from-prod:
+	@echo "Waking a fly machine if none is running..."
+	@fly machine list --app infiniteminesweeper --json \
+		| jq -r '.[] | select(.state=="stopped") | .id' \
+		| head -1 | xargs -r -I{} fly machine start {} --app infiniteminesweeper
+	@mkdir -p data
+	@rm -f data/snapshot.gob.gz data/wal.log
+	fly ssh sftp get /data/snapshot.gob.gz data/snapshot.gob.gz --app infiniteminesweeper
+	fly ssh sftp get /data/wal.log       data/wal.log       --app infiniteminesweeper || true
+	@echo "Done. Run 'make go-run' to boot with prod state."
+
 # deploy / clean
 deploy:
 	go test ./...
