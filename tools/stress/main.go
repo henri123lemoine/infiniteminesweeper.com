@@ -37,15 +37,19 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("stress: spawning %d clients against %s", *n, *url)
+	// Unique run ID keeps player names from colliding with prior runs (which
+	// would otherwise persist in the local snapshot).
+	runID := time.Now().UnixMilli() % 1_000_000
+	log.Printf("stress: spawning %d clients against %s (run %d)", *n, *url, runID)
 	var wg sync.WaitGroup
 	wg.Add(*n)
 	for i := 0; i < *n; i++ {
 		go func(seed int64) {
 			defer wg.Done()
+			name := fmt.Sprintf("stress-%d-%d", runID, seed)
 			for ctx.Err() == nil {
-				if err := runClient(ctx.Done(), *url, fmt.Sprintf("stress-%d", seed), seed); err != nil {
-					log.Printf("client %d: %v (reconnecting in 1s)", seed, err)
+				if err := runClient(ctx.Done(), *url, name, seed); err != nil {
+					log.Printf("%s: %v (reconnecting in 1s)", name, err)
 					time.Sleep(time.Second)
 				}
 			}
@@ -63,24 +67,34 @@ func runClient(stop <-chan struct{}, url, name string, seed int64) error {
 	}
 	defer conn.Close()
 
+	// readLoop owns closing recvCh + done when the conn dies. runClient signals
+	// exit by closing the conn (via defer above), which makes readLoop's
+	// ReadMessage error out and fall through to its defer.
 	sendCh := make(chan *pb.Msg, 64)
 	recvCh := make(chan *pb.Msg, 64)
 	done := make(chan struct{})
-	defer close(done)
 
 	go readLoop(conn, recvCh, done)
 	go writeLoop(conn, sendCh, done)
 
 	sendCh <- &pb.Msg{Payload: &pb.Msg_Join{Join: &pb.Join{Name: name}}}
-	select {
-	case msg := <-recvCh:
-		if ack := msg.GetJoinAck(); ack == nil || !ack.Ok {
-			return fmt.Errorf("join failed")
+	deadline := time.After(5 * time.Second)
+waitForAck:
+	for {
+		select {
+		case msg := <-recvCh:
+			if ack := msg.GetJoinAck(); ack != nil {
+				if !ack.Ok {
+					return fmt.Errorf("join rejected: %s", ack.Error)
+				}
+				break waitForAck
+			}
+			// Ignore other messages (leaderboard, etc.) that may land first.
+		case <-deadline:
+			return fmt.Errorf("join timeout")
+		case <-stop:
+			return nil
 		}
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("join timeout")
-	case <-stop:
-		return nil
 	}
 
 	r := rand.New(rand.NewSource(seed))
@@ -101,6 +115,18 @@ func runClient(stop <-chan struct{}, url, name string, seed int64) error {
 		}
 	}()
 
+	// send respects both stop signals; drops on full buffer rather than
+	// blocking if writeLoop has fallen behind (64-deep is generous).
+	send := func(m *pb.Msg) bool {
+		select {
+		case sendCh <- m:
+			return true
+		case <-stop:
+			return false
+		case <-done:
+			return false
+		}
+	}
 	for {
 		select {
 		case <-stop:
@@ -110,11 +136,15 @@ func runClient(stop <-chan struct{}, url, name string, seed int64) error {
 		case <-tickView.C:
 			cx += int64(r.Intn(3) - 1)
 			cy += int64(r.Intn(3) - 1)
-			sendCh <- viewUpdate(cx, cy)
+			if !send(viewUpdate(cx, cy)) {
+				return nil
+			}
 		case <-tickReveal.C:
-			sendCh <- &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{
+			if !send(&pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{
 				ChunkId: &pb.ChunkID{X: cx, Y: cy}, Cell: uint32(r.Intn(4096)), RequestId: reqID,
-			}}}
+			}}}) {
+				return nil
+			}
 			reqID++
 		case <-tickMini.C:
 			tiles := make([]*pb.TileRef, 0, 441)
@@ -123,15 +153,14 @@ func runClient(stop <-chan struct{}, url, name string, seed int64) error {
 					tiles = append(tiles, &pb.TileRef{X: int32(cx) + dx, Y: int32(cy) + dy})
 				}
 			}
-			sendCh <- &pb.Msg{Payload: &pb.Msg_MinimapSubscribe{MinimapSubscribe: &pb.SubscribeTiles{
+			if !send(&pb.Msg{Payload: &pb.Msg_MinimapSubscribe{MinimapSubscribe: &pb.SubscribeTiles{
 				Tiles: tiles, Resolution: 32,
-			}}}
+			}}}) {
+				return nil
+			}
 			go func(ts []*pb.TileRef) {
 				time.Sleep(5 * time.Second)
-				select {
-				case sendCh <- &pb.Msg{Payload: &pb.Msg_MinimapUnsubscribe{MinimapUnsubscribe: &pb.UnsubscribeTiles{Tiles: ts}}}:
-				case <-done:
-				}
+				send(&pb.Msg{Payload: &pb.Msg_MinimapUnsubscribe{MinimapUnsubscribe: &pb.UnsubscribeTiles{Tiles: ts}}})
 			}(tiles)
 		}
 	}
@@ -143,15 +172,12 @@ func viewUpdate(cx, cy int64) *pb.Msg {
 	}}}
 }
 
-func readLoop(conn *websocket.Conn, out chan<- *pb.Msg, done chan struct{}) {
+func readLoop(conn *websocket.Conn, out chan *pb.Msg, done chan struct{}) {
+	defer close(done)
+	defer close(out)
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
-			select {
-			case <-done:
-			default:
-				close(done)
-			}
 			return
 		}
 		gz, err := gzip.NewReader(bytes.NewReader(data))
@@ -166,9 +192,7 @@ func readLoop(conn *websocket.Conn, out chan<- *pb.Msg, done chan struct{}) {
 		}
 		select {
 		case out <- &msg:
-		case <-done:
-			return
-		default:
+		default: // drop when scenario isn't consuming
 		}
 	}
 }

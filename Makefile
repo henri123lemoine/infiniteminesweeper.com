@@ -67,8 +67,8 @@ go-run: go-build
 		echo "Removing snapshot $(SNAPSHOT_FILE) and WAL $(WAL_FILE)"; \
 		rm -f "$(SNAPSHOT_FILE)" "$(WAL_FILE)"; \
 	fi
-	@echo "Running backend (MODE=$(MODE))"
-	MODE=$(MODE) backend/dist/backend
+	@echo "Running backend (MODE=$(MODE)); metrics on :9091/metrics"
+	MODE=$(MODE) METRICS_PORT=9091 backend/dist/backend
 
 # docker image/run
 docker-build: proto frontend-build spritesheet
