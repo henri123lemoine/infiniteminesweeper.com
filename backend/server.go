@@ -14,8 +14,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-
-	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
 const (
@@ -87,7 +85,7 @@ type Server struct {
 	// collapses that duplicate work. Accessed under chunkSyncCacheMu only —
 	// stateMu is already held by callers, but that doesn't protect the map
 	// from concurrent populate-on-miss by parallel RLock readers.
-	chunkSyncCache   map[ChunkID]*pb.ChunkSync
+	chunkSyncCache   map[ChunkID]*chunkSyncEntry
 	chunkSyncCacheMu sync.Mutex
 
 	// Persistence configuration
@@ -145,7 +143,7 @@ func NewServer() *Server {
 		botIDs:               make(map[uint32]bool),
 		seedCache:            make(map[ChunkID]uint64),
 		densityCache:         make(map[ChunkID]float64),
-		chunkSyncCache:       make(map[ChunkID]*pb.ChunkSync),
+		chunkSyncCache:       make(map[ChunkID]*chunkSyncEntry),
 		walFlushSignal:       make(chan struct{}, 1),
 		nextPlayerID:         1,
 		nextSpectatorID:      1,
