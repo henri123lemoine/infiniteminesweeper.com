@@ -690,12 +690,22 @@ func (s *Server) readPump(player *Player) {
 				}
 				s.minimapPlayerRes[player.ID] = resolution
 
+				// Hard cap per player to prevent a client from pinning unbounded
+				// server memory by zooming out too far.
+				remaining := maxMinimapSubsPerPlayer - s.minimapSubCount[player.ID]
 				for _, tr := range m.Tiles {
+					if remaining <= 0 {
+						break
+					}
 					cid := ChunkID{X: int64(tr.X), Y: int64(tr.Y)}
 					if s.minimapSubs[cid] == nil {
 						s.minimapSubs[cid] = make(map[uint32]struct{})
 					}
-					s.minimapSubs[cid][player.ID] = struct{}{}
+					if _, already := s.minimapSubs[cid][player.ID]; !already {
+						s.minimapSubs[cid][player.ID] = struct{}{}
+						s.minimapSubCount[player.ID]++
+						remaining--
+					}
 					// send current full tile snapshot
 					s.minimapSendFullTo(player.ID, cid)
 				}
@@ -708,7 +718,12 @@ func (s *Server) readPump(player *Player) {
 				for _, tr := range m.Tiles {
 					cid := ChunkID{X: int64(tr.X), Y: int64(tr.Y)}
 					if subs, ok := s.minimapSubs[cid]; ok {
-						delete(subs, player.ID)
+						if _, had := subs[player.ID]; had {
+							delete(subs, player.ID)
+							if s.minimapSubCount[player.ID] > 0 {
+								s.minimapSubCount[player.ID]--
+							}
+						}
 						if len(subs) == 0 {
 							delete(s.minimapSubs, cid)
 							delete(s.minimapTiles, cid)
@@ -987,6 +1002,7 @@ func (s *Server) removePlayer(p *Player) {
 		delete(s.playerSubs, p.ID)
 		delete(s.playerSubLastSeen, p.ID)
 		delete(s.minimapPlayerRes, p.ID)
+		delete(s.minimapSubCount, p.ID)
 		delete(s.playerViews, p.ID)
 		s.stateMu.Unlock()
 	}
