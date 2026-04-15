@@ -302,12 +302,13 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	player.State = ClientStatePlayer
 
 	// Move player from spectator ID space to player ID space
+	oldID := player.ID
 	s.playersMu.Lock()
 	// Remove from old ID
-	if playerSet, exists := s.players[player.ID]; exists {
+	if playerSet, exists := s.players[oldID]; exists {
 		delete(playerSet, player)
 		if len(playerSet) == 0 {
-			delete(s.players, player.ID)
+			delete(s.players, oldID)
 		}
 	}
 	// Add to new player ID
@@ -317,6 +318,13 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	s.players[playerID][player] = struct{}{}
 	player.ID = playerID // Update the player's ID
 	s.playersMu.Unlock()
+
+	// Migrate any state the client built while spectating so the spectator ID
+	// leaves no orphaned entries in the long-lived maps. Without this each
+	// Join leaks one entry per state map forever — small per-connection but
+	// unbounded over the process lifetime. Safe to call here because we
+	// already hold s.stateMu (see top of this function).
+	s.migrateSpectatorState(oldID, playerID)
 
 	s.lbDirty = true
 
@@ -824,6 +832,69 @@ func (s *Server) writePump(player *Player) {
 				return
 			}
 		}
+	}
+}
+
+// migrateSpectatorState transfers any ephemeral subscription / view state keyed
+// by a spectator's transient ID onto the new persistent player ID. Without this,
+// each Join leaves an orphan entry in chunk subs, minimap subs, playerSubs, and
+// playerViews that persists until the next snapshot reload.
+//
+// Caller MUST hold s.stateMu (write-lock). Called from handleJoin which already
+// holds it.
+func (s *Server) migrateSpectatorState(oldID, newID uint32) {
+	if oldID == newID {
+		return
+	}
+
+	if v, ok := s.playerViews[oldID]; ok {
+		if _, already := s.playerViews[newID]; !already {
+			s.playerViews[newID] = v
+		}
+		delete(s.playerViews, oldID)
+	}
+	if subs, ok := s.playerSubs[oldID]; ok {
+		dst := s.playerSubs[newID]
+		if dst == nil {
+			dst = make(map[ChunkID]struct{}, len(subs))
+			s.playerSubs[newID] = dst
+		}
+		for cid := range subs {
+			dst[cid] = struct{}{}
+			if chunkSubs, ok := s.subs[cid]; ok {
+				delete(chunkSubs, oldID)
+				chunkSubs[newID] = struct{}{}
+			}
+		}
+		delete(s.playerSubs, oldID)
+	}
+	if seen, ok := s.playerSubLastSeen[oldID]; ok {
+		dst := s.playerSubLastSeen[newID]
+		if dst == nil {
+			dst = make(map[ChunkID]uint64, len(seen))
+			s.playerSubLastSeen[newID] = dst
+		}
+		for cid, t := range seen {
+			dst[cid] = t
+		}
+		delete(s.playerSubLastSeen, oldID)
+	}
+	// Minimap: transfer per-chunk membership and per-player settings.
+	for _, subs := range s.minimapSubs {
+		if _, ok := subs[oldID]; ok {
+			delete(subs, oldID)
+			subs[newID] = struct{}{}
+		}
+	}
+	if res, ok := s.minimapPlayerRes[oldID]; ok {
+		if _, already := s.minimapPlayerRes[newID]; !already {
+			s.minimapPlayerRes[newID] = res
+		}
+		delete(s.minimapPlayerRes, oldID)
+	}
+	if n, ok := s.minimapSubCount[oldID]; ok {
+		s.minimapSubCount[newID] += n
+		delete(s.minimapSubCount, oldID)
 	}
 }
 
