@@ -1,6 +1,6 @@
 module github.com/henri123lemoine/infiniteminesweeper.com
 
-go 1.23.0
+go 1.24
 
 require (
 	github.com/aws/aws-sdk-go v1.55.7
@@ -11,4 +11,7 @@ require (
 	google.golang.org/protobuf v1.36.6
 )
 
-require github.com/jmespath/go-jmespath v0.4.0 // indirect
+require (
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
+	github.com/klauspost/compress v1.18.5 // indirect
+)
