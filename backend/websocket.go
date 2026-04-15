@@ -686,38 +686,7 @@ func (s *Server) readPump(player *Player) {
 		case *pb.Msg_MinimapSubscribe:
 			m := t.MinimapSubscribe
 			if m != nil {
-				s.stateMu.Lock()
-				// Store player's resolution preference
-				resolution := m.Resolution
-				if resolution == 0 {
-					resolution = 64 // default to full resolution
-				}
-				// Validate resolution
-				if resolution != 16 && resolution != 32 && resolution != 64 {
-					resolution = 64 // fallback to full resolution for invalid values
-				}
-				s.minimapPlayerRes[player.ID] = resolution
-
-				// Hard cap per player to prevent a client from pinning unbounded
-				// server memory by zooming out too far.
-				remaining := maxMinimapSubsPerPlayer - s.minimapSubCount[player.ID]
-				for _, tr := range m.Tiles {
-					if remaining <= 0 {
-						break
-					}
-					cid := ChunkID{X: int64(tr.X), Y: int64(tr.Y)}
-					if s.minimapSubs[cid] == nil {
-						s.minimapSubs[cid] = make(map[uint32]struct{})
-					}
-					if _, already := s.minimapSubs[cid][player.ID]; !already {
-						s.minimapSubs[cid][player.ID] = struct{}{}
-						s.minimapSubCount[player.ID]++
-						remaining--
-					}
-					// send current full tile snapshot
-					s.minimapSendFullTo(player.ID, cid)
-				}
-				s.stateMu.Unlock()
+				s.handleMinimapSubscribe(player.ID, m)
 			}
 		case *pb.Msg_MinimapUnsubscribe:
 			m := t.MinimapUnsubscribe
@@ -895,6 +864,99 @@ func (s *Server) migrateSpectatorState(oldID, newID uint32) {
 	if n, ok := s.minimapSubCount[oldID]; ok {
 		s.minimapSubCount[newID] += n
 		delete(s.minimapSubCount, oldID)
+	}
+}
+
+// minimapSubscribeBatchSize bounds how many tiles a single write-lock acquire
+// processes during handleMinimapSubscribe. With ~500 ns per map op, a batch of
+// 2000 holds the lock for ~1 ms — short enough that other writers (reveals,
+// minimap broadcaster) can interleave smoothly while a user drags the overlay
+// minimap to max zoom (~32 k tiles in one request).
+const minimapSubscribeBatchSize = 2000
+
+// handleMinimapSubscribe splits a mass minimap subscribe into two phases so
+// a single request cannot freeze the server while it processes thousands of
+// tiles:
+//
+//  1. Register subs in map state in short write-locked batches.
+//  2. Compute + send each tile's current contents under a read lock, per-tile,
+//     so reveals and broadcasts can slot in between.
+//
+// Correctness rests on two invariants:
+//   - Palette data is always computed from authoritative world state, so a
+//     cell change between phase 1 and phase 2 self-heals: Phase 2's read will
+//     pick up the new state.
+//   - Tile Version is read under the lock; the broadcaster only bumps version
+//     under the lock. Reorderings between a FullTile send here and a Delta
+//     send by the broadcaster still reconcile correctly on the client because
+//     payloads go through the same ordered per-player Send channel.
+func (s *Server) handleMinimapSubscribe(playerID uint32, m *pb.SubscribeTiles) {
+	resolution := m.Resolution
+	if resolution == 0 {
+		resolution = 64
+	}
+	if resolution != 16 && resolution != 32 && resolution != 64 {
+		resolution = 64
+	}
+
+	// Phase 1: register subscriptions in small write-locked batches.
+	toSend := make([]ChunkID, 0, len(m.Tiles))
+	capHit := false
+	for i := 0; i < len(m.Tiles); i += minimapSubscribeBatchSize {
+		end := i + minimapSubscribeBatchSize
+		if end > len(m.Tiles) {
+			end = len(m.Tiles)
+		}
+
+		s.stateMu.Lock()
+		if i == 0 {
+			s.minimapPlayerRes[playerID] = resolution
+		}
+		remaining := maxMinimapSubsPerPlayer - s.minimapSubCount[playerID]
+		for _, tr := range m.Tiles[i:end] {
+			if remaining <= 0 {
+				capHit = true
+				break
+			}
+			cid := ChunkID{X: int64(tr.X), Y: int64(tr.Y)}
+			if s.minimapSubs[cid] == nil {
+				s.minimapSubs[cid] = make(map[uint32]struct{})
+			}
+			if _, already := s.minimapSubs[cid][playerID]; !already {
+				s.minimapSubs[cid][playerID] = struct{}{}
+				s.minimapSubCount[playerID]++
+				remaining--
+				toSend = append(toSend, cid)
+			}
+		}
+		s.stateMu.Unlock()
+		if capHit {
+			break
+		}
+	}
+
+	// Phase 2: per-tile compute + send under a read lock. Other readers may
+	// hold RLock concurrently; writers (reveal, broadcast) queue briefly
+	// between tiles.
+	for _, cid := range toSend {
+		s.stateMu.RLock()
+		data := s.computeTileDataAtResolution(cid, resolution)
+		var version uint32
+		if t := s.minimapTiles[cid]; t != nil {
+			version = t.Version
+		}
+		s.stateMu.RUnlock()
+
+		if data == nil {
+			continue // all-unseen chunk; skip
+		}
+		msg := &pb.Msg{Payload: &pb.Msg_MinimapFullTile{MinimapFullTile: &pb.FullTile{
+			Tile:       &pb.TileRef{X: int32(cid.X), Y: int32(cid.Y)},
+			Version:    version,
+			Data:       data,
+			Resolution: resolution,
+		}}}
+		s.sendToPlayer(playerID, mustProto(msg))
 	}
 }
 
