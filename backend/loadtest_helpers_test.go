@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
@@ -281,69 +282,14 @@ func captureSnapshot(s *Server) memorySnapshot {
 }
 
 func (m memorySnapshot) String() string {
-	return fmtMB(m.HeapAlloc) + " alloc / " + fmtMB(m.HeapInuse) + " inuse / " +
-		fmtMB(m.Sys) + " sys | " +
-		fmtInt(m.NumGoroutine) + " goroutines, " +
-		fmtInt(m.NumChunks) + " chunks, " +
-		fmtInt(m.NumSubs) + " subs, " +
-		fmtInt(m.NumMiniSubs) + " minisubs, " +
-		fmtInt(m.NumMiniTiles) + " minitiles, " +
-		fmtInt(m.NumPlayers) + " players"
+	return fmt.Sprintf(
+		"%.1fMB alloc / %.1fMB inuse / %.1fMB sys | %d goroutines, %d chunks, %d subs, %d minisubs, %d minitiles, %d players",
+		float64(m.HeapAlloc)/1024/1024,
+		float64(m.HeapInuse)/1024/1024,
+		float64(m.Sys)/1024/1024,
+		m.NumGoroutine, m.NumChunks, m.NumSubs, m.NumMiniSubs, m.NumMiniTiles, m.NumPlayers,
+	)
 }
-
-func fmtMB(n uint64) string {
-	mb := float64(n) / 1024 / 1024
-	return strings.TrimRight(strings.TrimRight(
-		trunc3(mb), "0"), ".") + "MB"
-}
-
-func trunc3(f float64) string {
-	s := strings.Builder{}
-	if f == 0 {
-		return "0"
-	}
-	return strings.TrimSuffix(
-		strings.TrimRight(
-			strings.TrimRight(
-				stringsBuilderFloat(&s, f),
-				"0"), "."),
-		".")
-}
-
-func stringsBuilderFloat(b *strings.Builder, f float64) string {
-	// minimal helper; using %.1f via fmt would be fine but avoids fmt import
-	n := int(f*10 + 0.5)
-	hi := n / 10
-	lo := n % 10
-	b.WriteString(intToStr(hi))
-	b.WriteString(".")
-	b.WriteString(intToStr(lo))
-	return b.String()
-}
-
-func intToStr(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
-}
-
-func fmtInt(n int) string { return intToStr(n) }
 
 // latencyTracker records samples of operation latency and computes p50/p99.
 type latencyTracker struct {

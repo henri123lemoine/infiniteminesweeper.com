@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"sort"
@@ -843,9 +844,7 @@ func (s *Server) migrateSpectatorState(oldID, newID uint32) {
 			dst = make(map[ChunkID]uint64, len(seen))
 			s.playerSubLastSeen[newID] = dst
 		}
-		for cid, t := range seen {
-			dst[cid] = t
-		}
+		maps.Copy(dst, seen)
 		delete(s.playerSubLastSeen, oldID)
 	}
 	// Minimap: transfer per-chunk membership and per-player settings.

@@ -48,12 +48,7 @@ const (
 // 1080) requests ~32 k tiles, so 100 k is 3× real-world demand.
 const maxMinimapSubsPerPlayer = 100000
 
-// dirtyWordMask is the set of bits currently set in a 64-word Dirty bitset.
-func (t *MinimapTile) clearDirty() {
-	for i := range t.Dirty {
-		t.Dirty[i] = 0
-	}
-}
+func (t *MinimapTile) clearDirty() { clear(t.Dirty[:]) }
 
 func (t *MinimapTile) setDirty(pos uint32) {
 	if pos >= 4096 {
@@ -71,49 +66,27 @@ func (t *MinimapTile) hasAnyDirty() bool {
 	return false
 }
 
-// deriveDirtyAtResolution expands or contracts the 64-res Dirty bitset to match
-// the requested output resolution. Returns a dense []bool for the consumer —
-// small (256..4096 bytes, stack-sized at low res).
+// deriveDirtyAtResolution OR-reduces the 64-res Dirty bitset into a dense
+// []bool sized for the requested output resolution. Block size is 64/res
+// (1, 2, or 4); each output cell is 1 if any source cell in its block is
+// dirty.
 func (t *MinimapTile) deriveDirtyAtResolution(res uint32) []bool {
 	out := make([]bool, res*res)
-	switch res {
-	case 64:
-		for i := range out {
-			if t.Dirty[i>>6]&(uint64(1)<<(uint(i)&63)) != 0 {
-				out[i] = true
-			}
-		}
-	case 32:
-		// 2×2 block: OR-reduce
-		for by := 0; by < 32; by++ {
-			for bx := 0; bx < 32; bx++ {
-				for dy := 0; dy < 2; dy++ {
-					for dx := 0; dx < 2; dx++ {
-						sx := bx*2 + dx
-						sy := by*2 + dy
-						pos := sy*64 + sx
-						if t.Dirty[pos>>6]&(uint64(1)<<(uint(pos)&63)) != 0 {
-							out[by*32+bx] = true
-						}
+	block := int(64 / res)
+	for by := 0; by < int(res); by++ {
+		for bx := 0; bx < int(res); bx++ {
+			for dy := 0; dy < block; dy++ {
+				sy := by*block + dy
+				rowBase := sy * 64
+				for dx := 0; dx < block; dx++ {
+					pos := rowBase + bx*block + dx
+					if t.Dirty[pos>>6]&(uint64(1)<<(uint(pos)&63)) != 0 {
+						out[by*int(res)+bx] = true
+						goto next
 					}
 				}
 			}
-		}
-	case 16:
-		// 4×4 block: OR-reduce
-		for by := 0; by < 16; by++ {
-			for bx := 0; bx < 16; bx++ {
-				for dy := 0; dy < 4; dy++ {
-					for dx := 0; dx < 4; dx++ {
-						sx := bx*4 + dx
-						sy := by*4 + dy
-						pos := sy*64 + sx
-						if t.Dirty[pos>>6]&(uint64(1)<<(uint(pos)&63)) != 0 {
-							out[by*16+bx] = true
-						}
-					}
-				}
-			}
+		next:
 		}
 	}
 	return out
@@ -242,36 +215,25 @@ func (s *Server) getOrCreateMinimapTile(cid ChunkID) *MinimapTile {
 // computePaletteFor computes the palette index for a single cell directly from
 // authoritative world state. Cheap — a couple of map lookups and a local seed
 // lookup per isMine call.
+//
+// Palette layout depends on mmEmpty0..mmNum7Plus being consecutive: mmEmpty0
+// (n=0) … mmNum6 (n=6), then mmNum7Plus for n ≥ 7. If you renumber the
+// palette constants, update this accordingly.
 func (s *Server) computePaletteFor(cid ChunkID, cell uint32) byte {
 	if fl, ok := s.flags[cid][cell]; ok {
-		b := minimapFlagBucket(fl.FlagID)
-		return byte(mmFlagBase + b)
+		return byte(mmFlagBase + minimapFlagBucket(fl.FlagID))
 	}
-	if s.isCellRevealed(cid, cell) {
-		if s.isMine(cid, cell) {
-			return mmMine
-		}
-		n := s.countAdjacentMines(cid, cell)
-		switch n {
-		case 0:
-			return mmEmpty0
-		case 1:
-			return mmNum1
-		case 2:
-			return mmNum2
-		case 3:
-			return mmNum3
-		case 4:
-			return mmNum4
-		case 5:
-			return mmNum5
-		case 6:
-			return mmNum6
-		default:
-			return mmNum7Plus
-		}
+	if !s.isCellRevealed(cid, cell) {
+		return mmUnseen
 	}
-	return mmUnseen
+	if s.isMine(cid, cell) {
+		return mmMine
+	}
+	n := s.countAdjacentMines(cid, cell)
+	if n >= 7 {
+		return mmNum7Plus
+	}
+	return byte(mmEmpty0 + n)
 }
 
 // computeFullTileData renders a chunk's full 64×64 palette from authoritative

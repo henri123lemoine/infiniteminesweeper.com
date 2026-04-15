@@ -5,6 +5,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"runtime"
 	"runtime/pprof"
@@ -38,7 +39,7 @@ func TestLoadRealisticSustained(t *testing.T) {
 
 	clients := make([]*LoadClient, nPlayers)
 	for i := range clients {
-		c, err := NewLoadClient(wsURL, "load-"+fmtInt(i))
+		c, err := NewLoadClient(wsURL, fmt.Sprintf("load-%d", i))
 		if err != nil {
 			t.Fatalf("client %d dial: %v", i, err)
 		}
@@ -247,7 +248,7 @@ func TestLoadConnectionChurn(t *testing.T) {
 		cycles = 200
 	}
 	for i := 0; i < cycles; i++ {
-		c, err := NewLoadClient(wsURL, "churn-"+fmtInt(i))
+		c, err := NewLoadClient(wsURL, fmt.Sprintf("churn-%d", i))
 		if err != nil {
 			t.Fatalf("cycle %d dial: %v", i, err)
 		}
@@ -298,7 +299,7 @@ func TestLoadConcurrentZoomOuts(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(nBad)
 	for i := 0; i < nBad; i++ {
-		c, err := NewLoadClient(wsURL, "bad-"+fmtInt(i))
+		c, err := NewLoadClient(wsURL, fmt.Sprintf("bad-%d", i))
 		if err != nil {
 			t.Fatalf("dial %d: %v", i, err)
 		}
@@ -354,7 +355,7 @@ func TestLoadFloodFillCascade(t *testing.T) {
 	const nObservers = 8
 	observers := make([]*LoadClient, nObservers)
 	for i := range observers {
-		c, err := NewLoadClient(wsURL, "obs-"+fmtInt(i))
+		c, err := NewLoadClient(wsURL, fmt.Sprintf("obs-%d", i))
 		if err != nil {
 			t.Fatalf("obs dial: %v", err)
 		}
@@ -436,7 +437,7 @@ func TestLoadProfileMemory(t *testing.T) {
 	const nPlayers = 20
 	clients := make([]*LoadClient, nPlayers)
 	for i := range clients {
-		c, err := NewLoadClient(wsURL, "prof-"+fmtInt(i))
+		c, err := NewLoadClient(wsURL, fmt.Sprintf("prof-%d", i))
 		if err != nil {
 			t.Fatalf("dial %d: %v", i, err)
 		}
