@@ -21,8 +21,6 @@ import (
 const (
 	seedCacheMaxEntries      = 200000
 	densityCacheMaxEntries   = 200000
-	// ~2KB/entry avg, ~8KB on heavily-flagged chunks — 8000 entries is
-	// ~16MB typical, ~64MB worst case, well within the 256MB fly machine.
 	chunkSyncCacheMaxEntries = 8000
 )
 
@@ -74,11 +72,6 @@ type Server struct {
 	densityCache   map[ChunkID]float64
 	densityCacheMu sync.RWMutex
 
-	// Cached serialized ChunkSync, invalidated on reveal/flag. Many players
-	// panning over the same region re-serialize the same chunk; the cache
-	// collapses that duplicate work. Accessed under chunkSyncCacheMu only —
-	// stateMu is already held by callers, but that doesn't protect the map
-	// from concurrent populate-on-miss by parallel RLock readers.
 	chunkSyncCache   map[ChunkID]*pb.ChunkSync
 	chunkSyncCacheMu sync.Mutex
 

@@ -20,10 +20,6 @@ import (
 
 var gzipWriterPool = sync.Pool{
 	New: func() any {
-		// BestSpeed (level 1) is ~2-3× faster than DefaultCompression (6) for
-		// our workload (protobuf, already-packed ints) at ~5-15% larger output.
-		// On a single-CPU fly machine, CPU is the binding resource; a few
-		// extra KB/s of network traffic is free.
 		w, _ := gzip.NewWriterLevel(nil, gzip.BestSpeed)
 		return w
 	},
@@ -768,9 +764,6 @@ func (s *Server) serializeChunk(chunkID ChunkID) *pb.ChunkSync {
 		bits = *chunk
 	}
 
-	// Single pass over flagsMap: overlay into reveals bitset (flags read as
-	// revealed on the wire for compression) + group by flag ID. Cells are
-	// always in [0, 4096) so the old bounds check was dead.
 	groups := make(map[uint32]*pb.RevealedCells)
 	for cell, fl := range flagsMap {
 		bits[cell/ChunkSize] |= 1 << (cell % ChunkSize)
@@ -806,8 +799,6 @@ func (s *Server) serializeChunk(chunkID ChunkID) *pb.ChunkSync {
 	}
 
 	s.chunkSyncCacheMu.Lock()
-	// Random eviction keeps the cache bounded; hot chunks re-enter faster
-	// than they drop out, cold ones naturally fall off.
 	if len(s.chunkSyncCache) >= chunkSyncCacheMaxEntries {
 		for k := range s.chunkSyncCache {
 			delete(s.chunkSyncCache, k)
@@ -966,11 +957,6 @@ func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
 // sendChunkRegionSync gathers the state of multiple chunks and transmits them
 // in a single compressed message. The provided chunkIDs should describe a
 // rectangular region.
-//
-// Only reads s.chunks/s.flags (stateMu), plus seed+density caches (their own
-// mutexes). RLock lets multiple concurrent region-syncs from different
-// panning players run in parallel — huge win because this function dominated
-// the lock-contention profile (57% of mutex delay).
 func (s *Server) sendChunkRegionSync(playerID uint32, chunkIDs []ChunkID) {
 	if len(chunkIDs) == 0 {
 		return

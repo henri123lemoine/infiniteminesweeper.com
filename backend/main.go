@@ -115,15 +115,9 @@ func main() {
 		}()
 	}
 
-	// Optional pprof endpoint — set PPROF_PORT=6060 in dev to enable
-	// `go tool pprof http://localhost:6060/debug/pprof/profile` etc.
-	// Runs on localhost-only with a dedicated mux so it doesn't leak the
-	// game handlers on a second port.
 	if pprofPort := os.Getenv("PPROF_PORT"); pprofPort != "" {
-		// Also track blocked-on-lock and mutex-wait samples so the
-		// /debug/pprof/block and /debug/pprof/mutex profiles are populated.
-		runtime.SetBlockProfileRate(1)    // sample every blocking event
-		runtime.SetMutexProfileFraction(1) // sample every mutex contention
+		runtime.SetBlockProfileRate(1)
+		runtime.SetMutexProfileFraction(1)
 		go func() {
 			mux := http.NewServeMux()
 			mux.HandleFunc("/debug/pprof/", pprof.Index)

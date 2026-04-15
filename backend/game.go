@@ -455,10 +455,7 @@ func (s *Server) setCellFlagged(chunkID ChunkID, cell uint32, playerID uint32, f
 	s.invalidateChunkSync(chunkID)
 }
 
-// invalidateChunkSync drops a cached serialized ChunkSync for chunkID after
-// a mutation. Always called under stateMu.Lock; readers (serializeChunk) are
-// blocked, so no one can repopulate a stale entry before we release the
-// state lock. Safe to call for chunks not currently cached.
+// invalidateChunkSync must be called under stateMu.Lock.
 func (s *Server) invalidateChunkSync(chunkID ChunkID) {
 	s.chunkSyncCacheMu.Lock()
 	delete(s.chunkSyncCache, chunkID)
