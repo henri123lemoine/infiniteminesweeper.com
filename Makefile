@@ -81,6 +81,14 @@ docker-run: docker-build $(ENVFILE) .env.shared
 	docker run --env-file $(ENVFILE_MERGED) \
 	           -v $(PWD)/data:/data -p 8080:8080 infiniteminesweeper
 
+# load tests (integration build tag, run separately from unit suite)
+loadtest:
+	cd backend && go test -v -tags integration -count=1 -timeout 120s -run "TestLoad" ./...
+
+# longer soak run — set when verifying memory under sustained load before deploy
+loadtest-long:
+	cd backend && go test -v -tags integration -count=1 -timeout 600s -run "TestLoad" ./... -args -loadtest-long
+
 # deploy / clean
 deploy:
 	go test ./...
