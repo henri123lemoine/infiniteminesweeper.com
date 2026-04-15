@@ -67,8 +67,8 @@ go-run: go-build
 		echo "Removing snapshot $(SNAPSHOT_FILE) and WAL $(WAL_FILE)"; \
 		rm -f "$(SNAPSHOT_FILE)" "$(WAL_FILE)"; \
 	fi
-	@echo "Running backend (MODE=$(MODE))"
-	MODE=$(MODE) backend/dist/backend
+	@echo "Running backend (MODE=$(MODE)); metrics on :9091/metrics"
+	MODE=$(MODE) METRICS_PORT=9091 backend/dist/backend
 
 # docker image/run
 docker-build: proto frontend-build spritesheet
@@ -80,6 +80,39 @@ docker-run: docker-build $(ENVFILE) .env.shared
 	cat .env.shared $(ENVFILE) > $(ENVFILE_MERGED)
 	docker run --env-file $(ENVFILE_MERGED) \
 	           -v $(PWD)/data:/data -p 8080:8080 infiniteminesweeper
+
+# load tests (integration build tag, run separately from unit suite)
+loadtest:
+	cd backend && go test -v -tags integration -count=1 -timeout 120s -run "TestLoad" ./...
+
+# longer soak run — set when verifying memory under sustained load before deploy
+loadtest-long:
+	cd backend && go test -v -tags integration -count=1 -timeout 600s -run "TestLoad" ./... -args -loadtest-long
+
+# stress-clients spawns N external WebSocket clients against a running server.
+# Usage:
+#   Terminal 1:  make go-run                     # server + in-process bots on :8080
+#   Terminal 2:  make stress-clients N=20        # 20 WebSocket clients doing realistic gameplay
+#   Browser:     http://localhost:8080/          # play alongside the swarm
+N   ?= 20
+URL ?= ws://localhost:8080/ws
+stress-clients:
+	go run ./tools/stress -n $(N) -url $(URL)
+
+# Pull the prod snapshot + WAL from fly.io into local data/. `make go-run`
+# will boot from it, giving you the real world (tens of thousands of revealed
+# cells) to play with — much better than the empty dev world for zoom-out
+# stress testing. Wakes a fly machine if one isn't already running.
+snapshot-from-prod:
+	@echo "Waking a fly machine if none is running..."
+	@fly machine list --app infiniteminesweeper --json \
+		| jq -r '.[] | select(.state=="stopped") | .id' \
+		| head -1 | xargs -r -I{} fly machine start {} --app infiniteminesweeper
+	@mkdir -p data
+	@rm -f data/snapshot.gob.gz data/wal.log
+	fly ssh sftp get /data/snapshot.gob.gz data/snapshot.gob.gz --app infiniteminesweeper
+	fly ssh sftp get /data/wal.log       data/wal.log       --app infiniteminesweeper || true
+	@echo "Done. Run 'make go-run' to boot with prod state."
 
 # deploy / clean
 deploy:

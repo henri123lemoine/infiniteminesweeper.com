@@ -14,6 +14,15 @@ S3_BUCKET_NAME = ''
 DATA_DIR = '/data'
 PORT = '8080'
 MODE = 'production'
+METRICS_PORT = '9091'
+
+# Prometheus scrape target — fly's internal collector hits this and surfaces
+# the metrics in fly-metrics.net Grafana. Set up alerts there with:
+#   go_goroutines > 500
+#   go_memstats_sys_bytes > 200 * 1024 * 1024     (or fly_instance_memory_mem_used)
+[[metrics]]
+port = 9091
+path = '/metrics'
 
 [[mounts]]
 source = 'storage'

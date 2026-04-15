@@ -301,22 +301,47 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	player.Score = s.scores[playerID]
 	player.State = ClientStatePlayer
 
-	// Move player from spectator ID space to player ID space
+	// Move player from spectator ID space to player ID space and drop any
+	// spectator-ID-keyed state. We don't migrate it — the frontend re-sends
+	// ViewUpdate on every pan, so subs rebuild on the next tick.
+	oldID := player.ID
 	s.playersMu.Lock()
-	// Remove from old ID
-	if playerSet, exists := s.players[player.ID]; exists {
-		delete(playerSet, player)
-		if len(playerSet) == 0 {
-			delete(s.players, player.ID)
+	if set := s.players[oldID]; set != nil {
+		delete(set, player)
+		if len(set) == 0 {
+			delete(s.players, oldID)
 		}
 	}
-	// Add to new player ID
 	if s.players[playerID] == nil {
 		s.players[playerID] = make(map[*Player]struct{})
 	}
 	s.players[playerID][player] = struct{}{}
-	player.ID = playerID // Update the player's ID
+	player.ID = playerID
 	s.playersMu.Unlock()
+
+	// Clear spectator ID's accumulated state (we hold stateMu here).
+	delete(s.playerViews, oldID)
+	delete(s.playerSubs, oldID)
+	delete(s.playerSubLastSeen, oldID)
+	delete(s.minimapPlayerRes, oldID)
+	delete(s.minimapSubCount, oldID)
+	for cid, set := range s.subs {
+		if _, ok := set[oldID]; ok {
+			delete(set, oldID)
+			if len(set) == 0 {
+				delete(s.subs, cid)
+			}
+		}
+	}
+	for cid, set := range s.minimapSubs {
+		if _, ok := set[oldID]; ok {
+			delete(set, oldID)
+			if len(set) == 0 {
+				delete(s.minimapSubs, cid)
+				delete(s.minimapTiles, cid)
+			}
+		}
+	}
 
 	s.lbDirty = true
 
@@ -678,28 +703,7 @@ func (s *Server) readPump(player *Player) {
 		case *pb.Msg_MinimapSubscribe:
 			m := t.MinimapSubscribe
 			if m != nil {
-				s.stateMu.Lock()
-				// Store player's resolution preference
-				resolution := m.Resolution
-				if resolution == 0 {
-					resolution = 64 // default to full resolution
-				}
-				// Validate resolution
-				if resolution != 16 && resolution != 32 && resolution != 64 {
-					resolution = 64 // fallback to full resolution for invalid values
-				}
-				s.minimapPlayerRes[player.ID] = resolution
-
-				for _, tr := range m.Tiles {
-					cid := ChunkID{X: int64(tr.X), Y: int64(tr.Y)}
-					if s.minimapSubs[cid] == nil {
-						s.minimapSubs[cid] = make(map[uint32]struct{})
-					}
-					s.minimapSubs[cid][player.ID] = struct{}{}
-					// send current full tile snapshot
-					s.minimapSendFullTo(player.ID, cid)
-				}
-				s.stateMu.Unlock()
+				s.handleMinimapSubscribe(player.ID, m)
 			}
 		case *pb.Msg_MinimapUnsubscribe:
 			m := t.MinimapUnsubscribe
@@ -708,7 +712,12 @@ func (s *Server) readPump(player *Player) {
 				for _, tr := range m.Tiles {
 					cid := ChunkID{X: int64(tr.X), Y: int64(tr.Y)}
 					if subs, ok := s.minimapSubs[cid]; ok {
-						delete(subs, player.ID)
+						if _, had := subs[player.ID]; had {
+							delete(subs, player.ID)
+							if s.minimapSubCount[player.ID] > 0 {
+								s.minimapSubCount[player.ID]--
+							}
+						}
 						if len(subs) == 0 {
 							delete(s.minimapSubs, cid)
 							delete(s.minimapTiles, cid)
@@ -809,6 +818,72 @@ func (s *Server) writePump(player *Player) {
 				return
 			}
 		}
+	}
+}
+
+// handleMinimapSubscribe processes a (potentially huge — ~32k tiles for an
+// overlay-max-zoom client) MinimapSubscribe in two phases:
+//   - Phase 1: register subs under stateMu in batches of 2000 (~1ms WLock per
+//     batch) so concurrent reveals don't get blocked for the full duration.
+//   - Phase 2: compute palette + send each tile under RLock per-tile.
+// Cell changes between the two phases self-heal because Phase 2 reads from
+// authoritative world state.
+func (s *Server) handleMinimapSubscribe(playerID uint32, m *pb.SubscribeTiles) {
+	resolution := m.Resolution
+	if resolution != 16 && resolution != 32 && resolution != 64 {
+		resolution = 64
+	}
+
+	const batchSize = 2000
+	toSend := make([]ChunkID, 0, len(m.Tiles))
+	for i := 0; i < len(m.Tiles); i += batchSize {
+		end := min(i+batchSize, len(m.Tiles))
+
+		s.stateMu.Lock()
+		if i == 0 {
+			s.minimapPlayerRes[playerID] = resolution
+		}
+		remaining := maxMinimapSubsPerPlayer - s.minimapSubCount[playerID]
+		for _, tr := range m.Tiles[i:end] {
+			if remaining <= 0 {
+				break
+			}
+			cid := ChunkID{X: int64(tr.X), Y: int64(tr.Y)}
+			if s.minimapSubs[cid] == nil {
+				s.minimapSubs[cid] = make(map[uint32]struct{})
+			}
+			if _, already := s.minimapSubs[cid][playerID]; !already {
+				s.minimapSubs[cid][playerID] = struct{}{}
+				s.minimapSubCount[playerID]++
+				remaining--
+				toSend = append(toSend, cid)
+			}
+		}
+		s.stateMu.Unlock()
+		if remaining <= 0 {
+			break
+		}
+	}
+
+	for _, cid := range toSend {
+		s.stateMu.RLock()
+		data := s.computeTileDataAtResolution(cid, resolution)
+		var version uint32
+		if t := s.minimapTiles[cid]; t != nil {
+			version = t.Version
+		}
+		s.stateMu.RUnlock()
+
+		if data == nil {
+			continue // all-unseen chunk; skip
+		}
+		msg := &pb.Msg{Payload: &pb.Msg_MinimapFullTile{MinimapFullTile: &pb.FullTile{
+			Tile:       &pb.TileRef{X: int32(cid.X), Y: int32(cid.Y)},
+			Version:    version,
+			Data:       data,
+			Resolution: resolution,
+		}}}
+		s.sendToPlayer(playerID, mustProto(msg))
 	}
 }
 
@@ -987,6 +1062,7 @@ func (s *Server) removePlayer(p *Player) {
 		delete(s.playerSubs, p.ID)
 		delete(s.playerSubLastSeen, p.ID)
 		delete(s.minimapPlayerRes, p.ID)
+		delete(s.minimapSubCount, p.ID)
 		delete(s.playerViews, p.ID)
 		s.stateMu.Unlock()
 	}

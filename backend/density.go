@@ -104,8 +104,12 @@ func (s *Server) getChunkDensity(chunkID ChunkID) float64 {
 	}
 
 	s.densityCacheMu.Lock()
+	// Random eviction at cap (see generateChunkSeed for the rationale).
 	if len(s.densityCache) >= densityCacheMaxEntries {
-		s.densityCache = make(map[ChunkID]float64, densityCacheMaxEntries)
+		for k := range s.densityCache {
+			delete(s.densityCache, k)
+			break
+		}
 	}
 	s.densityCache[chunkID] = dens
 	s.densityCacheMu.Unlock()

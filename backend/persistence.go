@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"compress/gzip"
 	"encoding/gob"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"math/bits"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,12 +32,24 @@ const (
 	// S3 configuration
 	defaultBucketName = "infiniteminesweeper"
 	snapshotKey       = "snapshot.gob.gz"
-	walKey            = "wal.log"
+
+	// Multi-object WAL prefix. Each flush writes a unique key under this
+	// prefix; truncation deletes the whole set. This avoids the old
+	// read-append-rewrite cycle that turned every 2-minute flush into a full
+	// O(WAL_size) memory spike on the server.
+	walPrefix = "wal-segments/"
 
 	// Local disk configuration
 	snapshotFileName = "snapshot.gob.gz"
 	snapshotTmpName  = "snapshot.tmp.gz"
 	walFileName      = "wal.log"
+
+	// Nudge the flush worker to drain the WAL once the in-memory buffer
+	// holds this many entries, regardless of the wall-clock flush tick. Caps
+	// walBuffer memory under heavy bursts — at ~200 bytes per entry this
+	// bounds peak WAL memory near 2 MB, versus potentially tens of MB across
+	// the whole 2-minute tick window under load.
+	walBufferFlushThreshold = 10000
 )
 
 // WAL entry types
@@ -94,7 +108,18 @@ func (s *Server) writeWALEntry(entryType string, data interface{}) {
 		Sequence:  s.walSeq,
 	}
 	s.walBuffer = append(s.walBuffer, entry)
+	shouldSignal := len(s.walBuffer) >= walBufferFlushThreshold
 	s.walMutex.Unlock()
+
+	if shouldSignal {
+		// Coalesced non-blocking signal — if a flush is already queued we
+		// leave it be. The flusher drains whatever is in the buffer when it
+		// runs, so a single wake-up covers any number of overshoots.
+		select {
+		case s.walFlushSignal <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (s *Server) flushWAL() error {
@@ -104,41 +129,42 @@ func (s *Server) flushWAL() error {
 		return nil
 	}
 
-	entries := make([]WALEntry, len(s.walBuffer))
-	copy(entries, s.walBuffer)
-	s.walBuffer = s.walBuffer[:0] // Clear buffer
+	// Hand ownership of the backing array to the flusher — no copy needed, so
+	// we don't momentarily hold 2× the WAL in memory during the flush. The
+	// buffer is reallocated fresh with modest capacity; a heavy burst will
+	// grow it back naturally via append.
+	entries := s.walBuffer
+	s.walBuffer = make([]WALEntry, 0, 1024)
 	s.walMutex.Unlock()
 
 	if s.useS3 {
-		// Read existing WAL from S3
-		existingEntries, err := s.readWALFromS3()
-		if err != nil && !isS3NotFound(err) {
-			return fmt.Errorf("failed to read existing WAL: %v", err)
-		}
-
-		// Append new entries
-		allEntries := append(existingEntries, entries...)
-
-		// Write back to S3
-		var buf strings.Builder
+		// One S3 object per flush under walPrefix; truncate deletes the whole
+		// set after a snapshot. Avoids pulling the cumulative WAL into memory
+		// on every flush.
+		var buf bytes.Buffer
 		encoder := json.NewEncoder(&buf)
-		for _, entry := range allEntries {
+		for _, entry := range entries {
 			if err := encoder.Encode(entry); err != nil {
 				return fmt.Errorf("failed to encode WAL entry: %v", err)
 			}
 		}
 
-		_, err = s.s3Client.PutObject(&s3.PutObjectInput{
-			Bucket: aws.String(s.bucketName),
-			Key:    aws.String(walKey),
-			Body:   strings.NewReader(buf.String()),
-		})
+		// Segment key: zero-padded sequence range so lexicographic sort replays
+		// in insertion order. End sequence is always the last entry's Sequence.
+		endSeq := entries[len(entries)-1].Sequence
+		startSeq := entries[0].Sequence
+		key := fmt.Sprintf("%s%020d-%020d.jsonl", walPrefix, startSeq, endSeq)
 
+		_, err := s.s3Client.PutObject(&s3.PutObjectInput{
+			Bucket: aws.String(s.bucketName),
+			Key:    aws.String(key),
+			Body:   bytes.NewReader(buf.Bytes()),
+		})
 		if err != nil {
-			return fmt.Errorf("failed to upload WAL to S3: %v", err)
+			return fmt.Errorf("failed to upload WAL segment to S3: %v", err)
 		}
 
-		log.Printf("WAL: flushed %d entries to S3", len(entries))
+		log.Printf("WAL: flushed %d entries to S3 segment %s", len(entries), key)
 	} else {
 		if err := os.MkdirAll(s.dataDir, 0o755); err != nil {
 			return err
@@ -160,10 +186,30 @@ func (s *Server) flushWAL() error {
 	return nil
 }
 
+// readWALFromS3 returns all WAL entries for replay. Segments are sorted
+// lexicographically (which equals sequence order because keys are zero-padded),
+// so replay order matches write order.
 func (s *Server) readWALFromS3() ([]WALEntry, error) {
+	var allEntries []WALEntry
+
+	segments, err := s.listWALSegments()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list WAL segments: %v", err)
+	}
+	for _, key := range segments {
+		entries, err := s.readWALObjectFromS3(key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read WAL segment %s: %v", key, err)
+		}
+		allEntries = append(allEntries, entries...)
+	}
+	return allEntries, nil
+}
+
+func (s *Server) readWALObjectFromS3(key string) ([]WALEntry, error) {
 	result, err := s.s3Client.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.bucketName),
-		Key:    aws.String(walKey),
+		Key:    aws.String(key),
 	})
 	if err != nil {
 		return nil, err
@@ -181,8 +227,35 @@ func (s *Server) readWALFromS3() ([]WALEntry, error) {
 		}
 		entries = append(entries, entry)
 	}
-
 	return entries, nil
+}
+
+// listWALSegments returns all WAL segment keys under walPrefix, sorted
+// lexicographically.
+func (s *Server) listWALSegments() ([]string, error) {
+	var keys []string
+	var continuationToken *string
+	for {
+		out, err := s.s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
+			Bucket:            aws.String(s.bucketName),
+			Prefix:            aws.String(walPrefix),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, obj := range out.Contents {
+			if obj.Key != nil {
+				keys = append(keys, *obj.Key)
+			}
+		}
+		if out.IsTruncated == nil || !*out.IsTruncated {
+			break
+		}
+		continuationToken = out.NextContinuationToken
+	}
+	sort.Strings(keys)
+	return keys, nil
 }
 
 func (s *Server) readWALFromDisk() ([]WALEntry, error) {
@@ -209,12 +282,31 @@ func (s *Server) readWALFromDisk() ([]WALEntry, error) {
 
 func (s *Server) truncateWAL() error {
 	if s.useS3 {
-		_, err := s.s3Client.DeleteObject(&s3.DeleteObjectInput{
-			Bucket: aws.String(s.bucketName),
-			Key:    aws.String(walKey),
-		})
-		if err != nil && !isS3NotFound(err) {
-			return fmt.Errorf("failed to truncate WAL: %v", err)
+		segments, err := s.listWALSegments()
+		if err != nil {
+			return fmt.Errorf("failed to list WAL segments for truncate: %v", err)
+		}
+		if len(segments) == 0 {
+			return nil
+		}
+		// DeleteObjects in batches of up to 1000 (API limit).
+		const batch = 1000
+		for i := 0; i < len(segments); i += batch {
+			end := i + batch
+			if end > len(segments) {
+				end = len(segments)
+			}
+			objs := make([]*s3.ObjectIdentifier, 0, end-i)
+			for _, k := range segments[i:end] {
+				kCopy := k
+				objs = append(objs, &s3.ObjectIdentifier{Key: aws.String(kCopy)})
+			}
+			if _, err := s.s3Client.DeleteObjects(&s3.DeleteObjectsInput{
+				Bucket: aws.String(s.bucketName),
+				Delete: &s3.Delete{Objects: objs, Quiet: aws.Bool(true)},
+			}); err != nil {
+				return fmt.Errorf("failed to delete WAL segments: %v", err)
+			}
 		}
 		return nil
 	}
@@ -236,7 +328,11 @@ func (s *Server) periodicWALFlush() {
 	ticker := time.NewTicker(walFlushInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-ticker.C:
+		case <-s.walFlushSignal:
+		}
 		if err := s.flushWAL(); err != nil {
 			log.Printf("[wal] flush error: %v", err)
 		}
@@ -435,8 +531,11 @@ func (s *Server) captureSnapshotData() snapshotData {
 func (s *Server) saveSnapshotToS3() error {
 	data := s.captureSnapshotData()
 
-	// Create compressed snapshot in memory
-	var buf strings.Builder
+	// Create compressed snapshot in memory. bytes.Buffer + bytes.NewReader is
+	// important here: strings.Builder + strings.NewReader(buf.String()) copied
+	// the whole buffer just to satisfy the reader contract, doubling peak
+	// memory during a snapshot.
+	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	enc := gob.NewEncoder(gz)
 	if err := enc.Encode(&data); err != nil {
@@ -446,11 +545,10 @@ func (s *Server) saveSnapshotToS3() error {
 		return fmt.Errorf("failed to close gzip writer: %v", err)
 	}
 
-	// Upload to S3
 	_, err := s.s3Client.PutObject(&s3.PutObjectInput{
 		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(snapshotKey),
-		Body:   strings.NewReader(buf.String()),
+		Body:   bytes.NewReader(buf.Bytes()),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to upload snapshot to S3: %v", err)
@@ -549,6 +647,21 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 		}
 	}
 	s.nameToPlayerID = idx
+
+	// Recompute totalRevealed from persisted bitsets. Without this, after a
+	// restart hasRevealedWithinTwo trivially returns true and the proximity
+	// rule is silently disabled until at least one new reveal occurs.
+	var totalRevealed uint64
+	for _, cb := range s.chunks {
+		if cb == nil {
+			continue
+		}
+		for _, word := range *cb {
+			totalRevealed += uint64(bits.OnesCount64(word))
+		}
+	}
+	s.totalRevealed = totalRevealed
+
 	s.lbDirty = true
 }
 

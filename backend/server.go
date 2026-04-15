@@ -79,6 +79,10 @@ type Server struct {
 	walBuffer  []WALEntry
 	walMutex   sync.Mutex
 	walSeq     uint64
+	// Signal used to wake the WAL flush worker when walBuffer grows past a
+	// threshold. Buffered size 1 + non-blocking send = signals are coalesced
+	// and writers never block.
+	walFlushSignal chan struct{}
 
 	// Gameplay rules
 	// Chebyshev distance for proximity-limited actions (reveal/flag).
@@ -87,11 +91,13 @@ type Server struct {
 
 	upgrader websocket.Upgrader
 
-	// Minimap streaming state
-	minimapTiles      map[ChunkID]map[uint32]*MinimapTile // tile data by resolution (key: resolution, value: tile)
-	minimapSubs       map[ChunkID]map[uint32]struct{}     // per-tile subscriber sets
-	minimapPlayerRes  map[uint32]uint32                   // player resolution preferences (player ID -> resolution)
-	minimapDirtyTiles map[ChunkID]struct{}                // tiles with pending dirties
+	// Minimap streaming state. One tile per chunk (palette computed on demand
+	// from authoritative world state rather than cached per-resolution).
+	minimapTiles      map[ChunkID]*MinimapTile        // per-chunk dirty bitset + version
+	minimapSubs       map[ChunkID]map[uint32]struct{} // per-tile subscriber sets
+	minimapPlayerRes  map[uint32]uint32               // player resolution preferences (player ID -> resolution)
+	minimapSubCount   map[uint32]int                  // per-player minimap subscription count (for cap enforcement)
+	minimapDirtyTiles map[ChunkID]struct{}            // tiles with pending dirties
 }
 
 func NewServer() *Server {
@@ -114,6 +120,7 @@ func NewServer() *Server {
 		botIDs:            make(map[uint32]bool),
 		seedCache:         make(map[ChunkID]uint64),
 		densityCache:      make(map[ChunkID]float64),
+		walFlushSignal:    make(chan struct{}, 1),
 		nextPlayerID:      1,
 		nextSpectatorID:   1,
 		dataDir:           "data",
@@ -139,9 +146,10 @@ func NewServer() *Server {
 		},
 
 		// Minimap
-		minimapTiles:      make(map[ChunkID]map[uint32]*MinimapTile),
+		minimapTiles:      make(map[ChunkID]*MinimapTile),
 		minimapSubs:       make(map[ChunkID]map[uint32]struct{}),
 		minimapPlayerRes:  make(map[uint32]uint32),
+		minimapSubCount:   make(map[uint32]int),
 		minimapDirtyTiles: make(map[ChunkID]struct{}),
 	}
 }
@@ -152,7 +160,7 @@ func generateSessionToken() string {
 }
 
 func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
-	// Cache seeds to avoid repeated HMAC calculations
+	// Cache seeds to avoid repeated HMAC calculations.
 	s.seedCacheMu.RLock()
 	if seed, exists := s.seedCache[chunkID]; exists {
 		s.seedCacheMu.RUnlock()
@@ -167,8 +175,16 @@ func (s *Server) generateChunkSeed(chunkID ChunkID) uint64 {
 	seed := binary.LittleEndian.Uint64(hash[:8])
 
 	s.seedCacheMu.Lock()
+	// Random eviction when full: Go's `for k := range m; break` yields a
+	// randomly-chosen key (map iteration starts at a random bucket on each
+	// call), which is approximately competitive with LRU for our access
+	// pattern — hot chunks get re-inserted faster than they get evicted,
+	// cold chunks drop out naturally, and we pay zero per-entry overhead.
 	if len(s.seedCache) >= seedCacheMaxEntries {
-		s.seedCache = make(map[ChunkID]uint64, seedCacheMaxEntries)
+		for k := range s.seedCache {
+			delete(s.seedCache, k)
+			break
+		}
 	}
 	s.seedCache[chunkID] = seed
 	s.seedCacheMu.Unlock()

@@ -99,6 +99,21 @@ func main() {
 	go server.runMinimapBroadcaster()
 	go server.runPlayerPositionBroadcaster()
 
+	// Optional Prometheus metrics endpoint on a separate port — kept off the
+	// public mux so it's reachable from fly's internal scraper but not the
+	// public internet. See fly.toml's [[metrics]] block.
+	if metricsPort := os.Getenv("METRICS_PORT"); metricsPort != "" {
+		go func() {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/metrics", server.handleMetrics)
+			metricsAddr := "0.0.0.0:" + metricsPort
+			log.Printf("Metrics server on http://%s/metrics", metricsAddr)
+			if err := http.ListenAndServe(metricsAddr, mux); err != nil {
+				log.Printf("metrics server exited: %v", err)
+			}
+		}()
+	}
+
 	fmt.Printf("Server running at: http://%s/\n", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
