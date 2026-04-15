@@ -799,46 +799,23 @@ func (s *Server) writePump(player *Player) {
 	}
 }
 
-// minimapSubscribeBatchSize bounds how many tiles a single write-lock acquire
-// processes during handleMinimapSubscribe. With ~500 ns per map op, a batch of
-// 2000 holds the lock for ~1 ms — short enough that other writers (reveals,
-// minimap broadcaster) can interleave smoothly while a user drags the overlay
-// minimap to max zoom (~32 k tiles in one request).
-const minimapSubscribeBatchSize = 2000
-
-// handleMinimapSubscribe splits a mass minimap subscribe into two phases so
-// a single request cannot freeze the server while it processes thousands of
-// tiles:
-//
-//  1. Register subs in map state in short write-locked batches.
-//  2. Compute + send each tile's current contents under a read lock, per-tile,
-//     so reveals and broadcasts can slot in between.
-//
-// Correctness rests on two invariants:
-//   - Palette data is always computed from authoritative world state, so a
-//     cell change between phase 1 and phase 2 self-heals: Phase 2's read will
-//     pick up the new state.
-//   - Tile Version is read under the lock; the broadcaster only bumps version
-//     under the lock. Reorderings between a FullTile send here and a Delta
-//     send by the broadcaster still reconcile correctly on the client because
-//     payloads go through the same ordered per-player Send channel.
+// handleMinimapSubscribe processes a (potentially huge — ~32k tiles for an
+// overlay-max-zoom client) MinimapSubscribe in two phases:
+//   - Phase 1: register subs under stateMu in batches of 2000 (~1ms WLock per
+//     batch) so concurrent reveals don't get blocked for the full duration.
+//   - Phase 2: compute palette + send each tile under RLock per-tile.
+// Cell changes between the two phases self-heal because Phase 2 reads from
+// authoritative world state.
 func (s *Server) handleMinimapSubscribe(playerID uint32, m *pb.SubscribeTiles) {
 	resolution := m.Resolution
-	if resolution == 0 {
-		resolution = 64
-	}
 	if resolution != 16 && resolution != 32 && resolution != 64 {
 		resolution = 64
 	}
 
-	// Phase 1: register subscriptions in small write-locked batches.
+	const batchSize = 2000
 	toSend := make([]ChunkID, 0, len(m.Tiles))
-	capHit := false
-	for i := 0; i < len(m.Tiles); i += minimapSubscribeBatchSize {
-		end := i + minimapSubscribeBatchSize
-		if end > len(m.Tiles) {
-			end = len(m.Tiles)
-		}
+	for i := 0; i < len(m.Tiles); i += batchSize {
+		end := min(i+batchSize, len(m.Tiles))
 
 		s.stateMu.Lock()
 		if i == 0 {
@@ -847,7 +824,6 @@ func (s *Server) handleMinimapSubscribe(playerID uint32, m *pb.SubscribeTiles) {
 		remaining := maxMinimapSubsPerPlayer - s.minimapSubCount[playerID]
 		for _, tr := range m.Tiles[i:end] {
 			if remaining <= 0 {
-				capHit = true
 				break
 			}
 			cid := ChunkID{X: int64(tr.X), Y: int64(tr.Y)}
@@ -862,14 +838,11 @@ func (s *Server) handleMinimapSubscribe(playerID uint32, m *pb.SubscribeTiles) {
 			}
 		}
 		s.stateMu.Unlock()
-		if capHit {
+		if remaining <= 0 {
 			break
 		}
 	}
 
-	// Phase 2: per-tile compute + send under a read lock. Other readers may
-	// hold RLock concurrently; writers (reveal, broadcast) queue briefly
-	// between tiles.
 	for _, cid := range toSend {
 		s.stateMu.RLock()
 		data := s.computeTileDataAtResolution(cid, resolution)

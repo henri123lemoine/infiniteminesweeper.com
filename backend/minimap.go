@@ -19,20 +19,14 @@ type MinimapTile struct {
 	Dirty [64]uint64
 }
 
-// palette indices (<=10 colors total)
+// Palette indices. mmEmpty0..mmNum7Plus must be sequential — computePaletteFor
+// computes mmEmpty0+n directly. n=1..6 → palette 3..8 (numbers); n≥7 → 9.
 const (
-	mmUnseen   = 0 // background
-	mmMine     = 1 // revealed mine
-	mmEmpty0   = 2 // revealed no-adjacent
-	mmNum1     = 3 // numbers map 1..6 → 3..8
-	mmNum2     = 4
-	mmNum3     = 5
-	mmNum4     = 6
-	mmNum5     = 7
-	mmNum6     = 8
-	mmNum7Plus = 9 // 7 or 8
-
-	mmFlagBase = 10 // 10 buckets for flags: 10..19
+	mmUnseen   = 0
+	mmMine     = 1
+	mmEmpty0   = 2
+	mmNum7Plus = 9
+	mmFlagBase = 10 // 10 flag-color buckets: 10..19
 )
 
 // Maximum number of minimap tile subscriptions per player. Measured costs:
@@ -198,18 +192,13 @@ func (s *Server) minimapMarkDirty(cid ChunkID, cell uint32) {
 	if len(s.minimapSubs[cid]) == 0 {
 		return
 	}
-	t := s.getOrCreateMinimapTile(cid)
-	t.setDirty(cell)
-	s.minimapDirtyTiles[cid] = struct{}{}
-}
-
-func (s *Server) getOrCreateMinimapTile(cid ChunkID) *MinimapTile {
 	t := s.minimapTiles[cid]
 	if t == nil {
 		t = &MinimapTile{}
 		s.minimapTiles[cid] = t
 	}
-	return t
+	t.setDirty(cell)
+	s.minimapDirtyTiles[cid] = struct{}{}
 }
 
 // computePaletteFor computes the palette index for a single cell directly from
@@ -249,24 +238,26 @@ func (s *Server) computeFullTileData(cid ChunkID) []byte {
 	return data
 }
 
+// downsampleTo reshapes a 64×64 palette buffer to res×res via per-block
+// probabilistic sampling. Returns full unchanged for res=64.
+func downsampleTo(cid ChunkID, full []byte, res uint32) []byte {
+	if full == nil || res == 64 {
+		return full
+	}
+	block := int(64 / res)
+	out := make([]byte, res*res)
+	for y := 0; y < int(res); y++ {
+		for x := 0; x < int(res); x++ {
+			out[y*int(res)+x] = probabilisticDownsample(cid, full, x, y, block)
+		}
+	}
+	return out
+}
+
 // computeTileDataAtResolution returns palette data sized for `res`. Returns nil
 // when the chunk has no state (all-unseen).
 func (s *Server) computeTileDataAtResolution(cid ChunkID, res uint32) []byte {
-	full := s.computeFullTileData(cid)
-	if full == nil {
-		return nil
-	}
-	if res == 64 {
-		return full
-	}
-	blockSize := int(64 / res)
-	data := make([]byte, res*res)
-	for y := 0; y < int(res); y++ {
-		for x := 0; x < int(res); x++ {
-			data[y*int(res)+x] = probabilisticDownsample(cid, full, x, y, blockSize)
-		}
-	}
-	return data
+	return downsampleTo(cid, s.computeFullTileData(cid), res)
 }
 
 // minimapOnReveal / minimapOnFlag are called from the reveal/flag logic under
@@ -425,18 +416,7 @@ func (s *Server) runMinimapBroadcaster() {
 			version := t.Version
 
 			for res, players := range playersByRes {
-				var data []byte
-				if res == 64 {
-					data = fullData
-				} else if fullData != nil {
-					blockSize := int(64 / res)
-					data = make([]byte, res*res)
-					for y := 0; y < int(res); y++ {
-						for x := 0; x < int(res); x++ {
-							data[y*int(res)+x] = probabilisticDownsample(cid, fullData, x, y, blockSize)
-						}
-					}
-				}
+				data := downsampleTo(cid, fullData, res)
 				if data == nil {
 					continue // chunk has no state; nothing to send
 				}
