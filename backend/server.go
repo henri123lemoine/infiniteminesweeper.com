@@ -14,8 +14,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-
-	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
 
 const (
@@ -72,7 +70,7 @@ type Server struct {
 	densityCache   map[ChunkID]float64
 	densityCacheMu sync.RWMutex
 
-	chunkSyncCache   map[ChunkID]*pb.ChunkSync
+	chunkSyncCache   map[ChunkID]*chunkSyncEntry
 	chunkSyncCacheMu sync.Mutex
 
 	// Persistence configuration
@@ -126,7 +124,7 @@ func NewServer() *Server {
 		botIDs:            make(map[uint32]bool),
 		seedCache:         make(map[ChunkID]uint64),
 		densityCache:      make(map[ChunkID]float64),
-		chunkSyncCache:    make(map[ChunkID]*pb.ChunkSync),
+		chunkSyncCache:    make(map[ChunkID]*chunkSyncEntry),
 		walFlushSignal:    make(chan struct{}, 1),
 		nextPlayerID:      1,
 		nextSpectatorID:   1,

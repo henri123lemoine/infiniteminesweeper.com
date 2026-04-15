@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
@@ -745,11 +746,19 @@ func (s *Server) readPump(player *Player) {
 	}
 }
 
-func (s *Server) serializeChunk(chunkID ChunkID) *pb.ChunkSync {
+// chunkSyncEntry is what's cached: the *pb.ChunkSync struct (for Msg_ChunkSync
+// wrapping on initial sync) and its pre-marshaled wire bytes (for
+// zero-marshal concatenation into a ChunkRegion).
+type chunkSyncEntry struct {
+	cs  *pb.ChunkSync
+	raw []byte
+}
+
+func (s *Server) getChunkSyncEntry(chunkID ChunkID) *chunkSyncEntry {
 	s.chunkSyncCacheMu.Lock()
-	if cs, ok := s.chunkSyncCache[chunkID]; ok {
+	if e, ok := s.chunkSyncCache[chunkID]; ok {
 		s.chunkSyncCacheMu.Unlock()
-		return cs
+		return e
 	}
 	s.chunkSyncCacheMu.Unlock()
 
@@ -797,6 +806,11 @@ func (s *Server) serializeChunk(chunkID ChunkID) *pb.ChunkSync {
 		FlagGroups: flagGroups,
 		Density:    float32(density),
 	}
+	raw, err := proto.Marshal(cs)
+	if err != nil {
+		return &chunkSyncEntry{cs: cs}
+	}
+	e := &chunkSyncEntry{cs: cs, raw: raw}
 
 	s.chunkSyncCacheMu.Lock()
 	if len(s.chunkSyncCache) >= chunkSyncCacheMaxEntries {
@@ -805,9 +819,13 @@ func (s *Server) serializeChunk(chunkID ChunkID) *pb.ChunkSync {
 			break
 		}
 	}
-	s.chunkSyncCache[chunkID] = cs
+	s.chunkSyncCache[chunkID] = e
 	s.chunkSyncCacheMu.Unlock()
-	return cs
+	return e
+}
+
+func (s *Server) serializeChunk(chunkID ChunkID) *pb.ChunkSync {
+	return s.getChunkSyncEntry(chunkID).cs
 }
 
 func (s *Server) writePump(player *Player) {
@@ -964,7 +982,8 @@ func (s *Server) sendChunkRegionSync(playerID uint32, chunkIDs []ChunkID) {
 
 	s.stateMu.RLock()
 
-	chunks := make([]*pb.ChunkSync, 0, len(chunkIDs))
+	entries := make([]*chunkSyncEntry, 0, len(chunkIDs))
+	total := 0
 	minX, maxX := chunkIDs[0].X, chunkIDs[0].X
 	minY, maxY := chunkIDs[0].Y, chunkIDs[0].Y
 
@@ -981,15 +1000,20 @@ func (s *Server) sendChunkRegionSync(playerID uint32, chunkIDs []ChunkID) {
 		if chunkID.Y > maxY {
 			maxY = chunkID.Y
 		}
-		chunks = append(chunks, s.serializeChunk(chunkID))
+		e := s.getChunkSyncEntry(chunkID)
+		entries = append(entries, e)
+		// Tag (1 byte for field 1 wire type 2) + varint(len) + payload.
+		total += 1 + protowire.SizeVarint(uint64(len(e.raw))) + len(e.raw)
 	}
 
 	s.stateMu.RUnlock()
 
-	region := &pb.ChunkRegion{Chunks: chunks}
-	raw, err := proto.Marshal(region)
-	if err != nil {
-		return
+	// Hand-build ChunkRegion wire bytes: repeated ChunkSync field 1.
+	raw := make([]byte, 0, total)
+	for _, e := range entries {
+		raw = protowire.AppendTag(raw, 1, protowire.BytesType)
+		raw = protowire.AppendVarint(raw, uint64(len(e.raw)))
+		raw = append(raw, e.raw...)
 	}
 
 	msg := &pb.Msg{Payload: &pb.Msg_ChunkRegionSync{ChunkRegionSync: &pb.ChunkRegionSync{
