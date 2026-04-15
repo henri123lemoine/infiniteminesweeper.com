@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
@@ -126,6 +127,27 @@ func main() {
 		server.persistOnShutdown()
 		os.Exit(0)
 	}()
+
+	// Optional pprof endpoint — set PPROF_PORT=6060 in dev to enable
+	// `go tool pprof http://localhost:6060/debug/pprof/profile` etc.
+	// Localhost-only with a dedicated mux so it doesn't leak the game
+	// handlers on a second port.
+	if pprofPort := os.Getenv("PPROF_PORT"); pprofPort != "" {
+		runtime.SetBlockProfileRate(1)
+		runtime.SetMutexProfileFraction(1)
+		go func() {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/debug/pprof/", pprof.Index)
+			mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+			mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+			mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+			mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+			log.Printf("pprof on http://localhost:%s/debug/pprof/", pprofPort)
+			if err := http.ListenAndServe("localhost:"+pprofPort, mux); err != nil {
+				log.Printf("pprof server exited: %v", err)
+			}
+		}()
+	}
 
 	fmt.Printf("Server running at: http://%s/\n", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
