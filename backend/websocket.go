@@ -761,29 +761,25 @@ func (s *Server) serializeChunk(chunkID ChunkID) *pb.ChunkSync {
 		bits = *chunk
 	}
 
-	// Treat flags as revealed for transmission (compression-friendly):
-	// overlay flag positions into the reveals bitset we send.
-	for cell := range flagsMap {
-		x := int(cell % ChunkSize)
-		y := int(cell / ChunkSize)
-		if y >= 0 && y < ChunkSize && x >= 0 && x < ChunkSize {
-			bits[y] |= (1 << uint(x))
-		}
-	}
-
+	// Single pass over flagsMap: overlay into reveals bitset (flags read as
+	// revealed on the wire for compression) + group by flag ID. Cells are
+	// always in [0, 4096) so the old bounds check was dead.
 	groups := make(map[uint32]*pb.RevealedCells)
 	for cell, fl := range flagsMap {
-		if groups[fl.FlagID] == nil {
-			groups[fl.FlagID] = &pb.RevealedCells{Cells: make([]uint32, 0)}
+		bits[cell/ChunkSize] |= 1 << (cell % ChunkSize)
+		g := groups[fl.FlagID]
+		if g == nil {
+			g = &pb.RevealedCells{Cells: make([]uint32, 0, len(flagsMap))}
+			groups[fl.FlagID] = g
 		}
-		groups[fl.FlagID].Cells = append(groups[fl.FlagID].Cells, cell)
+		g.Cells = append(g.Cells, cell)
 	}
 
 	flagGroups := make([]*pb.FlagGroup, 0, len(groups))
-	for flagID, cells := range groups {
+	for flagID, g := range groups {
 		flagGroups = append(flagGroups, &pb.FlagGroup{
 			FlagID: flagID,
-			Cells:  cells,
+			Cells:  g,
 		})
 	}
 
