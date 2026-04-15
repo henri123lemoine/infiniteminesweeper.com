@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"runtime"
 )
@@ -110,6 +111,29 @@ func main() {
 			log.Printf("Metrics server on http://%s/metrics", metricsAddr)
 			if err := http.ListenAndServe(metricsAddr, mux); err != nil {
 				log.Printf("metrics server exited: %v", err)
+			}
+		}()
+	}
+
+	// Optional pprof endpoint — set PPROF_PORT=6060 in dev to enable
+	// `go tool pprof http://localhost:6060/debug/pprof/profile` etc.
+	// Runs on localhost-only with a dedicated mux so it doesn't leak the
+	// game handlers on a second port.
+	if pprofPort := os.Getenv("PPROF_PORT"); pprofPort != "" {
+		// Also track blocked-on-lock and mutex-wait samples so the
+		// /debug/pprof/block and /debug/pprof/mutex profiles are populated.
+		runtime.SetBlockProfileRate(1)    // sample every blocking event
+		runtime.SetMutexProfileFraction(1) // sample every mutex contention
+		go func() {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/debug/pprof/", pprof.Index)
+			mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+			mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+			mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+			mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+			log.Printf("pprof on http://localhost:%s/debug/pprof/", pprofPort)
+			if err := http.ListenAndServe("localhost:"+pprofPort, mux); err != nil {
+				log.Printf("pprof server exited: %v", err)
 			}
 		}()
 	}
