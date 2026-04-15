@@ -21,7 +21,8 @@ const (
 	densityCacheMaxEntries = 200000
 	// ~2KB/entry avg, ~8KB on heavily-flagged chunks — 8000 entries is
 	// ~16MB typical, ~64MB worst case, well within the 256MB fly machine.
-	chunkSyncCacheMaxEntries = 8000
+	chunkSyncCacheMaxEntries  = 8000
+	mineBitmapCacheMaxEntries = 20000 // 512B each -> ~10MB cap
 )
 
 type Server struct {
@@ -88,6 +89,11 @@ type Server struct {
 	chunkSyncCache   map[ChunkID]*chunkSyncEntry
 	chunkSyncCacheMu sync.Mutex
 
+	// mineBitmaps[cid][i] = bit i set iff cell i is a mine. Deterministic from
+	// (seed, density), so never invalidated.
+	mineBitmaps   map[ChunkID]*[512]byte
+	mineBitmapsMu sync.Mutex
+
 	// Persistence configuration
 	useS3   bool
 	dataDir string
@@ -144,6 +150,7 @@ func NewServer() *Server {
 		seedCache:            make(map[ChunkID]uint64),
 		densityCache:         make(map[ChunkID]float64),
 		chunkSyncCache:       make(map[ChunkID]*chunkSyncEntry),
+		mineBitmaps:          make(map[ChunkID]*[512]byte),
 		walFlushSignal:       make(chan struct{}, 1),
 		nextPlayerID:         1,
 		nextSpectatorID:      1,
