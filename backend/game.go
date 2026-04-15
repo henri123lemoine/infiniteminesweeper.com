@@ -63,13 +63,19 @@ func (s *Server) applyScore(playerID uint32, delta int32) int32 {
 	return newScore
 }
 
-// isMine determines if a cell contains a mine using the chunk's seed and density.
-func (s *Server) isMine(chunkID ChunkID, cell uint32) bool {
+// getMineBitmap returns a cached 4096-bit mine bitmap for a chunk. Mines are
+// pure functions of (seed, density); both are immutable per chunk, so the
+// bitmap never needs invalidation.
+func (s *Server) getMineBitmap(chunkID ChunkID) *[512]byte {
+	s.mineBitmapsMu.Lock()
+	if bm, ok := s.mineBitmaps[chunkID]; ok {
+		s.mineBitmapsMu.Unlock()
+		return bm
+	}
+	s.mineBitmapsMu.Unlock()
+
 	seed := s.generateChunkSeed(chunkID)
-	cellSeed := splitmix64(seed + uint64(cell))
-	// Use per-chunk density mapped to 0..100 threshold.
-	// Quantize to float32 to match what is sent to the client and used for its calculations.
-	d32 := float32(s.getChunkDensity(chunkID)) // [0,1] as float32 like on the wire
+	d32 := float32(s.getChunkDensity(chunkID))
 	if d32 < 0 {
 		d32 = 0
 	} else if d32 > 1 {
@@ -79,11 +85,49 @@ func (s *Server) isMine(chunkID ChunkID, cell uint32) bool {
 	if threshold > 100 {
 		threshold = 100
 	}
-	return (cellSeed % 100) < threshold
+	bm := &[512]byte{}
+	for cell := uint32(0); cell < ChunkSize*ChunkSize; cell++ {
+		if splitmix64(seed+uint64(cell))%100 < threshold {
+			bm[cell>>3] |= 1 << (cell & 7)
+		}
+	}
+
+	s.mineBitmapsMu.Lock()
+	if len(s.mineBitmaps) >= mineBitmapCacheMaxEntries {
+		for k := range s.mineBitmaps {
+			delete(s.mineBitmaps, k)
+			break
+		}
+	}
+	s.mineBitmaps[chunkID] = bm
+	s.mineBitmapsMu.Unlock()
+	return bm
+}
+
+func (s *Server) isMine(chunkID ChunkID, cell uint32) bool {
+	return s.getMineBitmap(chunkID)[cell>>3]&(1<<(cell&7)) != 0
 }
 
 func (s *Server) countAdjacentMines(chunkID ChunkID, cell uint32) int {
 	x, y := cellIndexToXY(cell)
+	// Fast path: when the 3×3 neighborhood stays inside the same chunk,
+	// one bitmap lookup services all 8 neighbors.
+	if x >= 1 && x <= ChunkSize-2 && y >= 1 && y <= ChunkSize-2 {
+		bm := s.getMineBitmap(chunkID)
+		count := 0
+		for dy := -1; dy <= 1; dy++ {
+			for dx := -1; dx <= 1; dx++ {
+				if dx == 0 && dy == 0 {
+					continue
+				}
+				nc := uint32((y+dy)*ChunkSize + (x + dx))
+				if bm[nc>>3]&(1<<(nc&7)) != 0 {
+					count++
+				}
+			}
+		}
+		return count
+	}
 	worldX := int(chunkID.X)*ChunkSize + x
 	worldY := int(chunkID.Y)*ChunkSize + y
 	count := 0
@@ -92,9 +136,7 @@ func (s *Server) countAdjacentMines(chunkID ChunkID, cell uint32) int {
 			if dx == 0 && dy == 0 {
 				continue
 			}
-			wx := worldX + dx
-			wy := worldY + dy
-			cid, cidx := worldToChunk(wx, wy)
+			cid, cidx := worldToChunk(worldX+dx, worldY+dy)
 			if s.isMine(cid, cidx) {
 				count++
 			}
