@@ -12,6 +12,8 @@ import FlagSelector from "./FlagSelector.jsx";
 import { usePinchPanZoom } from "./hooks/usePinchPanZoom.js";
 import { initSprites, getFlagIds } from "./sprites/index.js";
 
+const isEmbed = new URLSearchParams(window.location.search).has("embed");
+
 function App() {
   const storedName = localStorage.getItem("username") || "";
   const [nameInput, setNameInput] = useState(storedName);
@@ -116,7 +118,7 @@ function App() {
   // Leaderboard visibility and number formatting
   const [leaderboardVisible, setLeaderboardVisible] = useState(true);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [showHomeOverlay, setShowHomeOverlay] = useState(true);
+  const [showHomeOverlay, setShowHomeOverlay] = useState(!isEmbed);
   const lbRefreshTimerRef = useRef(null);
 
   // Build numeric sprite ID list for the 'flag' category only
@@ -765,9 +767,9 @@ function App() {
   }, [nameInput, flagID, connected, joinGame, updateProfile]);
 
   return (
-    <div className="game-container">
+    <div className={isEmbed ? "game-container embed" : "game-container"}>
       {/* Home button (hidden on homepage) */}
-      {!showHomeOverlay && (
+      {!showHomeOverlay && !isEmbed && (
         <button
           onClick={() => {
             // Keep connection alive; simply show overlay
