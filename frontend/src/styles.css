@@ -363,18 +363,22 @@ body {
 }
 
 /* Leaderboard rows */
+/* Rows read as minesweeper cells: everyone unrevealed (raised), you revealed (flat) */
 .lb-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 2px;
-  padding: 1px 4px;
-  border-radius: 3px;
+  margin-bottom: 3px;
+  padding: 1px 6px;
+  box-sizing: border-box;
+  background: var(--ms-face);
+  border: 2px solid;
+  border-color: var(--ms-light) var(--ms-shadow) var(--ms-shadow) var(--ms-light);
 }
 
 .lb-row.lb-me {
-  background: #fff3c4;
-  outline: 1px solid #e3ce7a;
+  background: #e0e0e0;
+  border-color: var(--ms-shadow) var(--ms-light) var(--ms-light) var(--ms-shadow);
 }
 
 .lb-rank {
