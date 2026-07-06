@@ -15,10 +15,8 @@ import { CHAINS, achievementById } from "./achievements.js";
 
 const isEmbed = new URLSearchParams(window.location.search).has("embed");
 
-// Small pixel-art flag icon that only redraws when the flag actually changes
-// (the leaderboard used to redraw every canvas on every broadcast tick).
-// Sized up-front so it never renders at the default 300x150 canvas size, and
-// keyed on flagID so a flag change remounts + redraws.
+// Pixel-art flag icon; memoized so broadcast ticks don't redraw every row.
+// Sized up-front so it never flashes at the default 300x150 canvas size.
 const FlagIcon = React.memo(function FlagIcon({ flagID, size = 20 }) {
   const dpr = window.devicePixelRatio || 1;
   const draw = useCallback(
@@ -46,12 +44,9 @@ const FlagIcon = React.memo(function FlagIcon({ flagID, size = 20 }) {
   );
 });
 
-// Windowed list for the full leaderboard with fully custom scrolling: no
-// native overflow scroll anywhere, so nothing the browser or a data refresh
-// does can move it. The offset lives in a ref, only mutated by user input
-// (wheel, drag, scrollbar) and the one-shot "find me" animation. The 5s data
-// refresh swaps `rows` under a stationary window; fixed row height means no
-// layout shift either.
+// Windowed leaderboard with fully custom scrolling. The offset lives in a
+// ref that only user input (wheel, drag, scrollbar) and "find me" can move,
+// so data refreshes can never shift the list.
 const LB_ROW_H = 26;
 const LB_THUMB_MIN = 24;
 function VirtualLeaderboard({ rows, myName, formatFullScore, findMeToken }) {
@@ -177,8 +172,7 @@ function VirtualLeaderboard({ rows, myName, formatFullScore, findMeToken }) {
     [rows, myName]
   );
 
-  // One-shot eased scroll to my row when "Find me" is pressed. User input
-  // cancels it; nothing else ever re-triggers it.
+  // One-shot eased scroll to my row; user input cancels it.
   useEffect(() => {
     if (!findMeToken || myIndex < 0) return;
     stopAnim();
@@ -1381,8 +1375,7 @@ function App() {
                 {fullLeaderboard && fullLeaderboard.length === 0 && (
                   <p>No players yet.</p>
                 )}
-                {/* Stays mounted through the 5s refreshes: unmounting on
-                    lbLoading reset the scroll to the top every refetch. */}
+                {/* Must stay mounted through the 5s refreshes or scroll resets */}
                 {Array.isArray(fullLeaderboard) &&
                   fullLeaderboard.length > 0 && (
                     <VirtualLeaderboard

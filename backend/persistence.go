@@ -62,10 +62,9 @@ type WALEntry struct {
 	Sequence  uint64    `json:"sequence"`
 }
 
-// walPlayerData persists identity changes (join, rename, flag change) so they
-// survive a crash between snapshots. Without it, a crash loses every identity
-// created since the last snapshot: scores replay from the WAL but names and
-// session tokens vanish.
+// walPlayerData persists identity changes (join, rename, flag change): a
+// crash between snapshots replays scores from the WAL, but names and session
+// tokens would vanish without these entries.
 type walPlayerData struct {
 	PlayerID     uint32 `json:"player_id"`
 	Name         string `json:"name"`
@@ -86,9 +85,8 @@ type snapshotData struct {
 	NextPlayerID uint32
 	// Persist session tokens so identities survive restarts
 	SessionTokens map[string]uint32
-	// Advancements. UnlockedFlags is intentionally not persisted here — it's
-	// fully derivable from UnlockedAdvancements + achievementDefs, so we
-	// rebuild it in restoreSnapshotData instead of storing it twice.
+	// UnlockedFlags is derivable from UnlockedAdvancements + achievementDefs;
+	// restoreSnapshotData rebuilds it instead of storing it twice.
 	PlayerStats          map[uint32]*PlayerStats
 	UnlockedAdvancements map[uint32]map[string]bool
 }
@@ -619,10 +617,9 @@ func (s *Server) initPersistence() {
 	go s.periodicWALFlush()     // flush WAL every 30 seconds
 }
 
-// captureSnapshotData deep-copies all state under the lock. The gob encoding
-// happens after the lock is released, so handing out references to the live
-// maps would let concurrent reveals mutate them mid-encode — a fatal
-// "concurrent map iteration and map write" panic.
+// captureSnapshotData deep-copies all state under the lock: gob encoding
+// happens after release, and encoding live maps races concurrent reveals
+// (fatal concurrent map read/write panic).
 func (s *Server) captureSnapshotData() snapshotData {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
@@ -810,9 +807,8 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 	} else {
 		s.unlockedAdvancements = make(map[uint32]map[string]bool)
 	}
-	// unlockedFlags is derived, not persisted: rebuild it from the unlocked
-	// achievement IDs + their reward shapes so old snapshots (pre-advancements)
-	// restore cleanly with empty unlocks.
+	// unlockedFlags is derived, not persisted; old snapshots restore cleanly
+	// with empty unlocks.
 	s.unlockedFlags = make(map[uint32]map[uint32]bool, len(s.unlockedAdvancements))
 	for pid := range s.unlockedAdvancements {
 		s.rebuildUnlockedFlagsLocked(pid)
@@ -895,9 +891,8 @@ func (s *Server) loadSnapshotFromDisk() error {
 	return nil
 }
 
-// persistOnShutdown makes a best-effort attempt to durably persist all state
-// before the process exits. WAL flush first — it is fast and alone guarantees
-// no data loss; the snapshot just makes the next boot faster.
+// persistOnShutdown: WAL flush first — it alone guarantees no data loss;
+// the snapshot just makes the next boot faster.
 func (s *Server) persistOnShutdown() {
 	if err := s.flushWAL(); err != nil {
 		log.Printf("[shutdown] WAL flush failed: %v", err)

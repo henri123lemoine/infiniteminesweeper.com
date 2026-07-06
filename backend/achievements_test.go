@@ -181,9 +181,7 @@ func TestFlagGatingPaidVsFreeVsGrandfathered(t *testing.T) {
 		t.Fatalf("Dragon should still be locked; only Wavy Triangle was unlocked")
 	}
 
-	// Grandfathering: a paid flag the player already has equipped is usable
-	// even without an explicit unlock (pre-existing choice from before
-	// achievement tracking existed).
+	// Grandfathering: an already-equipped paid flag is usable without an unlock.
 	brokenGuidonVariant := shapeBrokenGuidon.variants[0]
 	s.playerFlags[pid] = brokenGuidonVariant
 	if !s.isFlagUnlockedLocked(pid, brokenGuidonVariant) {
@@ -224,10 +222,8 @@ func TestSnapshotRoundTripStatsAndUnlocks(t *testing.T) {
 	if !restored.unlockedAdvancements[pid]["land_surveyor"] {
 		t.Fatalf("expected land_surveyor unlock to survive round-trip")
 	}
-	// unlockedFlags is derived, not persisted directly: rebuilt from
-	// unlockedAdvancements + achievementDefs, so land_surveyor's reward shape
-	// (Very Wavy Guidon) must reappear even though we never copied
-	// unlockedFlags.
+	// unlockedFlags is derived: land_surveyor's reward shape must reappear
+	// even though unlockedFlags itself was never copied.
 	for _, v := range shapeVeryWavyGuidon.variants {
 		if !restored.unlockedFlags[pid][v] {
 			t.Fatalf("expected unlockedFlags rebuilt from unlockedAdvancements on restore (missing %d)", v)

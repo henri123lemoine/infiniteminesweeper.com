@@ -1,18 +1,13 @@
 import { CHUNK } from "./useGameState.js";
 import { drawSprite } from "./sprites/index.js";
 
-// Effective px/cell thresholds for LOD switching. The chunk-cache raster
-// (used below FULL_QUALITY_THRESHOLD) is rendered at baseCell resolution
-// equal to this threshold, so at the exact LOD0/LOD1 boundary the cached
-// bitmap is blitted at native resolution with no up/downscaling artifact.
+// Effective px/cell thresholds for LOD switching
 const MINIMAL_RENDERING_THRESHOLD = 5; // below this: minimal cached chunks
 const FULL_QUALITY_THRESHOLD = 20; // above this: per-cell rendering
 
-// Cached chunk rasters come in a few px-per-cell resolutions; the smallest
-// bucket >= the current effective px-per-cell is used, so blits never
-// upscale. Rasterizing at (roughly) screen resolution keeps a screenful of
-// cache near-constant memory at any zoom, where a single fixed-resolution
-// raster ballooned 16x when drawn far out.
+// Chunk rasters are cached at the smallest px-per-cell bucket >= the current
+// zoom, so blits never upscale and a screenful of cache stays ~constant
+// memory at any zoom.
 const RASTER_BUCKETS = [20, 10, 5];
 // Per-bucket LRU caps, each ~2 screenfuls on a large retina display.
 const RASTER_CACHE_CAP = { 20: 12, 10: 40, 5: 160 };
@@ -23,10 +18,9 @@ const RASTER_BUDGET_MS = 6;
 export class CanvasRenderer {
   constructor() {
     this.canvasSizeRef = { w: 0, h: 0, dpr: 1 };
-    // Per-resolution chunk raster caches: bucket -> ("cx,cy" -> { canvas, version })
+    // bucket -> ("cx,cy" -> { canvas, version })
     this.chunkCaches = new Map(RASTER_BUCKETS.map((b) => [b, new Map()]));
-    // Pre-rendered per-resolution stamps: base cell tiles, number glyphs,
-    // and the shared all-unrevealed chunk placeholder.
+    // Pre-rendered per-resolution stamps (cell tiles, number glyphs, blanks)
     this.stampCache = new Map();
   }
 
@@ -63,9 +57,7 @@ export class CanvasRenderer {
     );
   }
 
-  // Shared placeholder for chunks with no revealed cells or flags — the
-  // vast majority of the world when zoomed out. Drawing it costs one
-  // drawImage and caches nothing per-chunk.
+  // Shared placeholder for untouched chunks: one drawImage, no per-chunk cache.
   _blankChunk(size) {
     return this._stamp(`blank,${size}`, CHUNK * size, CHUNK * size, (ctx) => {
       const tile = this._baseTile(size, false);
@@ -209,12 +201,9 @@ export class CanvasRenderer {
     }
   }
 
-  // Rasterizes a chunk in the same visual style as close-up LOD0 rendering
-  // (beveled cells, real flag/mine sprites) at `size` px per cell. The
-  // beveled base and number glyphs are stamped from pre-rendered tiles —
-  // an order of magnitude cheaper than the ~12 fillRects per cell that
-  // drawing them directly costs, which is what makes warm-up over a fast
-  // zoom-out feasible within the per-frame budget.
+  // Rasterizes a chunk at `size` px per cell in the LOD0 visual style.
+  // Bases and glyphs are stamped from pre-rendered tiles — ~10x cheaper than
+  // drawing them, which is what keeps warm-up inside the frame budget.
   _rasterizeChunk(cx, cy, refs, size) {
     const { revealedCellsRef, flaggedCellsRef, getNumberColor } = refs;
     const off = this._makeCanvas(CHUNK * size, CHUNK * size);
@@ -265,9 +254,8 @@ export class CanvasRenderer {
     drawSprite(ctx, spriteID, dx, dy, dw, dh);
   }
 
-  // Cell Rendering Logic. Takes the raw revealed-cell record and flag state
-  // directly (rather than a merged object) to avoid an allocation per cell
-  // per frame at LOD0, where this runs for every visible cell.
+  // Takes the raw cell record and flag state directly (not a merged object)
+  // to avoid an allocation per visible cell per frame at LOD0.
   renderCell(
     ctx,
     screenX,
@@ -354,10 +342,8 @@ export class CanvasRenderer {
       height !== this.canvasSizeRef.h ||
       dpr !== this.canvasSizeRef.dpr
     ) {
-      // Round rather than truncate: canvas.width/height coerce to an
-      // unsigned integer, and a fractional dpr (e.g. 1.5, 2.625) truncating
-      // down would leave the backing store a device pixel short of the
-      // container, offsetting the ctx transform's scale from reality.
+      // Round, not truncate: with a fractional dpr, truncating leaves the
+      // backing store a device pixel short of the container.
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       canvas.style.width = `${width}px`;
@@ -482,13 +468,9 @@ export class CanvasRenderer {
     const frameStart = performance.now();
     let rerenderNeeded = false;
 
-    // A bucket's static cap can be smaller than one screenful at the low
-    // end of the zoom range it serves (a bucket serves down to half its
-    // native px-per-cell, where 4x more chunks fit on screen). If eviction
-    // ever removes a chunk that is still visible, it gets re-rasterized the
-    // next frame at the cost of evicting another visible chunk — the whole
-    // screen flashes in waves forever. Floor the cap at what this frame
-    // actually needs so eviction only reclaims off-screen chunks.
+    // Floor the cap at this frame's need: if eviction ever removes a chunk
+    // still on screen, visible chunks re-raster and re-evict each other
+    // every frame — the whole screen flashes in waves.
     let neededInView = 0;
     for (let cy = startCY; cy <= endCY; cy++) {
       for (let cx = startCX; cx <= endCX; cx++) {
@@ -502,13 +484,9 @@ export class CanvasRenderer {
       Math.ceil(neededInView * 1.25) + 4
     );
 
-    // Snap each tile's destination rect to whole device pixels. Adjacent
-    // chunk tiles share a boundary computed from the same viewRef/zoom
-    // values, but the browser rasterizes each drawImage call independently;
-    // a fractional-device-pixel edge lets anti-aliased coverage on that
-    // shared seam drift a hair between frames as zoom changes continuously,
-    // which reads as the world "jiggling". Rounding to the current
-    // dpr*zoom scale keeps every tile edge pixel-exact and stable.
+    // Snap tile rects to whole device pixels: fractional shared edges are
+    // anti-aliased independently per drawImage and drift as zoom changes,
+    // which reads as the world "jiggling".
     const scale = dpr * zoom;
     const snapToDevicePixel = (v) => Math.round(v * scale) / scale;
 
@@ -524,8 +502,7 @@ export class CanvasRenderer {
           cy * CHUNK * CELL_SIZE - viewRef.current.y
         );
 
-        // Never-touched chunks (no reveals, no flags) all share one
-        // placeholder canvas: no per-chunk raster work or cache memory.
+        // Untouched chunks share one placeholder: no raster work, no cache.
         let source = version === 0 ? blank : null;
 
         if (!source) {
@@ -539,8 +516,7 @@ export class CanvasRenderer {
               cache.set(key, entry);
               this._evictIfNeeded(cache, cacheCap);
             } else {
-              // Over budget: show the stale raster (or the placeholder) now
-              // and finish rasterizing on a following frame.
+              // Over budget: stale raster or placeholder now, finish next frame
               rerenderNeeded = true;
             }
           } else {

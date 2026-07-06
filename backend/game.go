@@ -64,10 +64,8 @@ func (s *Server) applyScore(playerID uint32, delta int32) int32 {
 	return newScore
 }
 
-// streakBonus rewards flawless play: +5% per consecutive correct action,
-// capped at +200% (3x after 40 flawless actions). Guessers can't sustain a
-// streak, so this favors skill without adding extra penalty swing.
-// Caller must hold stateMu.
+// streakBonus: +5% per consecutive correct action, capped at 3x. Guessers
+// can't sustain a streak. Caller must hold stateMu.
 func (s *Server) streakBonus(playerID uint32) float64 {
 	return 1.0 + math.Min(0.05*float64(s.streaks[playerID]), 2.0)
 }
@@ -289,10 +287,9 @@ func (s *Server) handleReveal(
 			}
 		}
 
-		// The multiplier applies to the net either way — previously only
-		// positive nets were scaled, which made chord mine-hits effectively
-		// free in high-multiplier sectors. The streak bonus only applies to
-		// flawless (no mine) chords.
+		// Scale the net either way — exempting negative nets would make chord
+		// mine-hits nearly free in high-multiplier sectors. The streak bonus
+		// only applies to flawless (no mine) chords.
 		m := s.getScoreMultiplier(chunkID)
 		if minesHit == 0 && scoreDelta > 0 {
 			scoreDelta = int32(math.Round(float64(scoreDelta) * m * s.streakBonus(playerID)))
@@ -396,9 +393,8 @@ func (s *Server) handleReveal(
 		}{PlayerID: playerID, Score: s.scores[playerID], Streak: s.streaks[playerID]})
 	}
 
-	// 4) Advancement stats + any newly-crossed thresholds (full-value snapshot,
-	// mirroring score_update's pattern). Every path that reaches here touched
-	// stats via setCellRevealed/bumpSafeStreakLocked/resetSafeStreakLocked.
+	// 4) Advancement stats + newly-crossed thresholds (full-value snapshot,
+	// mirroring score_update's pattern)
 	var newUnlocks []*pb.AdvancementUnlocked
 	var advSyncBytes []byte
 	if stats := s.playerStats[playerID]; stats != nil {
@@ -413,8 +409,7 @@ func (s *Server) handleReveal(
 			NewUnlocks []string    `json:"new_unlocks,omitempty"`
 		}{PlayerID: playerID, Stats: *stats, NewUnlocks: unlockedIDs})
 		if len(newUnlocks) > 0 {
-			// Rewards unlock whole shapes (many variant IDs); a fresh full
-			// sync keeps the client's unlock set authoritative.
+			// Rewards unlock whole shapes; a full sync keeps the client authoritative.
 			advSyncBytes = s.buildAdvancementSyncLocked(playerID)
 		}
 	}
@@ -657,11 +652,9 @@ func (s *Server) sendRevealAck(playerID uint32, requestID uint64, ok bool, ack *
 	s.sendToPlayer(playerID, mustProto(&pb.Msg{Payload: &pb.Msg_RevealAck{RevealAck: ack}}))
 }
 
-// broadcastUpdates fans chunk updates out to subscribers. actorID (if nonzero)
-// always receives every touched chunk even without a subscription: flood-fills
-// are unbounded and routinely spill past the actor's viewport-based
-// subscription margin — without this, the actor's own reveal silently never
-// reaches them for those chunks.
+// broadcastUpdates fans chunk updates out to subscribers. actorID (if
+// nonzero) always receives every touched chunk even without a subscription:
+// flood-fills routinely spill past the viewport-based subscription margin.
 func (s *Server) broadcastUpdates(reveals map[ChunkID]*pb.RevealedCells, flags map[ChunkID][]*pb.FlagPlacement, actorID uint32) {
 	var wg sync.WaitGroup
 

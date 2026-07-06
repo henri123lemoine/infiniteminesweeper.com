@@ -173,9 +173,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.players[sid][player] = struct{}{}
 	s.playersMu.Unlock()
 
-	// Mailbox and Send are never closed — closing them raced with in-flight
-	// senders (send on a closed channel always panics and kills the process).
-	// Consumers exit via p.done instead, and the channels get GC'd.
+	// Mailbox and Send are never closed — a send on a closed channel panics
+	// the whole process. Consumers exit via p.done; the channels get GC'd.
 	go func(p *Player) {
 		for {
 			select {
@@ -373,9 +372,8 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	}}}
 	s.sendToPlayer(playerID, mustProto(ackMsg))
 
-	// Send advancement state: stats + unlocked achievement/flag IDs so far.
-	// Free flags are implicitly always unlocked client-side; we only need to
-	// report the paid ones actually unlocked via achievements.
+	// Advancement state: stats + unlocks so far. Free flags are implicitly
+	// unlocked client-side; only paid ones need reporting.
 	s.sendToPlayer(playerID, s.buildAdvancementSyncLocked(playerID))
 
 	// Send spawn hint pointing to most populated chunk
@@ -457,9 +455,8 @@ func (s *Server) handleUpdateProfile(player *Player, update *pb.UpdateProfile) {
 }
 
 // handleSeedRequest processes a SeedRequest message, returning seeds and densities for requested chunks
-// Upper bound on chunks per SeedRequest: enough for any legitimate viewport
-// (the client only requests uncached neighbors), small enough that a hostile
-// 1MB message can't stall the write lock computing tens of thousands of HMACs.
+// Enough for any legitimate viewport; caps how long a hostile request can
+// hold the write lock computing HMACs.
 const maxSeedRequestChunks = 512
 
 func (s *Server) handleSeedRequest(playerID uint32, chunkIds []*pb.ChunkID) {

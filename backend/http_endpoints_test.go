@@ -88,8 +88,7 @@ func TestHandleProfileUpdate(t *testing.T) {
 	s.stateMu.Unlock()
 
 	body := bytes.NewBuffer(nil)
-	// flag 15 is a free starter-tier (Triangle) variant; paid flags are now
-	// gated behind advancements and would be silently clamped here.
+	// flag 15 is a free starter-tier variant; a paid flag would be silently clamped.
 	io.WriteString(body, `{"name":"New","flagID":15}`)
 	req := httptest.NewRequest(http.MethodPost, "/profile/update", body)
 	req.Header.Set("Content-Type", "application/json")

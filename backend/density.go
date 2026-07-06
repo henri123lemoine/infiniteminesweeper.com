@@ -24,9 +24,8 @@ const (
 	activeBoostPerPlayer = (3.0 - 1.0) / 12.0
 	// Cap the number of players contributing to the boost
 	activeBoostPlayerCap = 12
-	// Clamp active multiplier. Capped lower than the historical 5x: penalties
-	// now scale with the multiplier too, so the ceiling bounds how much a
-	// single mistake can swing.
+	// Penalties scale with the multiplier too, so this ceiling also bounds
+	// how much a single mistake can swing.
 	activeMinMultiplier = 1.0
 	activeMaxMultiplier = 3.0
 )

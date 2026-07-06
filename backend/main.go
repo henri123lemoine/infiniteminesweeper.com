@@ -116,9 +116,8 @@ func main() {
 		}()
 	}
 
-	// Fly sends SIGINT on auto-stop and deploys. Without this handler, every
-	// stop silently dropped the in-memory WAL buffer — up to a full flush
-	// interval of recent play.
+	// Fly sends SIGINT on auto-stop and deploys; flush on the way out or
+	// every stop loses up to a flush interval of play.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {

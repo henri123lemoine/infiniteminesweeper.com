@@ -90,20 +90,16 @@ var allFlagShapes = []*flagShape{
 	shapeDragonEye, shapeDragon,
 }
 
-// defaultFlagID is the fallback assigned when a join requests a locked or
-// invalid flag ID. It must be a real, always-free variant — unlike the old
-// per-shape numbering, sprite IDs here start at 1, so a literal 0 fallback
-// would assign a nonexistent flag.
+// defaultFlagID is the fallback for a locked or invalid flag ID at join.
+// Sprite IDs start at 1, so 0 is not a valid fallback.
 var defaultFlagID = shapeRectangle.variants[0]
 
-// The cheapest tier (cost <= 5: rectangle/triangle/guidon in all colors) is
-// the free starter set — color choice is a player's identity on the minimap,
-// so new players must have real options. Everything above it is earned.
+// Cost <= 5 (rectangle/triangle/guidon in all colors) is the free starter
+// set: color is a player's minimap identity, so new players need options.
 const freeFlagCostCeiling = 5
 
-// paidFlagIDs is the set of variant IDs NOT automatically available to a
-// fresh player. Membership here is what makes isFlagUnlockedLocked gate a
-// flag at all.
+// paidFlagIDs: variant IDs not available to a fresh player; membership here
+// is what makes isFlagUnlockedLocked gate a flag at all.
 var paidFlagIDs = func() map[uint32]bool {
 	m := make(map[uint32]bool)
 	for _, sh := range allFlagShapes {
@@ -117,10 +113,8 @@ var paidFlagIDs = func() map[uint32]bool {
 	return m
 }()
 
-// achievementDefs is the v1 advancement set. Each "chain" below tracks one
-// stat in ascending difficulty. Every paid shape is rewarded by at least one
-// achievement, with roughly cost-matched difficulty; chains of comparable
-// relative difficulty intentionally share shapes at the very top (Dragon).
+// Each chain tracks one stat in ascending difficulty. Every paid shape is
+// rewarded by at least one achievement, at roughly cost-matched difficulty.
 var achievementDefs = []AchievementDef{
 	// Chunks founded (new territory claimed)
 	{ID: "first_foothold", Name: "First Foothold", RewardShape: shapeWavyTriangle, Check: func(p *PlayerStats) bool { return p.ChunksFounded >= 1 }},
@@ -158,10 +152,8 @@ var achievementDefs = []AchievementDef{
 	{ID: "cartographer", Name: "Cartographer", Check: func(p *PlayerStats) bool { return p.CellsRevealed >= 50000 }},
 	{ID: "world_mapper", Name: "World Mapper", RewardShape: shapeDragon, Check: func(p *PlayerStats) bool { return p.CellsRevealed >= 500000 }},
 
-	// rising_star / top_of_the_world: SKIPPED for v1. Both need leaderboard-rank
-	// triggers (e.g. "reach top 10"), which requires re-evaluating on *other*
-	// players' score changes, not just the acting player's own stat deltas —
-	// different plumbing than evaluateAdvancementsLocked's per-action hook.
+	// rising_star / top_of_the_world skipped: rank triggers need re-evaluation
+	// on other players' score changes, not just the actor's own stat deltas.
 
 	// Meta: collect a spread of flag-rewarding achievements. Evaluated last so
 	// it can see unlocks recorded earlier in the same evaluation pass.
@@ -208,10 +200,8 @@ func (s *Server) rebuildUnlockedFlagsLocked(pid uint32) {
 	}
 }
 
-// isFlagUnlockedLocked reports whether flagID is usable by pid: free flags are
-// always usable, paid flags are usable once unlocked via an achievement, and a
-// player's currently-equipped flag remains usable even if it predates
-// achievement tracking (grandfathering).
+// isFlagUnlockedLocked: free flags are always usable, paid ones once
+// unlocked; a currently-equipped flag stays usable (grandfathering).
 func (s *Server) isFlagUnlockedLocked(pid, flagID uint32) bool {
 	if !paidFlagIDs[flagID] {
 		return true
@@ -222,10 +212,8 @@ func (s *Server) isFlagUnlockedLocked(pid, flagID uint32) bool {
 	return s.playerFlags[pid] == flagID
 }
 
-// buildAdvancementSyncLocked serializes the player's full advancement state
-// (stats + unlocked achievement IDs + unlocked paid flag variants). Sent on
-// join and again after every new unlock so the client's unlock set stays
-// authoritative. Caller must hold stateMu.
+// buildAdvancementSyncLocked serializes the player's full advancement state,
+// sent on join and after every new unlock. Caller must hold stateMu.
 func (s *Server) buildAdvancementSyncLocked(playerID uint32) []byte {
 	unlockedSet := s.unlockedAdvancements[playerID]
 	unlockedIDs := make([]string, 0, len(unlockedSet))
@@ -271,8 +259,7 @@ func (s *Server) evaluateAdvancementsLocked(playerID uint32) []*pb.AdvancementUn
 			if s.unlockedFlags[playerID] == nil {
 				s.unlockedFlags[playerID] = make(map[uint32]bool)
 			}
-			// Unlock every color variant of the shape; the representative
-			// (first) variant rides in the toast message.
+			// The representative (first) variant rides in the toast message.
 			for _, id := range shape.variants {
 				s.unlockedFlags[playerID][id] = true
 			}

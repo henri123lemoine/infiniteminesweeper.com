@@ -30,10 +30,8 @@ func formatScore(n int32) string {
 }
 
 // getUserRankUnsafe returns the 1-based rank for a score: 1 + the number of
-// players strictly above it. This runs on every RevealAck, so it must stay
-// allocation-free — the previous version built and sorted the entire
-// deduplicated player list per click, which scaled badly past a few
-// thousand players. Assumes caller holds s.stateMu (read lock).
+// players strictly above it. Runs on every RevealAck, so it must stay
+// allocation-free. Assumes caller holds s.stateMu (read lock).
 func (s *Server) getUserRankUnsafe(playerScore int32) uint32 {
 	rank := uint32(1)
 	for _, sc := range s.scores {
@@ -112,9 +110,8 @@ func (s *Server) runLeaderboardBroadcaster() {
 				default:
 				}
 
-				// Non-blocking: a full (or dead) mailbox just skips this tick;
-				// the broadcaster retries every second. A blocking send here
-				// holds playersMu and could wedge all connect/disconnect.
+				// Non-blocking: a full or dead mailbox skips this tick (retried in
+				// 1s); blocking here holds playersMu and can wedge connects.
 				select {
 				case p.Mailbox <- func(pl *Player) {
 					if pl.LastLBVersion == lbVer {

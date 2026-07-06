@@ -66,10 +66,8 @@ func TestAuthentication_NewAndReuseSessionToken(t *testing.T) {
 	}
 	token := j1.SessionToken
 
-	// Flag 51 (a Broken Guidon variant, cost 1500) is a paid flag gated behind
-	// an achievement; grant it directly so this test can exercise the
-	// flag-update-on-reconnect path without also being a test of the
-	// achievement system itself.
+	// Flag 51 is achievement-gated; grant it directly so this test exercises
+	// flag-update-on-reconnect without also testing achievements.
 	srv.stateMu.Lock()
 	if srv.unlockedFlags[1] == nil {
 		srv.unlockedFlags[1] = make(map[uint32]bool)

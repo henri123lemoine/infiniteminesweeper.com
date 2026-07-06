@@ -293,10 +293,9 @@ export const useGameState = () => {
   }, []);
   const playerFlagsRef = useRef(new Map());
   const optimisticActions = useRef(new Map());
-  // Revealed cells whose adjacency was computed before all neighbor seeds
-  // arrived (adjacentMines === -1). Keyed by chunkKey -> Set(cellIdx); they are
-  // recomputed as soon as a seed for any adjacent chunk shows up, otherwise
-  // they would render as blank cells forever.
+  // Cells revealed before all neighbor seeds arrived (adjacentMines === -1),
+  // chunkKey -> Set(cellIdx); recomputed when an adjacent seed shows up,
+  // otherwise they'd render blank forever.
   const pendingAdjacencyRef = useRef(new Map());
 
   const registerPendingAdjacency = useCallback((chunkKey, cell) => {
@@ -1303,9 +1302,8 @@ export const useGameState = () => {
         if (!updateType) return; // Or log an error
         const updateData = update[updateType];
 
-        // A reveal can spill into a chunk we've never seen (unbounded
-        // flood-fill). Ask for its seed so the cells get real numbers once
-        // the pending-adjacency recompute runs.
+        // Flood-fill can spill into a never-seen chunk; fetch its seed so
+        // the pending-adjacency recompute can fill in real numbers.
         if (
           !seedCache.current.has(chunkKey) &&
           websocket.readyState === WebSocket.OPEN
