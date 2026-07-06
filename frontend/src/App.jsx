@@ -46,47 +46,195 @@ const FlagIcon = React.memo(function FlagIcon({ flagID, size = 20 }) {
   );
 });
 
-// Windowed list for the full leaderboard: renders only the ~40 rows in view
-// instead of thousands of DOM nodes redrawn on every 5s refresh. The list
-// NEVER moves on its own — "find me" scrolls once, on demand.
+// Windowed list for the full leaderboard with fully custom scrolling: no
+// native overflow scroll anywhere, so nothing the browser or a data refresh
+// does can move it. The offset lives in a ref, only mutated by user input
+// (wheel, drag, scrollbar) and the one-shot "find me" animation. The 5s data
+// refresh swaps `rows` under a stationary window; fixed row height means no
+// layout shift either.
 const LB_ROW_H = 26;
+const LB_THUMB_MIN = 24;
 function VirtualLeaderboard({ rows, myName, formatFullScore, findMeToken }) {
   const containerRef = useRef(null);
-  const [scrollTop, setScrollTop] = useState(0);
+  const scrollRef = useRef(0);
   const [viewH, setViewH] = useState(420);
-  const rafRef = useRef(null);
+  const [, forceRender] = useState(0);
+  const animRef = useRef(null); // find-me / momentum animation frame
+  const dragRef = useRef(null); // active pointer drag state
+
+  const contentH = rows.length * LB_ROW_H;
+  const maxScroll = Math.max(0, contentH - viewH);
+  if (scrollRef.current > maxScroll) scrollRef.current = maxScroll;
+
+  const repaint = useCallback(() => forceRender((n) => n + 1), []);
+  const stopAnim = useCallback(() => {
+    if (animRef.current) {
+      cancelAnimationFrame(animRef.current);
+      animRef.current = null;
+    }
+  }, []);
+  const setScroll = useCallback(
+    (v) => {
+      const next = Math.max(
+        0,
+        Math.min(rows.length * LB_ROW_H - viewH, v)
+      );
+      if (next !== scrollRef.current) {
+        scrollRef.current = next;
+        repaint();
+      }
+    },
+    [rows.length, viewH, repaint]
+  );
 
   useEffect(() => {
     const el = containerRef.current;
-    if (el) setViewH(el.clientHeight || 420);
+    if (!el) return;
+    const measure = () => setViewH(el.clientHeight || 420);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
+
+  // Wheel: native listener because React wheel handlers are passive and
+  // preventDefault (needed to keep the page still) would be ignored.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e) => {
+      e.preventDefault();
+      stopAnim();
+      setScroll(scrollRef.current + e.deltaY);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [setScroll, stopAnim]);
+
+  // Content drag (mouse or touch) with light touch momentum
+  const onPointerDown = useCallback(
+    (e) => {
+      if (e.target.closest?.("[data-lb-thumb]")) return; // thumb has its own
+      stopAnim();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      dragRef.current = {
+        mode: "content",
+        y0: e.clientY,
+        scroll0: scrollRef.current,
+        lastY: e.clientY,
+        lastT: performance.now(),
+        velocity: 0,
+        touch: e.pointerType === "touch",
+      };
+    },
+    [stopAnim]
+  );
+  const onPointerMove = useCallback(
+    (e) => {
+      const d = dragRef.current;
+      if (!d) return;
+      if (d.mode === "content") {
+        setScroll(d.scroll0 - (e.clientY - d.y0));
+        const now = performance.now();
+        const dt = now - d.lastT;
+        if (dt > 0) {
+          d.velocity = (d.lastY - e.clientY) / dt; // px per ms, scroll direction
+          d.lastY = e.clientY;
+          d.lastT = now;
+        }
+      } else {
+        // scrollbar thumb drag: map thumb pixels to content pixels
+        const track = viewH - d.thumbH;
+        if (track > 0) {
+          const frac = (d.thumb0 + (e.clientY - d.y0)) / track;
+          setScroll(frac * maxScroll);
+        }
+      }
+    },
+    [setScroll, viewH, maxScroll]
+  );
+  const onPointerUp = useCallback(() => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    // Momentum only for touch flicks; mouse drags stop dead.
+    if (d?.mode === "content" && d.touch && Math.abs(d.velocity) > 0.05) {
+      let v = d.velocity * 16; // px per frame
+      const decay = () => {
+        v *= 0.94;
+        if (Math.abs(v) < 0.5) {
+          animRef.current = null;
+          return;
+        }
+        setScroll(scrollRef.current + v);
+        animRef.current = requestAnimationFrame(decay);
+      };
+      animRef.current = requestAnimationFrame(decay);
+    }
+  }, [setScroll]);
 
   const myIndex = useMemo(
     () => (myName ? rows.findIndex((r) => r.name === myName) : -1),
     [rows, myName]
   );
 
-  // One-shot scroll to my row when the "Find me" button is pressed
+  // One-shot eased scroll to my row when "Find me" is pressed. User input
+  // cancels it; nothing else ever re-triggers it.
   useEffect(() => {
     if (!findMeToken || myIndex < 0) return;
-    const el = containerRef.current;
-    if (!el) return;
-    el.scrollTo({
-      top: Math.max(0, myIndex * LB_ROW_H - viewH / 2),
-      behavior: "smooth",
-    });
+    stopAnim();
+    const from = scrollRef.current;
+    const to = Math.max(
+      0,
+      Math.min(maxScroll, myIndex * LB_ROW_H - viewH / 2)
+    );
+    const t0 = performance.now();
+    const DUR = 350;
+    const ease = (t) => 1 - (1 - t) ** 3;
+    const step = () => {
+      const t = Math.min(1, (performance.now() - t0) / DUR);
+      setScroll(from + (to - from) * ease(t));
+      animRef.current = t < 1 ? requestAnimationFrame(step) : null;
+    };
+    animRef.current = requestAnimationFrame(step);
+    return stopAnim;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [findMeToken]);
 
-  const onScroll = useCallback((e) => {
-    const top = e.currentTarget.scrollTop;
-    if (rafRef.current) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      setScrollTop(top);
-    });
-  }, []);
+  // Scrollbar thumb geometry
+  const thumbH =
+    maxScroll > 0
+      ? Math.max(LB_THUMB_MIN, (viewH / contentH) * viewH)
+      : 0;
+  const thumbTop =
+    maxScroll > 0 ? (scrollRef.current / maxScroll) * (viewH - thumbH) : 0;
 
+  const onThumbDown = useCallback(
+    (e) => {
+      e.stopPropagation();
+      stopAnim();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      dragRef.current = {
+        mode: "thumb",
+        y0: e.clientY,
+        thumb0: thumbTop,
+        thumbH,
+      };
+    },
+    [stopAnim, thumbTop, thumbH]
+  );
+  const onTrackDown = useCallback(
+    (e) => {
+      if (e.target.closest?.("[data-lb-thumb]")) return;
+      stopAnim();
+      const rect = e.currentTarget.getBoundingClientRect();
+      const frac =
+        (e.clientY - rect.top - thumbH / 2) / Math.max(1, viewH - thumbH);
+      setScroll(frac * maxScroll);
+    },
+    [stopAnim, setScroll, thumbH, viewH, maxScroll]
+  );
+
+  const scrollTop = scrollRef.current;
   const start = Math.max(0, Math.floor(scrollTop / LB_ROW_H) - 10);
   const end = Math.min(
     rows.length,
@@ -94,49 +242,97 @@ function VirtualLeaderboard({ rows, myName, formatFullScore, findMeToken }) {
   );
 
   return (
-    <div
-      ref={containerRef}
-      onScroll={onScroll}
-      style={{
-        height: "60vh",
-        overflowY: "auto",
-        WebkitOverflowScrolling: "touch",
-        scrollbarWidth: "thin",
-        position: "relative",
-      }}
-    >
-      <div style={{ height: rows.length * LB_ROW_H, position: "relative" }}>
-        {rows.slice(start, end).map((row, i) => {
-          const idx = start + i;
-          const isMe = myName && row.name === myName;
-          return (
-            <div
-              key={row.name}
-              className={isMe ? "lb-row lb-me" : "lb-row"}
-              style={{
-                position: "absolute",
-                top: idx * LB_ROW_H,
-                left: 0,
-                right: 8,
-                height: LB_ROW_H,
-                boxSizing: "border-box",
-              }}
-            >
-              <span className="lb-rank" style={{ width: 40 }}>
-                {idx + 1}
-              </span>
-              <FlagIcon flagID={row.flagID ?? 0} size={20} />
-              <span
-                className="lb-name"
-                style={{ fontWeight: isMe ? 600 : undefined }}
+    <div style={{ position: "relative", height: "60vh" }}>
+      <div
+        ref={containerRef}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        style={{
+          position: "absolute",
+          inset: 0,
+          overflow: "hidden",
+          touchAction: "none",
+          cursor: "grab",
+          userSelect: "none",
+        }}
+      >
+        <div
+          style={{
+            height: contentH,
+            position: "relative",
+            transform: `translateY(${-scrollTop}px)`,
+            willChange: "transform",
+          }}
+        >
+          {rows.slice(start, end).map((row, i) => {
+            const idx = start + i;
+            const isMe = myName && row.name === myName;
+            return (
+              <div
+                key={row.name}
+                className={isMe ? "lb-row lb-me" : "lb-row"}
+                style={{
+                  position: "absolute",
+                  top: idx * LB_ROW_H,
+                  left: 0,
+                  right: 14,
+                  height: LB_ROW_H,
+                  boxSizing: "border-box",
+                }}
               >
-                {row.name}
-              </span>
-              <span className="lb-score">{formatFullScore(row.score ?? 0)}</span>
-            </div>
-          );
-        })}
+                <span className="lb-rank" style={{ width: 40 }}>
+                  {idx + 1}
+                </span>
+                <FlagIcon flagID={row.flagID ?? 0} size={20} />
+                <span
+                  className="lb-name"
+                  style={{ fontWeight: isMe ? 600 : undefined }}
+                >
+                  {row.name}
+                </span>
+                <span className="lb-score">
+                  {formatFullScore(row.score ?? 0)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
       </div>
+      {maxScroll > 0 && (
+        <div
+          onPointerDown={onTrackDown}
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: 10,
+            borderRadius: 5,
+            background: "rgba(0,0,0,0.08)",
+          }}
+        >
+          <div
+            data-lb-thumb
+            onPointerDown={onThumbDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerUp}
+            style={{
+              position: "absolute",
+              top: thumbTop,
+              left: 1,
+              right: 1,
+              height: thumbH,
+              borderRadius: 4,
+              background: "rgba(0,0,0,0.35)",
+              touchAction: "none",
+              cursor: "default",
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -1184,14 +1380,15 @@ function App() {
                     Find me
                   </button>
                 </div>
-                {lbLoading && fullLeaderboard == null && (
+                {fullLeaderboard == null && lbLoading && (
                   <p>Loading leaderboard…</p>
                 )}
-                {!lbLoading &&
-                  fullLeaderboard &&
-                  fullLeaderboard.length === 0 && <p>No players yet.</p>}
-                {!lbLoading &&
-                  Array.isArray(fullLeaderboard) &&
+                {fullLeaderboard && fullLeaderboard.length === 0 && (
+                  <p>No players yet.</p>
+                )}
+                {/* Stays mounted through the 5s refreshes: unmounting on
+                    lbLoading reset the scroll to the top every refetch. */}
+                {Array.isArray(fullLeaderboard) &&
                   fullLeaderboard.length > 0 && (
                     <VirtualLeaderboard
                       rows={fullLeaderboard}
