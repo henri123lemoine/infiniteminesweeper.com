@@ -81,6 +81,7 @@ type snapshotData struct {
 	// never written anymore; FlagsV2 is the compact cell-sorted encoding.
 	Flags        map[ChunkID]map[uint32]Flag
 	FlagsV2      map[ChunkID][]FlagEntry
+	Territory    map[ChunkID]*chunkTerritory
 	Scores       map[uint32]int32
 	Streaks      map[uint32]uint32
 	PlayerNames  map[uint32]string
@@ -414,12 +415,13 @@ func (s *Server) replayWAL() error {
 			var revealData struct {
 				ChunkID ChunkID  `json:"chunk_id"`
 				Cells   []uint32 `json:"cells"`
+				Owner   uint32   `json:"owner"`
 			}
 			if err := json.Unmarshal(entry.Data, &revealData); err != nil {
 				log.Printf("[wal] failed to unmarshal reveal: %v", err)
 				continue
 			}
-			s.replayReveal(revealData.ChunkID, revealData.Cells)
+			s.replayReveal(revealData.ChunkID, revealData.Cells, revealData.Owner)
 
 		case "flag":
 			var flagData struct {
@@ -476,7 +478,7 @@ func (s *Server) replayWAL() error {
 	return nil
 }
 
-func (s *Server) replayReveal(chunkID ChunkID, cells []uint32) {
+func (s *Server) replayReveal(chunkID ChunkID, cells []uint32, owner uint32) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
@@ -490,6 +492,7 @@ func (s *Server) replayReveal(chunkID ChunkID, cells []uint32) {
 		if (s.chunks[chunkID][bitIndex/64] & mask) == 0 {
 			s.chunks[chunkID][bitIndex/64] |= mask
 			s.totalRevealed++
+			s.recordTerritoryLocked(chunkID, cell, owner)
 		}
 	}
 }
@@ -637,6 +640,11 @@ func (s *Server) captureSnapshotData() snapshotData {
 	for cid, fm := range s.flags {
 		flags[cid] = slices.Clone(fm)
 	}
+	territory := make(map[ChunkID]*chunkTerritory, len(s.territory))
+	for cid, ct := range s.territory {
+		copied := *ct
+		territory[cid] = &copied
+	}
 	scores := make(map[uint32]int32, len(s.scores))
 	maps.Copy(scores, s.scores)
 	streaks := make(map[uint32]uint32, len(s.streaks))
@@ -668,6 +676,7 @@ func (s *Server) captureSnapshotData() snapshotData {
 	return snapshotData{
 		Chunks:               chunks,
 		FlagsV2:              flags,
+		Territory:            territory,
 		Scores:               scores,
 		Streaks:              streaks,
 		PlayerNames:          playerNames,
@@ -775,6 +784,11 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 			}
 			s.flags[cid] = cf
 		}
+	}
+	if data.Territory != nil {
+		s.territory = data.Territory
+	} else {
+		s.territory = make(map[ChunkID]*chunkTerritory)
 	}
 	s.scores = data.Scores
 	if data.Streaks != nil {

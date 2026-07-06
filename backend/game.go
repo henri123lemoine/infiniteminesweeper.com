@@ -413,7 +413,8 @@ func (s *Server) handleReveal(
 		s.writeWALEntry("reveal", struct {
 			ChunkID ChunkID  `json:"chunk_id"`
 			Cells   []uint32 `json:"cells"`
-		}{ChunkID: cid, Cells: cells.Cells})
+			Owner   uint32   `json:"owner,omitempty"`
+		}{ChunkID: cid, Cells: cells.Cells, Owner: playerID})
 	}
 	// 2) Flags placed
 	for cid, placements := range allPlacedFlags {
@@ -537,6 +538,7 @@ func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, 
 		s.chunks[chunkID][bitIndex/64] |= mask
 		s.totalRevealed++
 		stats.CellsRevealed++
+		s.recordTerritoryLocked(chunkID, cell, playerID)
 
 		// Detect the reveal that completes the chunk (all 4096 cells set).
 		var revealedCount int
