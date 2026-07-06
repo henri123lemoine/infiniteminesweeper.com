@@ -382,12 +382,12 @@ body {
 }
 
 .lb-rank {
-  width: 20px;
   flex-shrink: 0;
-  text-align: right;
+  text-align: center;
   font-size: 11px;
   color: #888;
   font-family: var(--ms-mono);
+  font-weight: bold;
 }
 
 .lb-name {

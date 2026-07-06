@@ -284,6 +284,7 @@ function VirtualLeaderboard({ rows, myName, formatFullScore, findMeToken }) {
     rows.length,
     Math.ceil((scrollTop + viewH) / LB_ROW_H) + 10
   );
+  const rankWidth = `${String(rows.length).length}ch`;
 
   return (
     <div style={{ position: "relative", height: "60vh" }}>
@@ -325,7 +326,7 @@ function VirtualLeaderboard({ rows, myName, formatFullScore, findMeToken }) {
                   height: LB_ROW_H - 3,
                 }}
               >
-                <span className="lb-rank" style={{ width: 40 }}>
+                <span className="lb-rank" style={{ width: rankWidth }}>
                   {idx + 1}
                 </span>
                 <FlagIcon flagID={row.flagID ?? 0} size={20} />
@@ -382,6 +383,7 @@ function VirtualLeaderboard({ rows, myName, formatFullScore, findMeToken }) {
 
 const LeaderboardRow = React.memo(function LeaderboardRow({
   rank,
+  rankWidth,
   name,
   score,
   flagID,
@@ -390,7 +392,9 @@ const LeaderboardRow = React.memo(function LeaderboardRow({
 }) {
   return (
     <li className={isMe ? "lb-row lb-me" : "lb-row"}>
-      <span className="lb-rank">{rank}</span>
+      <span className="lb-rank" style={{ width: rankWidth }}>
+        {rank}
+      </span>
       <FlagIcon flagID={flagID} size={20} />
       <span className="lb-name" style={{ fontWeight: isMe ? 600 : undefined }}>
         {name}
@@ -1723,34 +1727,48 @@ function App() {
           <h3 style={{ margin: 0 }}>Leaderboard</h3>
         </div>
         {topPlayers.length > 0 ? (
-          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-            {topPlayers.map((p, index) => (
-              <LeaderboardRow
-                key={p.name}
-                rank={index + 1}
-                name={p.name}
-                score={p.score ?? 0}
-                formatted={formatScore(p.score ?? 0)}
-                flagID={p.flagID ?? playerFlagsRef.current.get(p.name) ?? 0}
-                isMe={connected && p.name === username}
-              />
-            ))}
-            {connected &&
+          (() => {
+            const showMe =
+              connected &&
               username &&
-              !topPlayers.some((p) => p.name === username) && (
-                <>
-                  <li className="lb-divider">⋯</li>
+              !topPlayers.some((p) => p.name === username);
+            // Rank gutter sized to the widest rank actually shown
+            const rankWidth = `${
+              String(
+                Math.max(topPlayers.length, showMe ? userRank : 0)
+              ).length
+            }ch`;
+            return (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {topPlayers.map((p, index) => (
                   <LeaderboardRow
-                    rank={userRank > 0 ? userRank : "—"}
-                    name={username}
-                    score={playerScore}
-                    formatted={formatFullScore(playerScore ?? 0)}
-                    flagID={flagID}
-                    isMe
+                    key={p.name}
+                    rank={index + 1}
+                    rankWidth={rankWidth}
+                    name={p.name}
+                    score={p.score ?? 0}
+                    formatted={formatScore(p.score ?? 0)}
+                    flagID={p.flagID ?? playerFlagsRef.current.get(p.name) ?? 0}
+                    isMe={connected && p.name === username}
                   />
-                </>
-              )}
-          </ul>
+                ))}
+                {showMe && (
+                  <>
+                    <li className="lb-divider">⋯</li>
+                    <LeaderboardRow
+                      rank={userRank > 0 ? userRank : "—"}
+                      rankWidth={rankWidth}
+                      name={username}
+                      score={playerScore}
+                      formatted={formatFullScore(playerScore ?? 0)}
+                      flagID={flagID}
+                      isMe
+                    />
+                  </>
+                )}
+              </ul>
+            );
+          })()
         ) : (
           <p>No players yet</p>
         )}
