@@ -1,0 +1,30 @@
+# Temporary staging app for playtesting — safe to destroy.
+# Deploy: flyctl deploy -c fly.staging.toml --remote-only --ha=false
+
+app = 'infiniteminesweeper-staging'
+primary_region = 'ewr'
+kill_timeout = '30s'
+
+[build]
+
+[env]
+DATA_DIR = '/data'
+PORT = '8080'
+MODE = 'production'
+
+[[mounts]]
+source = 'storage'
+destination = '/data'
+processes = ['app']
+
+[http_service]
+internal_port = 8080
+force_https = true
+auto_stop_machines = 'stop'
+auto_start_machines = true
+min_machines_running = 1
+processes = ['app']
+
+[[vm]]
+size = 'shared-cpu-1x'
+memory = '512mb'
