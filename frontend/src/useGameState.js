@@ -1,6 +1,17 @@
 import { useState, useRef, useCallback } from "react";
 import pako from "pako";
 import { ms as PB } from "./gen/messages_pb.js";
+import {
+  CellStore,
+  packCell,
+  cellAdjacency,
+  CELL_REVEALED,
+  CELL_MINE,
+  CELL_FLAG_CARRY,
+  ADJ_MASK,
+  ADJ_UNKNOWN,
+  evictFarKeys,
+} from "./cellStore.js";
 
 const log = __DEV__ ? console.log.bind(console) : () => {};
 
@@ -282,7 +293,7 @@ export const useGameState = () => {
   // Game state refs
   const seedCache = useRef(new Map());
   const densityCache = useRef(new Map());
-  const revealedCellsRef = useRef(new Map());
+  const revealedCellsRef = useRef(new CellStore());
   const flaggedCellsRef = useRef(new Map());
   const chunkVersionRef = useRef(new Map()); // "cx,cy" -> monotonically increasing version
 
@@ -449,19 +460,18 @@ export const useGameState = () => {
           if (seed == null || d == null) continue;
           const mm = getMineMap(chunkKey);
           if (!mm) continue;
+          const st = revealedCellsRef.current.chunk(chunkKey);
           let chunkChanged = false;
           for (const cell of Array.from(set)) {
             const isMineVal = mm[cell] === 1;
             const adjacent = isMineVal ? 0 : countAdjacentMines(ncx, ncy, cell);
             if (adjacent === -1) continue; // some neighbor seed still missing
-            const cellKey = `${chunkKey},${cell}`;
-            const prev = revealedCellsRef.current.get(cellKey);
-            if (prev) {
-              revealedCellsRef.current.set(cellKey, {
-                ...prev,
-                isMine: isMineVal,
-                adjacentMines: adjacent,
-              });
+            if (st && st[cell] & CELL_REVEALED) {
+              st[cell] = packCell(
+                isMineVal,
+                adjacent,
+                (st[cell] & CELL_FLAG_CARRY) !== 0
+              );
               chunkChanged = true;
             }
             set.delete(cell);
@@ -518,6 +528,7 @@ export const useGameState = () => {
         reveals.byteLength
       );
       const mm = getMineMap(chunkKey);
+      const st = revealedCellsRef.current.ensure(chunkKey);
       for (let i = 0; i < CHUNK * CHUNK; i++) {
         const wordIndex = Math.floor(i / CHUNK);
         const bitIndex = i % CHUNK;
@@ -526,14 +537,10 @@ export const useGameState = () => {
             (1n << BigInt(bitIndex))) !==
           0n
         ) {
-          const cellKey = `${X},${Y},${i}`;
           const isMineVal = mm ? mm[i] === 1 : false;
           const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, i);
           if (adjacent === -1) registerPendingAdjacency(chunkKey, i);
-          revealedCellsRef.current.set(cellKey, {
-            isMine: isMineVal,
-            adjacentMines: adjacent,
-          });
+          st[i] = packCell(isMineVal, adjacent);
         }
       }
       // Any change to this chunk's content should bump its version
@@ -582,9 +589,8 @@ export const useGameState = () => {
           // Ignore flagged neighbors when counting revealed mines to avoid double counting
           if (flaggedCellsRef.current.has(`${wx},${wy}`)) continue;
           const { chunkX: cx, chunkY: cy, cell: c } = worldToChunk(wx, wy);
-          const key = `${cx},${cy},${c}`;
-          const data = revealedCellsRef.current.get(key);
-          if (data?.isMine) revealedMines++;
+          if (revealedCellsRef.current.get(cx, cy, c) & CELL_MINE)
+            revealedMines++;
         }
       }
 
@@ -604,6 +610,7 @@ export const useGameState = () => {
     (() => {
       let raf = null;
       let pending = null;
+      let lastEvictAt = 0;
       return (chunkX, chunkY, cell, widthCells, heightCells) => {
         pending = { chunkX, chunkY, cell, widthCells, heightCells };
         if (raf) return;
@@ -614,6 +621,21 @@ export const useGameState = () => {
           const s = wsRef.current;
           const isConn = connectedRef.current;
           if (!p) return;
+
+          // Long sessions crossing lots of world: drop far-away chunk caches
+          // (~19MB bound at radius 24) instead of growing forever.
+          const nowMs = performance.now();
+          if (nowMs - lastEvictAt > 30000) {
+            lastEvictAt = nowMs;
+            revealedCellsRef.current.evictFarChunks(p.chunkX, p.chunkY, 24);
+            for (const m of [
+              mineMapCache.current,
+              seedCache.current,
+              densityCache.current,
+            ]) {
+              evictFarKeys(m, p.chunkX, p.chunkY, 24);
+            }
+          }
 
           // Compute intended chunk-rect (mirror server logic)
           const chunksWide = Math.ceil(p.widthCells / CHUNK) + 2;
@@ -696,7 +718,7 @@ export const useGameState = () => {
   const isWithinTwoOfRevealed = useCallback(
     (worldX, worldY) => {
       // allow first actions when we have no reveals at all
-      if (revealedCellsRef.current.size === 0) return true;
+      if (!revealedCellsRef.current.everRevealed) return true;
       // if any neighbor within 2 is revealed, allow
       for (let dy = -2; dy <= 2; dy++) {
         for (let dx = -2; dx <= 2; dx++) {
@@ -705,7 +727,8 @@ export const useGameState = () => {
             chunkY: cy,
             cell,
           } = worldToChunk(worldX + dx, worldY + dy);
-          if (revealedCellsRef.current.has(`${cx},${cy},${cell}`)) return true;
+          if (revealedCellsRef.current.get(cx, cy, cell) & CELL_REVEALED)
+            return true;
         }
       }
       // if we don't fully know the radius, allow (send anyway)
@@ -729,11 +752,12 @@ export const useGameState = () => {
       if (!ws || !connected) return;
 
       const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
-      const cellKey = `${chunkX},${chunkY},${cell}`;
       const flagKey = `${worldX},${worldY}`;
       const chunkKey = `${chunkX},${chunkY}`;
 
-      const revealedCell = revealedCellsRef.current.get(cellKey);
+      const revealedCell =
+        (revealedCellsRef.current.get(chunkX, chunkY, cell) & CELL_REVEALED) !==
+        0;
       if (isChord && !revealedCell) return;
       if (!isChord && revealedCell) return;
       if (flaggedCellsRef.current.has(flagKey)) {
@@ -811,7 +835,10 @@ export const useGameState = () => {
           const { chunkX: cx, chunkY: cy, cell: cidx } = worldToChunk(wx, wy);
           const chunkKey = `${cx},${cy}`;
           const cellKey = `${cx},${cy},${cidx}`;
-          if (revealedCellsRef.current.has(cellKey) || visited.has(cellKey))
+          if (
+            revealedCellsRef.current.get(cx, cy, cidx) & CELL_REVEALED ||
+            visited.has(cellKey)
+          )
             continue;
           visited.add(cellKey);
 
@@ -821,10 +848,7 @@ export const useGameState = () => {
           // reveal
           const isM = mm[cidx] === 1;
           const adj = isM ? 0 : countAdjacentMines(cx, cy, cidx);
-          revealedCellsRef.current.set(cellKey, {
-            isMine: isM,
-            adjacentMines: adj,
-          });
+          revealedCellsRef.current.set(cx, cy, cidx, packCell(isM, adj));
           recordChange(chunkKey, { type: "reveal", cell: cidx });
 
           // if zero, expand around it (only if we have complete data)
@@ -842,17 +866,15 @@ export const useGameState = () => {
         const mine = isMineAt(chunkKey, cell);
         if (mine !== null) {
           if (mine) {
-            revealedCellsRef.current.set(cellKey, {
-              isMine: true,
-              adjacentMines: 0,
-            });
+            revealedCellsRef.current.set(chunkX, chunkY, cell, packCell(true, 0));
           } else {
             const adjacent = countAdjacentMines(chunkX, chunkY, cell);
-            // Store -1 for incomplete data, which renderers can display as "?"
-            revealedCellsRef.current.set(cellKey, {
-              isMine: false,
-              adjacentMines: adjacent,
-            });
+            revealedCellsRef.current.set(
+              chunkX,
+              chunkY,
+              cell,
+              packCell(false, adjacent)
+            );
           }
           recordChange(chunkKey, { type: "reveal", cell });
         }
@@ -1234,15 +1256,15 @@ export const useGameState = () => {
 
         // 1) Revert *all* optimistic changes for this action
         for (const [chunkKey, changes] of optimisticAction.entries()) {
+          const [ocx, ocy] = chunkKey.split(",").map(Number);
           // revert reveals
           changes.reveals.forEach((cell) => {
-            revealedCellsRef.current.delete(`${chunkKey},${cell}`);
+            revealedCellsRef.current.clearCell(ocx, ocy, cell);
           });
 
           // revert flags
           changes.flags.forEach((cell) => {
-            // chunkKey is "cx,cy"
-            const [cx, cy] = chunkKey.split(",").map(Number);
+            const [cx, cy] = [ocx, ocy];
             const lx = cell % CHUNK;
             const ly = Math.floor(cell / CHUNK);
             const worldX = cx * CHUNK + lx;
@@ -1280,22 +1302,23 @@ export const useGameState = () => {
             // guard against missing or non-array cells
             const cells = Array.isArray(outcome.cells) ? outcome.cells : [];
             const mm = getMineMap(primaryChunkKey);
+            const st = revealedCellsRef.current.ensure(primaryChunkKey);
             for (const cell of cells) {
-              const cellKey = `${primaryChunkKey},${cell}`;
-              const prevCell = revealedCellsRef.current.get(cellKey);
+              const prev = st[cell];
               const isMineVal = mm
                 ? mm[cell] === 1
-                : (prevCell?.isMine ?? false);
+                : (prev & CELL_MINE) !== 0;
               let adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
-              if (adjacent === -1 && prevCell && prevCell.adjacentMines >= 0) {
-                adjacent = prevCell.adjacentMines;
+              if (
+                adjacent === -1 &&
+                prev & CELL_REVEALED &&
+                (prev & ADJ_MASK) !== ADJ_UNKNOWN
+              ) {
+                adjacent = prev & ADJ_MASK;
               }
               if (adjacent === -1)
                 registerPendingAdjacency(primaryChunkKey, cell);
-              revealedCellsRef.current.set(cellKey, {
-                isMine: isMineVal,
-                adjacentMines: adjacent,
-              });
+              st[cell] = packCell(isMineVal, adjacent);
             }
             bumpChunkVersion(X, Y);
           } else if (outcomeType === "flaggedCell") {
@@ -1313,13 +1336,8 @@ export const useGameState = () => {
               `${worldX},${worldY}`,
               playerFlagsRef.current.get(username)
             );
-            // Also mark the cell as revealed (content suppressed) for continuity/compression-aware logic
-            const cellKey = `${primaryChunkKey},${cellIdx}`;
-            revealedCellsRef.current.set(cellKey, {
-              isMine: false,
-              adjacentMines: 0,
-              isFlagged: true,
-            });
+            // Also mark the cell as revealed (content suppressed) for continuity
+            revealedCellsRef.current.set(X, Y, cellIdx, packCell(false, 0, true));
             bumpChunkVersion(X, Y);
           }
 
@@ -1382,20 +1400,22 @@ export const useGameState = () => {
           // guard against missing or non-array cells
           const cells = Array.isArray(updateData.cells) ? updateData.cells : [];
           const mm = getMineMap(chunkKey);
+          const st = revealedCellsRef.current.ensure(chunkKey);
           for (const cell of cells) {
-            const cellKey = `${chunkKey},${cell}`;
             const lX = cell % CHUNK,
               lY = Math.floor(cell / CHUNK);
             const worldKey = `${X * CHUNK + lX},${Y * CHUNK + lY}`;
 
-            const prevCell = revealedCellsRef.current.get(cellKey);
-            const isMineVal = mm
-              ? mm[cell] === 1
-              : (prevCell?.isMine ?? false);
+            const prev = st[cell];
+            const isMineVal = mm ? mm[cell] === 1 : (prev & CELL_MINE) !== 0;
             let adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
             // Never downgrade an already-known number to "incomplete"
-            if (adjacent === -1 && prevCell && prevCell.adjacentMines >= 0) {
-              adjacent = prevCell.adjacentMines;
+            if (
+              adjacent === -1 &&
+              prev & CELL_REVEALED &&
+              (prev & ADJ_MASK) !== ADJ_UNKNOWN
+            ) {
+              adjacent = prev & ADJ_MASK;
             }
             if (adjacent === -1) registerPendingAdjacency(chunkKey, cell);
 
@@ -1404,13 +1424,9 @@ export const useGameState = () => {
               flaggedCellsRef.current.delete(worldKey);
             }
 
-            // Mark revealed; if it's currently flagged, carry that through for rendering suppression
+            // Carry current flag state through for rendering suppression
             const isFlagged = flaggedCellsRef.current.has(worldKey);
-            revealedCellsRef.current.set(cellKey, {
-              isMine: isMineVal,
-              adjacentMines: adjacent,
-              isFlagged,
-            });
+            st[cell] = packCell(isMineVal, adjacent, isFlagged);
           }
           bumpChunkVersion(X, Y);
         } else if (updateType === "flaggedCell") {
@@ -1420,12 +1436,7 @@ export const useGameState = () => {
             wY = Y * CHUNK + lY;
           flaggedCellsRef.current.set(`${wX},${wY}`, updateData.flagID ?? 0);
           // Also mark as revealed (content suppressed)
-          const cellKey = `${chunkKey},${updateData.cell}`;
-          revealedCellsRef.current.set(cellKey, {
-            isMine: false,
-            adjacentMines: 0,
-            isFlagged: true,
-          });
+          revealedCellsRef.current.set(X, Y, updateData.cell, packCell(false, 0, true));
           bumpChunkVersion(X, Y);
         }
 

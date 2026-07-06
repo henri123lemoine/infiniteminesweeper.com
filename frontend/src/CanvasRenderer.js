@@ -1,5 +1,6 @@
 import { CHUNK } from "./useGameState.js";
 import { drawSprite } from "./sprites/index.js";
+import { CELL_REVEALED, CELL_MINE, cellAdjacency } from "./cellStore.js";
 
 // Effective px/cell thresholds for LOD switching
 const MINIMAL_RENDERING_THRESHOLD = 5; // below this: minimal cached chunks
@@ -195,11 +196,11 @@ export class CanvasRenderer {
     ctx.fillStyle = "#c0c0c0";
     ctx.fillRect(0, 0, off.width, off.height);
 
-    const prefix = `${cx},${cy},`;
+    const st = revealedCellsRef.current.chunk(`${cx},${cy}`);
     for (let ly = 0; ly < CHUNK; ly++) {
       for (let lx = 0; lx < CHUNK; lx++) {
         const cell = ly * CHUNK + lx;
-        const cellDataRaw = revealedCellsRef.current.get(prefix + cell) || null;
+        const packed = st ? st[cell] : 0;
         const wx = cx * CHUNK + lx;
         const wy = cy * CHUNK + ly;
         const flagForCell = flaggedCellsRef.current.get(`${wx},${wy}`);
@@ -211,18 +212,15 @@ export class CanvasRenderer {
           this.drawSprite(ctx, flagForCell, dx, dy, size, size);
           continue;
         }
-        if (cellDataRaw === null) continue;
+        if ((packed & CELL_REVEALED) === 0) continue;
 
         ctx.fillStyle = "#e0e0e0";
         ctx.fillRect(dx, dy, size, size);
-        if (cellDataRaw.isMine) {
+        const adj = cellAdjacency(packed);
+        if (packed & CELL_MINE) {
           this.drawSprite(ctx, "mine", dx, dy, size, size);
-        } else if (cellDataRaw.adjacentMines > 0) {
-          ctx.drawImage(
-            this._numberGlyph(size, cellDataRaw.adjacentMines, getNumberColor),
-            dx,
-            dy
-          );
+        } else if (adj > 0) {
+          ctx.drawImage(this._numberGlyph(size, adj, getNumberColor), dx, dy);
         }
       }
     }
@@ -237,34 +235,18 @@ export class CanvasRenderer {
     drawSprite(ctx, spriteID, dx, dy, dw, dh);
   }
 
-  // LOD0 (close-up) cell rendering. Takes the raw cell record and flag state
-  // directly (not a merged object) to avoid an allocation per visible cell
-  // per frame. Flag sprites are drawn by the caller.
-  renderCell(
-    ctx,
-    screenX,
-    screenY,
-    cellSize,
-    cellDataRaw,
-    isFlagged,
-    isRevealedState,
-    getNumberColor
-  ) {
-    const isRevealed = isRevealedState && !isFlagged;
+  // LOD0 (close-up) cell rendering from the packed cell byte. Flag sprites
+  // are drawn by the caller.
+  renderCell(ctx, screenX, screenY, cellSize, packed, isFlagged, getNumberColor) {
+    const isRevealed = (packed & CELL_REVEALED) !== 0 && !isFlagged;
     this.draw3DCell(ctx, screenX, screenY, cellSize, isRevealed);
     if (!isRevealed) return;
 
-    if (cellDataRaw.isMine) {
+    const adj = cellAdjacency(packed);
+    if (packed & CELL_MINE) {
       this.drawSprite(ctx, "mine", screenX, screenY, cellSize, cellSize);
-    } else if (cellDataRaw.adjacentMines > 0) {
-      this.drawNumber(
-        ctx,
-        screenX,
-        screenY,
-        cellSize,
-        cellDataRaw.adjacentMines,
-        getNumberColor
-      );
+    } else if (adj > 0) {
+      this.drawNumber(ctx, screenX, screenY, cellSize, adj, getNumberColor);
     }
   }
 
@@ -338,15 +320,21 @@ export class CanvasRenderer {
 
     // At close zoom (LOD 0), draw per-cell with beveled tiles and high detail
     if (LOD === 0) {
+      let curCx = null;
+      let curCy = null;
+      let curSt = null;
       for (let worldY = startWorldY; worldY <= endWorldY; worldY++) {
         for (let worldX = startWorldX; worldX <= endWorldX; worldX++) {
           const screenX = worldX * CELL_SIZE - viewRef.current.x;
           const screenY = worldY * CELL_SIZE - viewRef.current.y;
 
           const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
-          const cellKey = `${chunkX},${chunkY},${cell}`;
-          const cellDataRaw = revealedCellsRef.current.get(cellKey) || null;
-          const isRevealedState = cellDataRaw !== null;
+          if (chunkX !== curCx || chunkY !== curCy) {
+            curCx = chunkX;
+            curCy = chunkY;
+            curSt = revealedCellsRef.current.chunk(`${chunkX},${chunkY}`);
+          }
+          const packed = curSt ? curSt[cell] : 0;
 
           const flagKey = `${worldX},${worldY}`;
           const flagForCell = flaggedCellsRef.current.get(flagKey);
@@ -357,9 +345,8 @@ export class CanvasRenderer {
             screenX,
             screenY,
             CELL_SIZE,
-            cellDataRaw,
+            packed,
             isFlagged,
-            isRevealedState,
             getNumberColor
           );
 

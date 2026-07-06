@@ -31,6 +31,14 @@ assert(src.includes('function encodeMsg('), 'encodeMsg present')
 assert(src.includes('function decodeMsg('), 'decodeMsg present')
 ok('encodeMsg/decodeMsg present')
 
+// Behavioral unit tests for the packed cell store
+const { execFileSync } = await import('node:child_process')
+try {
+  execFileSync(process.execPath, [path.join(repoRoot, 'frontend', 'tests', 'cellstore-test.mjs')], { stdio: 'inherit' })
+} catch {
+  process.exitCode = 1
+}
+
 if (process.exitCode) {
   console.error('\nSome frontend checks failed.')
   process.exit(process.exitCode)

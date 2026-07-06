@@ -10,6 +10,7 @@ import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
 import { usePinchPanZoom } from "./hooks/usePinchPanZoom.js";
+import { CELL_REVEALED } from "./cellStore.js";
 import { initSprites, getFlagIds, drawSprite } from "./sprites/index.js";
 import { CHAINS, achievementById } from "./achievements.js";
 
@@ -1064,8 +1065,10 @@ function App() {
       if (isLongPress === false) {
         // This was a tap/click - reveal cell or chord
         const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
-        const cellKey = `${chunkX},${chunkY},${cell}`;
-        const isRevealed = revealedCellsRef.current.has(cellKey);
+        const isRevealed =
+          (revealedCellsRef.current.get(chunkX, chunkY, cell) &
+            CELL_REVEALED) !==
+          0;
         handleCellClick(worldX, worldY, false, isRevealed);
       } else {
         // This was a right-click or long press - place flag
