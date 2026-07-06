@@ -975,6 +975,7 @@ export const useGameState = () => {
           playerFlagsRef.current.set(data.name, data.flagID);
           setUsername(data.name || "");
           setPlayerScore(data.score ?? 0);
+          if (data.userRank) setUserRank(Number(data.userRank));
           setServerFlagID(data.flagID); // Sync server's authoritative flagID
           setJoinError(""); // Clear any previous join errors
           setConnected(true); // Now we're fully connected as a player

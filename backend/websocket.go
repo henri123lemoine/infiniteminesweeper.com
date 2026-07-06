@@ -369,6 +369,7 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 		Score:        player.Score,
 		FlagID:       player.FlagID,
 		NewState:     ClientStatePlayer.ToPB(),
+		UserRank:     s.getUserRankUnsafe(player.Score),
 	}}}
 	s.sendToPlayer(playerID, mustProto(ackMsg))
 
