@@ -691,15 +691,17 @@ func (s *Server) broadcastToChunkSubs(chunkID ChunkID, payload []byte, alwaysInc
 	s.stateMu.RLock()
 	subscribers := s.subs[chunkID]
 	subList := make([]uint32, 0, len(subscribers)+1)
+	actorSubscribed := false
 	for pid := range subscribers {
 		subList = append(subList, pid)
+		if pid == alwaysInclude {
+			actorSubscribed = true
+		}
 	}
 	s.stateMu.RUnlock()
 
-	if alwaysInclude != 0 {
-		if _, ok := subscribers[alwaysInclude]; !ok {
-			subList = append(subList, alwaysInclude)
-		}
+	if alwaysInclude != 0 && !actorSubscribed {
+		subList = append(subList, alwaysInclude)
 	}
 
 	for _, pid := range subList {

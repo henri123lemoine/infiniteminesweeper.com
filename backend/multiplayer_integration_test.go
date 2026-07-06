@@ -238,6 +238,14 @@ func findMineInChunk(server *Server, chunkX, chunkY int64) (uint32, bool) {
 	return 0, false
 }
 
+// expectedPenalty mirrors handleReveal's penalty math: base scaled by the
+// chunk's score multiplier.
+func expectedPenalty(s *Server, chunkX, chunkY int64, base float64) int32 {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return -int32(math.Round(base * s.getScoreMultiplier(ChunkID{X: chunkX, Y: chunkY})))
+}
+
 // TestMultiClientBoardConsistency verifies that multiple clients viewing the same region
 // receive identical mine layouts and cell states
 func TestMultiClientBoardConsistency(t *testing.T) {
@@ -270,14 +278,12 @@ func TestMultiClientBoardConsistency(t *testing.T) {
 	// Client1 should receive RevealAck and ChunkUpdateBroadcast
 	timeout := time.After(3 * time.Second)
 client1Loop:
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 25; i++ {
 		select {
 		case msg := <-client1.messages:
-			if ack := msg.GetRevealAck(); ack != nil {
-				// Good, got the ack
-			}
-			if broadcast := msg.GetChunkUpdateBroadcast(); broadcast != nil && update1 == nil {
+			if broadcast := msg.GetChunkUpdateBroadcast(); broadcast != nil {
 				update1 = broadcast
+				break client1Loop
 			}
 		case <-timeout:
 			break client1Loop
@@ -287,10 +293,10 @@ client1Loop:
 	// Client2 should receive ChunkUpdateBroadcast
 	timeout = time.After(3 * time.Second)
 client2Loop:
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 25; i++ {
 		select {
 		case msg := <-client2.messages:
-			if broadcast := msg.GetChunkUpdateBroadcast(); broadcast != nil && update2 == nil {
+			if broadcast := msg.GetChunkUpdateBroadcast(); broadcast != nil {
 				update2 = broadcast
 				break client2Loop
 			}
@@ -677,8 +683,8 @@ func TestMineExplosionBehavior(t *testing.T) {
 	if ack.ScoreUpdate != nil {
 		scoreDelta = ack.ScoreUpdate.Delta
 	}
-	if scoreDelta != -100 {
-		t.Errorf("expected score delta -100 for mine explosion, got %d", scoreDelta)
+	if want := expectedPenalty(server, chunkX, chunkY, 100); scoreDelta != want {
+		t.Errorf("expected score delta %d for mine explosion, got %d", want, scoreDelta)
 	}
 
 	// Wait for potential ChunkUpdateBroadcast to both clients
@@ -745,7 +751,7 @@ updateLoop:
 		t.Fatalf("exploded mine not visible to all clients: client1=%v client2=%v", foundInUpdate1, foundInUpdate2)
 	}
 
-	t.Logf("Mine explosion test passed: cell %d exploded with -100 score penalty, visible to all clients", mineCell)
+	t.Logf("Mine explosion test passed: cell %d exploded, visible to all clients", mineCell)
 }
 
 // TestFlagOperationsSynchronization verifies flag placement and scoring mechanics
@@ -896,8 +902,8 @@ flagUpdateLoop:
 	if wrongFlagAck.ScoreUpdate != nil {
 		wrongFlagScoreDelta = wrongFlagAck.ScoreUpdate.Delta
 	}
-	if wrongFlagScoreDelta != -20 {
-		t.Errorf("wrong flag should give -20 score penalty, got %d", wrongFlagScoreDelta)
+	if want := expectedPenalty(server, chunkX, chunkY, 20); wrongFlagScoreDelta != want {
+		t.Errorf("wrong flag should give %d score penalty, got %d", want, wrongFlagScoreDelta)
 	}
 
 	// Wrong flag should trigger flood fill (revealed cells outcome)
@@ -918,7 +924,7 @@ flagUpdateLoop:
 		t.Errorf("wrongly flagged cell %d should be revealed: %v", wrongFlagCell, revealedFromWrongFlag.Cells)
 	}
 
-	t.Logf("Flag operations test passed: correct flag (+%d points), wrong flag (-20 points with flood fill)",
+	t.Logf("Flag operations test passed: correct flag (+%d points), wrong flag penalized with flood fill",
 		flagScoreDelta)
 }
 
@@ -1110,8 +1116,8 @@ func TestScoreCalculationAccuracy(t *testing.T) {
 		if mineAck.ScoreUpdate != nil {
 			mineScoreDelta = mineAck.ScoreUpdate.Delta
 		}
-		if mineScoreDelta != -100 {
-			t.Errorf("mine explosion should give -100 penalty, got %d", mineScoreDelta)
+		if want := expectedPenalty(server, chunkX, chunkY, 100); mineScoreDelta != want {
+			t.Errorf("mine explosion should give %d penalty, got %d", want, mineScoreDelta)
 		}
 
 		expectedScore = max(0, expectedScore+mineScoreDelta) // Score can't go below 0
