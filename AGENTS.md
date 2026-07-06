@@ -4,6 +4,10 @@ This file provides guidance to AI agents (including Claude Code) when working wi
 
 `backend/CLAUDE.md` and `frontend/CLAUDE.md` are more detailed guides for the backend and frontend respectively.
 
+## Comments
+
+Comments are rare and short in this codebase — keep them that way. A comment earns its place only by stating a non-obvious constraint or a "why" the code can't express, in 1–3 lines. Never narrate what the code does, never reference past behavior ("previously…", "used to…", "now…"), and never write paragraph-length explanations — if a change needs that much prose, it belongs in the commit message.
+
 ## Essential Commands
 
 ### Build
