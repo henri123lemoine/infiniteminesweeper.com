@@ -173,9 +173,17 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	s.players[sid][player] = struct{}{}
 	s.playersMu.Unlock()
 
+	// Mailbox and Send are never closed — closing them raced with in-flight
+	// senders (send on a closed channel always panics and kills the process).
+	// Consumers exit via p.done instead, and the channels get GC'd.
 	go func(p *Player) {
-		for fn := range p.Mailbox {
-			fn(p)
+		for {
+			select {
+			case fn := <-p.Mailbox:
+				fn(p)
+			case <-p.done:
+				return
+			}
 		}
 	}(player)
 
@@ -806,10 +814,7 @@ func (s *Server) writePump(player *Player) {
 
 	for {
 		select {
-		case message, ok := <-player.Send:
-			if !ok {
-				return
-			}
+		case message := <-player.Send:
 			if err := player.Conn.WriteMessage(websocket.BinaryMessage, message); err != nil {
 				return
 			}
@@ -817,6 +822,8 @@ func (s *Server) writePump(player *Player) {
 			if err := player.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
+		case <-player.done:
+			return
 		}
 	}
 }
@@ -826,6 +833,7 @@ func (s *Server) writePump(player *Player) {
 //   - Phase 1: register subs under stateMu in batches of 2000 (~1ms WLock per
 //     batch) so concurrent reveals don't get blocked for the full duration.
 //   - Phase 2: compute palette + send each tile under RLock per-tile.
+//
 // Cell changes between the two phases self-heal because Phase 2 reads from
 // authoritative world state.
 func (s *Server) handleMinimapSubscribe(playerID uint32, m *pb.SubscribeTiles) {
@@ -1020,13 +1028,9 @@ func (s *Server) removePlayer(p *Player) {
 	hasRemainingConnections := false
 	if set, ok := s.players[p.ID]; ok {
 		if _, exists := set[p]; exists {
-			// signal goroutines to stop enqueueing work
+			// Signal all producers/consumers to stop. Send and Mailbox are
+			// deliberately left open (see handleWebSocket).
 			close(p.done)
-			// give senders 1 tick to observe <-done
-			time.AfterFunc(10*time.Millisecond, func() {
-				close(p.Mailbox)
-				close(p.Send)
-			})
 			delete(set, p)
 			if len(set) == 0 {
 				delete(s.players, p.ID)
