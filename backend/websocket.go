@@ -439,9 +439,17 @@ func (s *Server) handleUpdateProfile(player *Player, update *pb.UpdateProfile) {
 }
 
 // handleSeedRequest processes a SeedRequest message, returning seeds and densities for requested chunks
+// Upper bound on chunks per SeedRequest: enough for any legitimate viewport
+// (the client only requests uncached neighbors), small enough that a hostile
+// 1MB message can't stall the write lock computing tens of thousands of HMACs.
+const maxSeedRequestChunks = 512
+
 func (s *Server) handleSeedRequest(playerID uint32, chunkIds []*pb.ChunkID) {
 	if len(chunkIds) == 0 {
 		return
+	}
+	if len(chunkIds) > maxSeedRequestChunks {
+		chunkIds = chunkIds[:maxSeedRequestChunks]
 	}
 
 	s.stateMu.Lock()
