@@ -29,42 +29,19 @@ func formatScore(n int32) string {
 	}
 }
 
-// Assumes caller holds s.stateMu (read lock)
+// getUserRankUnsafe returns the 1-based rank for a score: 1 + the number of
+// players strictly above it. This runs on every RevealAck, so it must stay
+// allocation-free — the previous version built and sorted the entire
+// deduplicated player list per click, which scaled badly past a few
+// thousand players. Assumes caller holds s.stateMu (read lock).
 func (s *Server) getUserRankUnsafe(playerScore int32) uint32 {
-	// Collect all entries and sort them the same way as the leaderboard
-	entries := make([]lbEntry, 0, len(s.scores))
-	bestByName := make(map[string]lbEntry)
-
-	for pid, sc := range s.scores {
-		name := s.playerNames[pid]
-		e := lbEntry{PlayerID: pid, Name: name, Score: sc, FlagID: s.playerFlags[pid]}
-		if prev, ok := bestByName[name]; !ok || e.Score > prev.Score {
-			bestByName[name] = e
+	rank := uint32(1)
+	for _, sc := range s.scores {
+		if sc > playerScore {
+			rank++
 		}
 	}
-
-	for _, e := range bestByName {
-		entries = append(entries, e)
-	}
-
-	// Sort by score (descending), then by name (ascending) for stability
-	// This matches the leaderboard sorting exactly
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].Score != entries[j].Score {
-			return entries[i].Score > entries[j].Score
-		}
-		return entries[i].Name < entries[j].Name
-	})
-
-	// Find rank (1-based) - handle ties correctly
-	for i, entry := range entries {
-		if entry.Score == playerScore {
-			return uint32(i + 1)
-		}
-	}
-
-	// If not found, return 0 (shouldn't happen in practice)
-	return 0
+	return rank
 }
 
 // Assumes caller holds s.stateMu (write lock)
@@ -135,12 +112,18 @@ func (s *Server) runLeaderboardBroadcaster() {
 				default:
 				}
 
-				p.Mailbox <- func(pl *Player) {
+				// Non-blocking: a full (or dead) mailbox just skips this tick;
+				// the broadcaster retries every second. A blocking send here
+				// holds playersMu and could wedge all connect/disconnect.
+				select {
+				case p.Mailbox <- func(pl *Player) {
 					if pl.LastLBVersion == lbVer {
 						return
 					}
 					pl.LastLBVersion = lbVer
 					s.sendToPlayer(pl.ID, lbJSON)
+				}:
+				default:
 				}
 			}
 		}

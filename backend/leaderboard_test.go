@@ -45,13 +45,13 @@ func TestGetUserRank(t *testing.T) {
 		t.Errorf("Expected rank 3 for score 500 (tie), got %d", rank4)
 	}
 
-	// Test non-existent score
+	// A score above everyone ranks first (rank = 1 + players strictly above)
 	s.stateMu.RLock()
-	rankNonexistent := s.getUserRankUnsafe(9999)
+	rankTop := s.getUserRankUnsafe(9999)
 	s.stateMu.RUnlock()
 
-	if rankNonexistent != 0 {
-		t.Errorf("Expected rank 0 for non-existent score, got %d", rankNonexistent)
+	if rankTop != 1 {
+		t.Errorf("Expected rank 1 for a score above all players, got %d", rankTop)
 	}
 }
 
