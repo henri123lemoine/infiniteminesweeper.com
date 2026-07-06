@@ -414,6 +414,15 @@ function App() {
       getNumberColor,
       flagID,
       activePlayersRef,
+      // Lets the renderer finish budget-deferred chunk rasters next frame
+      requestRerender: () => {
+        if (!renderRequestId.current) {
+          renderRequestId.current = requestAnimationFrame(() => {
+            renderRequestId.current = null;
+            render();
+          });
+        }
+      },
     });
   }, [tick, getNumberColor, worldToChunk, flagID]);
 
