@@ -260,7 +260,11 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 			s.sessionTokens[sessionToken] = playerID
 			s.playerNames[playerID] = chosenName
 			s.nameToPlayerID[chosenName] = playerID
-			s.playerFlags[playerID] = join.FlagID
+			chosenFlagID := join.FlagID
+			if !s.isFlagUnlockedLocked(playerID, chosenFlagID) {
+				chosenFlagID = defaultFlagID // silently clamp to a real free flag
+			}
+			s.playerFlags[playerID] = chosenFlagID
 			s.scores[playerID] = 0 // New players always start with a score of 0
 			s.walLogPlayerLocked(playerID, sessionToken)
 			log.Printf("New player identity created: ID=%d, Name=%s", playerID, chosenName)
@@ -284,8 +288,8 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 				}
 			}
 		}
-		// Update flag (allow zero) if different
-		if s.playerFlags[playerID] != join.FlagID {
+		// Update flag (allow zero) if different and unlocked for this player
+		if s.playerFlags[playerID] != join.FlagID && s.isFlagUnlockedLocked(playerID, join.FlagID) {
 			s.playerFlags[playerID] = join.FlagID
 			s.lbDirty = true
 		}
@@ -368,6 +372,11 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	}}}
 	s.sendToPlayer(playerID, mustProto(ackMsg))
 
+	// Send advancement state: stats + unlocked achievement/flag IDs so far.
+	// Free flags are implicitly always unlocked client-side; we only need to
+	// report the paid ones actually unlocked via achievements.
+	s.sendToPlayer(playerID, s.buildAdvancementSyncLocked(playerID))
+
 	// Send spawn hint pointing to most populated chunk
 	best := s.findMostPopulatedChunk()
 	centerCell := uint32(32 + 32*ChunkSize) // center of 64x64 chunk
@@ -420,8 +429,8 @@ func (s *Server) handleUpdateProfile(player *Player, update *pb.UpdateProfile) {
 		}
 	}
 
-	// Update flag if different
-	if s.playerFlags[playerID] != update.FlagID {
+	// Update flag if different and unlocked for this player
+	if s.playerFlags[playerID] != update.FlagID && s.isFlagUnlockedLocked(playerID, update.FlagID) {
 		s.playerFlags[playerID] = update.FlagID
 		player.FlagID = update.FlagID
 		s.lbDirty = true

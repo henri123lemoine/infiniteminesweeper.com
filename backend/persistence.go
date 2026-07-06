@@ -26,6 +26,7 @@ func init() {
 	// encode().
 	gob.Register(ChunkID{})
 	gob.Register(ChunkBits{})
+	gob.Register(PlayerStats{})
 }
 
 // PERSISTENCE CONSTANTS
@@ -56,7 +57,7 @@ const (
 // WAL entry types
 type WALEntry struct {
 	Timestamp time.Time `json:"timestamp"`
-	Type      string    `json:"type"` // "reveal", "flag", "score_update", or "player"
+	Type      string    `json:"type"` // "reveal", "flag", "score_update", "player", or "stats_update"
 	Data      []byte    `json:"data"` // JSON encoded data
 	Sequence  uint64    `json:"sequence"`
 }
@@ -85,6 +86,11 @@ type snapshotData struct {
 	NextPlayerID uint32
 	// Persist session tokens so identities survive restarts
 	SessionTokens map[string]uint32
+	// Advancements. UnlockedFlags is intentionally not persisted here — it's
+	// fully derivable from UnlockedAdvancements + achievementDefs, so we
+	// rebuild it in restoreSnapshotData instead of storing it twice.
+	PlayerStats          map[uint32]*PlayerStats
+	UnlockedAdvancements map[uint32]map[string]bool
 }
 
 func (s *Server) initAWS() error {
@@ -444,6 +450,18 @@ func (s *Server) replayWAL() error {
 				continue
 			}
 			s.replayPlayer(playerData)
+
+		case "stats_update":
+			var statsData struct {
+				PlayerID   uint32      `json:"player_id"`
+				Stats      PlayerStats `json:"stats"`
+				NewUnlocks []string    `json:"new_unlocks,omitempty"`
+			}
+			if err := json.Unmarshal(entry.Data, &statsData); err != nil {
+				log.Printf("[wal] failed to unmarshal stats update: %v", err)
+				continue
+			}
+			s.replayStatsUpdate(statsData.PlayerID, statsData.Stats, statsData.NewUnlocks)
 		}
 
 		// Update WAL sequence number
@@ -489,6 +507,27 @@ func (s *Server) replayScoreUpdate(playerID uint32, score int32, streak uint32) 
 
 	s.scores[playerID] = score
 	s.streaks[playerID] = streak
+}
+
+func (s *Server) replayStatsUpdate(playerID uint32, stats PlayerStats, newUnlocks []string) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	copied := stats
+	s.playerStats[playerID] = &copied
+
+	if len(newUnlocks) == 0 {
+		return
+	}
+	unlocked := s.unlockedAdvancements[playerID]
+	if unlocked == nil {
+		unlocked = make(map[string]bool)
+		s.unlockedAdvancements[playerID] = unlocked
+	}
+	for _, id := range newUnlocks {
+		unlocked[id] = true
+	}
+	s.rebuildUnlockedFlagsLocked(playerID)
 }
 
 func (s *Server) replayPlayer(d walPlayerData) {
@@ -614,16 +653,33 @@ func (s *Server) captureSnapshotData() snapshotData {
 	sessionTokens := make(map[string]uint32, len(s.sessionTokens))
 	maps.Copy(sessionTokens, s.sessionTokens)
 
+	playerStats := make(map[uint32]*PlayerStats, len(s.playerStats))
+	for pid, ps := range s.playerStats {
+		if ps == nil {
+			continue
+		}
+		copied := *ps
+		playerStats[pid] = &copied
+	}
+	unlockedAdvancements := make(map[uint32]map[string]bool, len(s.unlockedAdvancements))
+	for pid, set := range s.unlockedAdvancements {
+		inner := make(map[string]bool, len(set))
+		maps.Copy(inner, set)
+		unlockedAdvancements[pid] = inner
+	}
+
 	return snapshotData{
-		Chunks:        chunks,
-		Flags:         flags,
-		Scores:        scores,
-		Streaks:       streaks,
-		PlayerNames:   playerNames,
-		PlayerFlags:   playerFlags,
-		PlayerViews:   playerViews,
-		NextPlayerID:  s.nextPlayerID,
-		SessionTokens: sessionTokens,
+		Chunks:               chunks,
+		Flags:                flags,
+		Scores:               scores,
+		Streaks:              streaks,
+		PlayerNames:          playerNames,
+		PlayerFlags:          playerFlags,
+		PlayerViews:          playerViews,
+		NextPlayerID:         s.nextPlayerID,
+		SessionTokens:        sessionTokens,
+		PlayerStats:          playerStats,
+		UnlockedAdvancements: unlockedAdvancements,
 	}
 }
 
@@ -742,6 +798,23 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 		s.sessionTokens = data.SessionTokens
 	} else if s.sessionTokens == nil {
 		s.sessionTokens = make(map[string]uint32)
+	}
+	if data.PlayerStats != nil {
+		s.playerStats = data.PlayerStats
+	} else {
+		s.playerStats = make(map[uint32]*PlayerStats)
+	}
+	if data.UnlockedAdvancements != nil {
+		s.unlockedAdvancements = data.UnlockedAdvancements
+	} else {
+		s.unlockedAdvancements = make(map[uint32]map[string]bool)
+	}
+	// unlockedFlags is derived, not persisted: rebuild it from the unlocked
+	// achievement IDs + their reward shapes so old snapshots (pre-advancements)
+	// restore cleanly with empty unlocks.
+	s.unlockedFlags = make(map[uint32]map[uint32]bool, len(s.unlockedAdvancements))
+	for pid := range s.unlockedAdvancements {
+		s.rebuildUnlockedFlagsLocked(pid)
 	}
 	// Rebuild fast name lookup index
 	idx := make(map[string]uint32, len(s.playerNames))

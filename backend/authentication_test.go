@@ -66,6 +66,17 @@ func TestAuthentication_NewAndReuseSessionToken(t *testing.T) {
 	}
 	token := j1.SessionToken
 
+	// Flag 51 (a Broken Guidon variant, cost 1500) is a paid flag gated behind
+	// an achievement; grant it directly so this test can exercise the
+	// flag-update-on-reconnect path without also being a test of the
+	// achievement system itself.
+	srv.stateMu.Lock()
+	if srv.unlockedFlags[1] == nil {
+		srv.unlockedFlags[1] = make(map[uint32]bool)
+	}
+	srv.unlockedFlags[1][51] = true
+	srv.stateMu.Unlock()
+
 	// Second connection: reuse token and update profile
 	c2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -74,7 +85,7 @@ func TestAuthentication_NewAndReuseSessionToken(t *testing.T) {
 	defer c2.Close()
 
 	join2 := &pb.Msg{Payload: &pb.Msg_Join{Join: &pb.Join{
-		SessionToken: token, Name: "Bob", FlagID: 7,
+		SessionToken: token, Name: "Bob", FlagID: 51,
 	}}}
 	if err := c2.WriteMessage(websocket.BinaryMessage, mustProto(join2)); err != nil {
 		t.Fatalf("write join2: %v", err)
@@ -93,8 +104,8 @@ func TestAuthentication_NewAndReuseSessionToken(t *testing.T) {
 	if got, want := j2.Name, "Bob"; got != want {
 		t.Fatalf("name=%q want %q", got, want)
 	}
-	if j2.FlagID != 7 {
-		t.Fatalf("flag=%d want 7", j2.FlagID)
+	if j2.FlagID != 51 {
+		t.Fatalf("flag=%d want 51", j2.FlagID)
 	}
 
 	// Internal state checks

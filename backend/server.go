@@ -52,6 +52,11 @@ type Server struct {
 	playerFlags map[uint32]uint32     // playerID -> flagID
 	playerViews map[uint32]PlayerView // last known view position (chunk, cell)
 
+	// Advancements
+	playerStats          map[uint32]*PlayerStats    // playerID -> lifetime stat counters
+	unlockedAdvancements map[uint32]map[string]bool // playerID -> set of unlocked achievement IDs
+	unlockedFlags        map[uint32]map[uint32]bool // playerID -> set of unlocked paid flag IDs
+
 	// Players
 	playersMu   sync.RWMutex
 	players     map[uint32]map[*Player]struct{}
@@ -105,30 +110,33 @@ type Server struct {
 
 func NewServer() *Server {
 	return &Server{
-		secret:            []byte("minesweeper-secret-key"),
-		chunks:            make(map[ChunkID]*ChunkBits),
-		flags:             make(map[ChunkID]map[uint32]Flag),
-		scores:            make(map[uint32]int32),
-		streaks:           make(map[uint32]uint32),
-		subs:              make(map[ChunkID]map[uint32]struct{}),
-		playerSubs:        make(map[uint32]map[ChunkID]struct{}),
-		playerSubLastSeen: make(map[uint32]map[ChunkID]uint64),
-		subTick:           0,
-		maxPlayerSubs:     70,
-		players:           make(map[uint32]map[*Player]struct{}),
-		playerNames:       make(map[uint32]string),
-		nameToPlayerID:    make(map[string]uint32),
-		playerFlags:       make(map[uint32]uint32),
-		playerViews:       make(map[uint32]PlayerView),
-		sessionTokens:     make(map[string]uint32), // Initialize the new map
-		botIDs:            make(map[uint32]bool),
-		seedCache:         make(map[ChunkID]uint64),
-		densityCache:      make(map[ChunkID]float64),
-		walFlushSignal:    make(chan struct{}, 1),
-		nextPlayerID:      1,
-		nextSpectatorID:   1,
-		dataDir:           "data",
-		proximityRadius:   2, // default behavior: must be within distance <= 2 of any revealed cell
+		secret:               []byte("minesweeper-secret-key"),
+		chunks:               make(map[ChunkID]*ChunkBits),
+		flags:                make(map[ChunkID]map[uint32]Flag),
+		scores:               make(map[uint32]int32),
+		streaks:              make(map[uint32]uint32),
+		subs:                 make(map[ChunkID]map[uint32]struct{}),
+		playerSubs:           make(map[uint32]map[ChunkID]struct{}),
+		playerSubLastSeen:    make(map[uint32]map[ChunkID]uint64),
+		subTick:              0,
+		maxPlayerSubs:        70,
+		players:              make(map[uint32]map[*Player]struct{}),
+		playerNames:          make(map[uint32]string),
+		nameToPlayerID:       make(map[string]uint32),
+		playerFlags:          make(map[uint32]uint32),
+		playerViews:          make(map[uint32]PlayerView),
+		playerStats:          make(map[uint32]*PlayerStats),
+		unlockedAdvancements: make(map[uint32]map[string]bool),
+		unlockedFlags:        make(map[uint32]map[uint32]bool),
+		sessionTokens:        make(map[string]uint32), // Initialize the new map
+		botIDs:               make(map[uint32]bool),
+		seedCache:            make(map[ChunkID]uint64),
+		densityCache:         make(map[ChunkID]float64),
+		walFlushSignal:       make(chan struct{}, 1),
+		nextPlayerID:         1,
+		nextSpectatorID:      1,
+		dataDir:              "data",
+		proximityRadius:      2, // default behavior: must be within distance <= 2 of any revealed cell
 		upgrader: websocket.Upgrader{
 			// Reject cross-site WebSocket requests (prevents CSRF via <iframe>).
 			CheckOrigin: func(r *http.Request) bool {
@@ -337,8 +345,8 @@ func (s *Server) handleProfileUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Update flag if provided
-	if req.FlagID != nil {
+	// Update flag if provided and unlocked for this player
+	if req.FlagID != nil && s.isFlagUnlockedLocked(pid, *req.FlagID) {
 		s.playerFlags[pid] = *req.FlagID
 		s.lbDirty = true
 	}

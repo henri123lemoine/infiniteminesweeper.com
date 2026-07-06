@@ -217,6 +217,31 @@ message SeedResponse {
   repeated ChunkSeed seeds = 1;
 }
 
+// Per-player lifetime counters used to evaluate advancement thresholds.
+message PlayerStats {
+  uint64 cellsRevealed = 1;
+  uint64 correctFlags = 2;
+  uint64 chunksFounded = 3;
+  uint64 chunksCleared = 4;
+  uint32 currentSafeStreak = 5;
+  uint32 maxSafeStreak = 6;
+  uint32 furthestChunkDistance = 7;
+  uint64 highDensityReveals = 8;
+}
+
+// Sent on join: the player's current stats and everything they've unlocked so far.
+message AdvancementSync {
+  PlayerStats stats = 1;
+  repeated string unlockedIds = 2;
+  repeated uint32 unlockedFlagIds = 3;
+}
+
+// Sent when a player crosses an advancement threshold for the first time.
+message AdvancementUnlocked {
+  string id = 1;
+  uint32 rewardFlagId = 2; // 0 = badge only
+}
+
 // Wrapper for all possible messages.
 message Msg {
   oneof payload {
@@ -240,6 +265,8 @@ message Msg {
     UpdateAck updateAck = 20; // FSM: Response to UpdateProfile
     SpawnHint spawnHint = 23; // Sent to spectators on connect
     PlayerPositions playerPositions = 24; // Nearby player locations
+    AdvancementSync advancementSync = 27; // Sent on join: stats + unlocks so far
+    AdvancementUnlocked advancementUnlocked = 28; // Sent when a new advancement is unlocked
 
     // Minimap streaming (client -> server)
     SubscribeTiles minimapSubscribe = 12;

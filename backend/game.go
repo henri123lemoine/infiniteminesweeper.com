@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"math/bits"
 	"regexp"
 	"sync"
 
@@ -190,6 +191,8 @@ func (s *Server) handleReveal(
 			scoreDelta = int32(math.Round(10 * m * s.streakBonus(playerID)))
 			s.applyScore(playerID, scoreDelta)
 			s.streaks[playerID]++
+			s.statsForLocked(playerID).CorrectFlags++
+			s.bumpSafeStreakLocked(playerID)
 			s.setCellFlagged(chunkID, cell, playerID, playerFlagID, &allPlacedFlags)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_FlaggedCell{FlaggedCell: &pb.FlagPlacement{Cell: cell, FlagID: playerFlagID}}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
@@ -201,6 +204,7 @@ func (s *Server) handleReveal(
 			scoreDelta = -int32(math.Round(20 * m))
 			s.applyScore(playerID, scoreDelta)
 			s.streaks[playerID] = 0
+			s.resetSafeStreakLocked(playerID)
 			s.floodFillReveal(chunkID, cell, playerID, &allRevealedCells)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
@@ -293,10 +297,12 @@ func (s *Server) handleReveal(
 		if minesHit == 0 && scoreDelta > 0 {
 			scoreDelta = int32(math.Round(float64(scoreDelta) * m * s.streakBonus(playerID)))
 			s.streaks[playerID]++
+			s.bumpSafeStreakLocked(playerID)
 		} else {
 			scoreDelta = int32(math.Round(float64(scoreDelta) * m))
 			if minesHit > 0 {
 				s.streaks[playerID] = 0
+				s.resetSafeStreakLocked(playerID)
 			}
 		}
 		s.applyScore(playerID, scoreDelta)
@@ -329,6 +335,7 @@ func (s *Server) handleReveal(
 			scoreDelta = -int32(math.Round(100 * m))
 			s.applyScore(playerID, scoreDelta)
 			s.streaks[playerID] = 0
+			s.resetSafeStreakLocked(playerID)
 			s.setCellRevealed(chunkID, cell, playerID, &allRevealedCells)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
@@ -337,6 +344,7 @@ func (s *Server) handleReveal(
 			scoreDelta = int32(math.Round(1 * m * s.streakBonus(playerID)))
 			s.applyScore(playerID, scoreDelta)
 			s.streaks[playerID]++
+			s.bumpSafeStreakLocked(playerID)
 			s.setCellRevealed(chunkID, cell, playerID, &allRevealedCells)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
@@ -349,6 +357,7 @@ func (s *Server) handleReveal(
 				m := s.getScoreMultiplier(chunkID)
 				scoreDelta = int32(math.Round(float64(scoreDelta) * m * s.streakBonus(playerID)))
 				s.streaks[playerID]++
+				s.bumpSafeStreakLocked(playerID)
 			}
 			s.applyScore(playerID, scoreDelta)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
@@ -386,6 +395,29 @@ func (s *Server) handleReveal(
 		}{PlayerID: playerID, Score: s.scores[playerID], Streak: s.streaks[playerID]})
 	}
 
+	// 4) Advancement stats + any newly-crossed thresholds (full-value snapshot,
+	// mirroring score_update's pattern). Every path that reaches here touched
+	// stats via setCellRevealed/bumpSafeStreakLocked/resetSafeStreakLocked.
+	var newUnlocks []*pb.AdvancementUnlocked
+	var advSyncBytes []byte
+	if stats := s.playerStats[playerID]; stats != nil {
+		newUnlocks = s.evaluateAdvancementsLocked(playerID)
+		unlockedIDs := make([]string, len(newUnlocks))
+		for i, u := range newUnlocks {
+			unlockedIDs[i] = u.Id
+		}
+		s.writeWALEntry("stats_update", struct {
+			PlayerID   uint32      `json:"player_id"`
+			Stats      PlayerStats `json:"stats"`
+			NewUnlocks []string    `json:"new_unlocks,omitempty"`
+		}{PlayerID: playerID, Stats: *stats, NewUnlocks: unlockedIDs})
+		if len(newUnlocks) > 0 {
+			// Rewards unlock whole shapes (many variant IDs); a fresh full
+			// sync keeps the client's unlock set authoritative.
+			advSyncBytes = s.buildAdvancementSyncLocked(playerID)
+		}
+	}
+
 	s.lbDirty = true
 
 	// phase 2: hand the mutations to the outer scope and release the lock
@@ -396,6 +428,12 @@ func (s *Server) handleReveal(
 	// phase 3: broadcast while *no* lock is held, preventing dead-locks
 	if len(revealsToSend) > 0 || len(flagsToSend) > 0 {
 		s.broadcastUpdates(revealsToSend, flagsToSend, playerID)
+	}
+	for _, u := range newUnlocks {
+		s.sendToPlayer(playerID, mustProto(&pb.Msg{Payload: &pb.Msg_AdvancementUnlocked{AdvancementUnlocked: u}}))
+	}
+	if advSyncBytes != nil {
+		s.sendToPlayer(playerID, advSyncBytes)
 	}
 }
 
@@ -446,8 +484,12 @@ func (s *Server) floodFillReveal(startChunk ChunkID, startCell uint32, playerID 
 }
 
 func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, collector *map[ChunkID]*pb.RevealedCells) {
-	if s.chunks[chunkID] == nil {
+	stats := s.statsForLocked(playerID)
+
+	founded := s.chunks[chunkID] == nil
+	if founded {
 		s.chunks[chunkID] = &ChunkBits{}
+		stats.ChunksFounded++
 	}
 	x, y := cellIndexToXY(cell)
 	bitIndex := y*ChunkSize + x
@@ -456,6 +498,24 @@ func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, 
 	if (s.chunks[chunkID][bitIndex/64] & mask) == 0 {
 		s.chunks[chunkID][bitIndex/64] |= mask
 		s.totalRevealed++
+		stats.CellsRevealed++
+
+		// Detect the reveal that completes the chunk (all 4096 cells set).
+		var revealedCount int
+		for _, word := range s.chunks[chunkID] {
+			revealedCount += bits.OnesCount64(word)
+		}
+		if revealedCount == ChunkSize*ChunkSize {
+			stats.ChunksCleared++
+		}
+
+		if s.getChunkDensity(chunkID) >= 0.32 {
+			stats.HighDensityReveals++
+		}
+	}
+
+	if dist := chebyshevChunkDistance(chunkID); dist > stats.FurthestChunkDistance {
+		stats.FurthestChunkDistance = dist
 	}
 
 	if (*collector)[chunkID] == nil {
@@ -465,6 +525,33 @@ func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, 
 
 	// Update minimap tile (under the same lock)
 	s.minimapOnReveal(chunkID, cell)
+}
+
+// statsForLocked returns (creating if necessary) the PlayerStats for pid.
+// Caller must hold stateMu (write).
+func (s *Server) statsForLocked(pid uint32) *PlayerStats {
+	stats := s.playerStats[pid]
+	if stats == nil {
+		stats = &PlayerStats{}
+		s.playerStats[pid] = stats
+	}
+	return stats
+}
+
+// chebyshevChunkDistance returns max(|X|,|Y|) for a chunk relative to the
+// origin, used as the "how far explored" advancement metric.
+func chebyshevChunkDistance(chunkID ChunkID) uint32 {
+	abs := func(v int64) int64 {
+		if v < 0 {
+			return -v
+		}
+		return v
+	}
+	ax, ay := abs(chunkID.X), abs(chunkID.Y)
+	if ax > ay {
+		return uint32(ax)
+	}
+	return uint32(ay)
 }
 
 func (s *Server) setCellFlagged(chunkID ChunkID, cell uint32, playerID uint32, flagID uint32, collector *map[ChunkID][]*pb.FlagPlacement) {

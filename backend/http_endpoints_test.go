@@ -88,7 +88,9 @@ func TestHandleProfileUpdate(t *testing.T) {
 	s.stateMu.Unlock()
 
 	body := bytes.NewBuffer(nil)
-	io.WriteString(body, `{"name":"New","flagID":42}`)
+	// flag 15 is a free starter-tier (Triangle) variant; paid flags are now
+	// gated behind advancements and would be silently clamped here.
+	io.WriteString(body, `{"name":"New","flagID":15}`)
 	req := httptest.NewRequest(http.MethodPost, "/profile/update", body)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Session-Token", token)
@@ -107,7 +109,7 @@ func TestHandleProfileUpdate(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("json: %v", err)
 	}
-	if !resp.OK || resp.Name != "New" || resp.FlagID != 42 || resp.Score != 42 || resp.PlayerID != pid {
+	if !resp.OK || resp.Name != "New" || resp.FlagID != 15 || resp.Score != 42 || resp.PlayerID != pid {
 		t.Fatalf("bad resp: %+v", resp)
 	}
 }

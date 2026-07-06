@@ -158,6 +158,11 @@ export const useGameState = () => {
   const [tick, setTick] = useState(0);
   const [updateError, setUpdateError] = useState("");
   const [joinError, setJoinError] = useState("");
+  // Advancements: lifetime stats + unlock sets synced on join, toasts on unlock
+  const [advStats, setAdvStats] = useState(null);
+  const [unlockedAdvIds, setUnlockedAdvIds] = useState([]);
+  const [unlockedFlagIds, setUnlockedFlagIds] = useState([]);
+  const [advToasts, setAdvToasts] = useState([]);
   const [serverFlagID, setServerFlagID] = useState(null);
   const [updateSuccess, setUpdateSuccess] = useState(false);
   // Server-suggested spawn location (world cell coordinates)
@@ -1360,6 +1365,37 @@ export const useGameState = () => {
         }
 
         setTick((t) => t + 1);
+      } else if (type === "advancementSync") {
+        const stats = data.stats || {};
+        // uint64 fields arrive as strings (longs: String); normalize
+        const norm = {};
+        for (const [k, v] of Object.entries(stats)) norm[k] = Number(v) || 0;
+        setAdvStats(norm);
+        setUnlockedAdvIds(
+          Array.isArray(data.unlockedIds) ? data.unlockedIds : []
+        );
+        setUnlockedFlagIds(
+          Array.isArray(data.unlockedFlagIds)
+            ? data.unlockedFlagIds.map(Number)
+            : []
+        );
+      } else if (type === "advancementUnlocked") {
+        const id = data.id;
+        if (!id) return;
+        const rewardFlagId = Number(data.rewardFlagId) || 0;
+        setUnlockedAdvIds((prev) =>
+          prev.includes(id) ? prev : [...prev, id]
+        );
+        if (rewardFlagId) {
+          setUnlockedFlagIds((prev) =>
+            prev.includes(rewardFlagId) ? prev : [...prev, rewardFlagId]
+          );
+        }
+        const toastId = Math.random().toString(36).slice(2);
+        setAdvToasts((prev) => [...prev, { toastId, id, rewardFlagId }]);
+        setTimeout(() => {
+          setAdvToasts((prev) => prev.filter((t) => t.toastId !== toastId));
+        }, 5000);
       } else if (type === "seedResponse") {
         // Handle seed response for pre-emptive caching
         const seeds = Array.isArray(data.seeds) ? data.seeds : [];
@@ -1513,6 +1549,11 @@ export const useGameState = () => {
     joinError,
     serverFlagID,
     disconnect,
+    // Advancements
+    advStats,
+    unlockedAdvIds,
+    unlockedFlagIds,
+    advToasts,
     worldToChunk,
     // expose caches for minimap and other consumers
     densityCache,
