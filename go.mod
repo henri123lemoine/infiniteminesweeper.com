@@ -7,11 +7,9 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
+	github.com/klauspost/compress v1.18.5
 	github.com/pierrec/lz4/v4 v4.1.22
 	google.golang.org/protobuf v1.36.6
 )
 
-require (
-	github.com/jmespath/go-jmespath v0.4.0 // indirect
-	github.com/klauspost/compress v1.18.5 // indirect
-)
+require github.com/jmespath/go-jmespath v0.4.0 // indirect
