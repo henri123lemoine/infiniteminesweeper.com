@@ -1,7 +1,7 @@
 # Build arguments
 ARG PYTHON_VERSION=3.11
 ARG NODE_VERSION=22
-ARG GO_VERSION=1.23.0
+ARG GO_VERSION=1.24.0
 ARG MODE=production
 
 # Stage 0: Sprite generator
