@@ -20,7 +20,7 @@ export class CanvasRenderer {
     this.canvasSizeRef = { w: 0, h: 0, dpr: 1 };
     // bucket -> ("cx,cy" -> { canvas, version })
     this.chunkCaches = new Map(RASTER_BUCKETS.map((b) => [b, new Map()]));
-    // Pre-rendered per-resolution stamps (cell tiles, number glyphs, blanks)
+    // Pre-rendered per-resolution number glyphs
     this.stampCache = new Map();
   }
 
@@ -45,28 +45,10 @@ export class CanvasRenderer {
     return c;
   }
 
-  _baseTile(size, revealed) {
-    return this._stamp(`tile,${size},${revealed ? 1 : 0}`, size, size, (ctx) =>
-      this.draw3DCell(ctx, 0, 0, size, revealed)
-    );
-  }
-
   _numberGlyph(size, n, getNumberColor) {
     return this._stamp(`num,${size},${n}`, size, size, (ctx) =>
       this.drawNumber(ctx, 0, 0, size, n, getNumberColor)
     );
-  }
-
-  // Shared placeholder for untouched chunks: one drawImage, no per-chunk cache.
-  _blankChunk(size) {
-    return this._stamp(`blank,${size}`, CHUNK * size, CHUNK * size, (ctx) => {
-      const tile = this._baseTile(size, false);
-      for (let ly = 0; ly < CHUNK; ly++) {
-        for (let lx = 0; lx < CHUNK; lx++) {
-          ctx.drawImage(tile, lx * size, ly * size);
-        }
-      }
-    });
   }
 
   // 3D Cell Drawing Functions
@@ -201,17 +183,17 @@ export class CanvasRenderer {
     }
   }
 
-  // Rasterizes a chunk at `size` px per cell in the LOD0 visual style.
-  // Bases and glyphs are stamped from pre-rendered tiles — ~10x cheaper than
-  // drawing them, which is what keeps warm-up inside the frame budget.
+  // Rasterizes a chunk at `size` px per cell. Flat colors only — the beveled
+  // texture resamples differently every frame while zooming, which reads as
+  // crawling in undiscovered areas. Bevels are a LOD0 luxury.
   _rasterizeChunk(cx, cy, refs, size) {
     const { revealedCellsRef, flaggedCellsRef, getNumberColor } = refs;
     const off = this._makeCanvas(CHUNK * size, CHUNK * size);
     const ctx = off.getContext("2d");
     ctx.imageSmoothingEnabled = false;
 
-    ctx.drawImage(this._blankChunk(size), 0, 0);
-    const revealedTile = this._baseTile(size, true);
+    ctx.fillStyle = "#c0c0c0";
+    ctx.fillRect(0, 0, off.width, off.height);
 
     const prefix = `${cx},${cy},`;
     for (let ly = 0; ly < CHUNK; ly++) {
@@ -229,9 +211,10 @@ export class CanvasRenderer {
           this.drawSprite(ctx, flagForCell, dx, dy, size, size);
           continue;
         }
-        if (cellDataRaw === null) continue; // unrevealed: placeholder already there
+        if (cellDataRaw === null) continue;
 
-        ctx.drawImage(revealedTile, dx, dy);
+        ctx.fillStyle = "#e0e0e0";
+        ctx.fillRect(dx, dy, size, size);
         if (cellDataRaw.isMine) {
           this.drawSprite(ctx, "mine", dx, dy, size, size);
         } else if (cellDataRaw.adjacentMines > 0) {
@@ -254,8 +237,9 @@ export class CanvasRenderer {
     drawSprite(ctx, spriteID, dx, dy, dw, dh);
   }
 
-  // Takes the raw cell record and flag state directly (not a merged object)
-  // to avoid an allocation per visible cell per frame at LOD0.
+  // LOD0 (close-up) cell rendering. Takes the raw cell record and flag state
+  // directly (not a merged object) to avoid an allocation per visible cell
+  // per frame. Flag sprites are drawn by the caller.
   renderCell(
     ctx,
     screenX,
@@ -264,41 +248,15 @@ export class CanvasRenderer {
     cellDataRaw,
     isFlagged,
     isRevealedState,
-    getNumberColor,
-    LOD
+    getNumberColor
   ) {
     const isRevealed = isRevealedState && !isFlagged;
-
-    // Base cell: beveled for LOD 0, flat for higher LODs
-    if (LOD === 0) {
-      this.draw3DCell(ctx, screenX, screenY, cellSize, isRevealed);
-    } else {
-      ctx.fillStyle = isRevealed ? "#e0e0e0" : "#c0c0c0";
-      ctx.fillRect(screenX, screenY, cellSize, cellSize);
-    }
-
-    // Flagged/unrevealed cells are done here; flag sprites are drawn by the caller.
+    this.draw3DCell(ctx, screenX, screenY, cellSize, isRevealed);
     if (!isRevealed) return;
 
     if (cellDataRaw.isMine) {
-      if (LOD <= 1) {
-        // Use the real mine sprite (stable key "mine", ID 162)
-        this.drawSprite(ctx, "mine", screenX, screenY, cellSize, cellSize);
-      } else {
-        // LOD 2: draw a simple dot for a mine
-        ctx.fillStyle = "#101010";
-        const r = Math.max(1, cellSize * 0.25);
-        ctx.beginPath();
-        ctx.arc(
-          screenX + cellSize / 2,
-          screenY + cellSize / 2,
-          r,
-          0,
-          Math.PI * 2
-        );
-        ctx.fill();
-      }
-    } else if (cellDataRaw.adjacentMines > 0 && LOD === 0) {
+      this.drawSprite(ctx, "mine", screenX, screenY, cellSize, cellSize);
+    } else if (cellDataRaw.adjacentMines > 0) {
       this.drawNumber(
         ctx,
         screenX,
@@ -402,8 +360,7 @@ export class CanvasRenderer {
             cellDataRaw,
             isFlagged,
             isRevealedState,
-            getNumberColor,
-            LOD
+            getNumberColor
           );
 
           if (isFlagged) {
@@ -464,7 +421,6 @@ export class CanvasRenderer {
       if (b >= effPx) bucket = b;
     }
     const cache = this.chunkCaches.get(bucket);
-    const blank = this._blankChunk(bucket);
     const frameStart = performance.now();
     let rerenderNeeded = false;
 
@@ -495,42 +451,39 @@ export class CanvasRenderer {
         const key = `${cx},${cy}`;
         const version = chunkVersionRef?.current.get(key) || 0;
 
+        // Untouched chunks are exactly the background fill; skip.
+        if (version === 0) continue;
+
+        let entry = cache.get(key);
+        if (!entry || entry.version !== version) {
+          if (performance.now() - frameStart <= RASTER_BUDGET_MS) {
+            entry = {
+              canvas: this._rasterizeChunk(cx, cy, refs, bucket),
+              version,
+            };
+            cache.set(key, entry);
+            this._evictIfNeeded(cache, cacheCap);
+          } else {
+            // Over budget: stale raster (or background) now, finish next frame
+            rerenderNeeded = true;
+          }
+        } else {
+          this._touch(cache, key);
+        }
+        if (!entry) continue;
+
         const chunkScreenX = snapToDevicePixel(
           cx * CHUNK * CELL_SIZE - viewRef.current.x
         );
         const chunkScreenY = snapToDevicePixel(
           cy * CHUNK * CELL_SIZE - viewRef.current.y
         );
-
-        // Untouched chunks share one placeholder: no raster work, no cache.
-        let source = version === 0 ? blank : null;
-
-        if (!source) {
-          let entry = cache.get(key);
-          if (!entry || entry.version !== version) {
-            if (performance.now() - frameStart <= RASTER_BUDGET_MS) {
-              entry = {
-                canvas: this._rasterizeChunk(cx, cy, refs, bucket),
-                version,
-              };
-              cache.set(key, entry);
-              this._evictIfNeeded(cache, cacheCap);
-            } else {
-              // Over budget: stale raster or placeholder now, finish next frame
-              rerenderNeeded = true;
-            }
-          } else {
-            this._touch(cache, key);
-          }
-          source = entry ? entry.canvas : blank;
-        }
-
         ctx.drawImage(
-          source,
+          entry.canvas,
           0,
           0,
-          source.width,
-          source.height,
+          entry.canvas.width,
+          entry.canvas.height,
           chunkScreenX,
           chunkScreenY,
           CHUNK * CELL_SIZE,
