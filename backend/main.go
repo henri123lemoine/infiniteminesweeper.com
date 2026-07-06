@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 )
 
 //go:embed dist/*
@@ -113,6 +115,18 @@ func main() {
 			}
 		}()
 	}
+
+	// Fly sends SIGINT on auto-stop and deploys. Without this handler, every
+	// stop silently dropped the in-memory WAL buffer — up to a full flush
+	// interval of recent play.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		log.Printf("[shutdown] received %v, flushing WAL + snapshot", sig)
+		server.persistOnShutdown()
+		os.Exit(0)
+	}()
 
 	fmt.Printf("Server running at: http://%s/\n", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))

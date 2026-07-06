@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -181,6 +182,11 @@ func (s *Server) flushWAL() error {
 				return err
 			}
 		}
+		// Without fsync, a machine kill right after "flush" can still truncate
+		// the tail of the file mid-record.
+		if err := f.Sync(); err != nil {
+			return err
+		}
 		log.Printf("WAL: flushed %d entries to disk", len(entries))
 	}
 	return nil
@@ -223,7 +229,10 @@ func (s *Server) readWALObjectFromS3(key string) ([]WALEntry, error) {
 		if err := decoder.Decode(&entry); err == io.EOF {
 			break
 		} else if err != nil {
-			return nil, fmt.Errorf("failed to decode WAL entry: %v", err)
+			// Best-effort: keep everything decoded so far rather than
+			// discarding the whole segment over one corrupt record.
+			log.Printf("[wal] segment %s corrupt after %d entries, replaying prefix: %v", key, len(entries), err)
+			break
 		}
 		entries = append(entries, entry)
 	}
@@ -273,7 +282,10 @@ func (s *Server) readWALFromDisk() ([]WALEntry, error) {
 		if err := decoder.Decode(&entry); err == io.EOF {
 			break
 		} else if err != nil {
-			return nil, err
+			// A crash mid-append leaves a truncated trailing record; replay
+			// the intact prefix instead of dropping the whole log.
+			log.Printf("[wal] log corrupt after %d entries, replaying prefix: %v", len(entries), err)
+			break
 		}
 		entries = append(entries, entry)
 	}
@@ -513,18 +525,48 @@ func (s *Server) initPersistence() {
 	go s.periodicWALFlush()     // flush WAL every 30 seconds
 }
 
+// captureSnapshotData deep-copies all state under the lock. The gob encoding
+// happens after the lock is released, so handing out references to the live
+// maps would let concurrent reveals mutate them mid-encode — a fatal
+// "concurrent map iteration and map write" panic.
 func (s *Server) captureSnapshotData() snapshotData {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
+
+	chunks := make(map[ChunkID]*ChunkBits, len(s.chunks))
+	for cid, cb := range s.chunks {
+		if cb == nil {
+			continue
+		}
+		copied := *cb
+		chunks[cid] = &copied
+	}
+	flags := make(map[ChunkID]map[uint32]Flag, len(s.flags))
+	for cid, fm := range s.flags {
+		inner := make(map[uint32]Flag, len(fm))
+		maps.Copy(inner, fm)
+		flags[cid] = inner
+	}
+	scores := make(map[uint32]int32, len(s.scores))
+	maps.Copy(scores, s.scores)
+	playerNames := make(map[uint32]string, len(s.playerNames))
+	maps.Copy(playerNames, s.playerNames)
+	playerFlags := make(map[uint32]uint32, len(s.playerFlags))
+	maps.Copy(playerFlags, s.playerFlags)
+	playerViews := make(map[uint32]PlayerView, len(s.playerViews))
+	maps.Copy(playerViews, s.playerViews)
+	sessionTokens := make(map[string]uint32, len(s.sessionTokens))
+	maps.Copy(sessionTokens, s.sessionTokens)
+
 	return snapshotData{
-		Chunks:        s.chunks,
-		Flags:         s.flags,
-		Scores:        s.scores,
-		PlayerNames:   s.playerNames,
-		PlayerFlags:   s.playerFlags,
-		PlayerViews:   s.playerViews,
+		Chunks:        chunks,
+		Flags:         flags,
+		Scores:        scores,
+		PlayerNames:   playerNames,
+		PlayerFlags:   playerFlags,
+		PlayerViews:   playerViews,
 		NextPlayerID:  s.nextPlayerID,
-		SessionTokens: s.sessionTokens,
+		SessionTokens: sessionTokens,
 	}
 }
 
@@ -715,6 +757,28 @@ func (s *Server) loadSnapshotFromDisk() error {
 	s.restoreSnapshotData(data)
 	log.Printf("[snapshot] loaded from disk: %d chunks", len(s.chunks))
 	return nil
+}
+
+// persistOnShutdown makes a best-effort attempt to durably persist all state
+// before the process exits. WAL flush first — it is fast and alone guarantees
+// no data loss; the snapshot just makes the next boot faster.
+func (s *Server) persistOnShutdown() {
+	if err := s.flushWAL(); err != nil {
+		log.Printf("[shutdown] WAL flush failed: %v", err)
+	} else {
+		log.Printf("[shutdown] WAL flushed")
+	}
+	var err error
+	if s.useS3 {
+		err = s.saveSnapshotToS3()
+	} else {
+		err = s.saveSnapshotToDisk()
+	}
+	if err != nil {
+		log.Printf("[shutdown] snapshot failed: %v", err)
+	} else {
+		log.Printf("[shutdown] snapshot saved")
+	}
 }
 
 func (s *Server) periodicSnapshotLoop() {

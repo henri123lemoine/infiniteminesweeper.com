@@ -9,8 +9,12 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// walFlushInterval bounds how much play a hard kill (OOM) can lose. Flushes
+// are appends to local NVMe, so a short interval costs almost nothing.
+// Graceful stops (deploys, Fly auto-stop) lose nothing regardless — the
+// SIGINT handler flushes on the way out.
 var (
-	walFlushInterval time.Duration = 2 * time.Minute
+	walFlushInterval time.Duration = 15 * time.Second
 	snapshotInterval time.Duration = 30 * time.Minute
 )
 
