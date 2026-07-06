@@ -1128,56 +1128,40 @@ function App() {
     }
   }, [nameInput, flagID, connected, username, joinGame, updateProfile]);
 
+  const openHome = useCallback(() => {
+    // Keep connection alive; simply show overlay
+    setShowHomeOverlay(true);
+    setActiveTab("play");
+    setNameInput(localStorage.getItem("username") || nameInput);
+    // Suggest a contrasting flag based on visible flags near center
+    try {
+      const z = zoomRef.current;
+      const centerX = Math.floor(
+        (viewRef.current.x + (containerRef.current?.clientWidth || 0) / 2 / z) /
+          CELL_SIZE
+      );
+      const centerY = Math.floor(
+        (viewRef.current.y +
+          (containerRef.current?.clientHeight || 0) / 2 / z) /
+          CELL_SIZE
+      );
+      const R = 8; // radius in cells to scan for flags
+      const nearby = new Set();
+      for (let dy = -R; dy <= R; dy++) {
+        for (let dx = -R; dx <= R; dx++) {
+          const id = flaggedCellsRef.current.get(
+            `${centerX + dx},${centerY + dy}`
+          );
+          if (Number.isFinite(id)) nearby.add(id);
+        }
+      }
+      const pick = FLAG_IDS.find((id) => !nearby.has(id)) ?? FLAG_IDS[0];
+      if (Number.isFinite(pick)) setFlagID(pick);
+    } catch {}
+  }, [nameInput, FLAG_IDS, CELL_SIZE, flaggedCellsRef]);
+
   return (
     <div className={isEmbed ? "game-container embed" : "game-container"}>
-      {/* Home button (hidden on homepage) */}
-      {!showHomeOverlay && !isEmbed && (
-        <button
-          onClick={() => {
-            // Keep connection alive; simply show overlay
-            setShowHomeOverlay(true);
-            setActiveTab("play");
-            setNameInput(localStorage.getItem("username") || nameInput);
-            // Suggest a contrasting flag based on visible flags near center
-            try {
-              const z = zoomRef.current;
-              const centerX = Math.floor(
-                (viewRef.current.x +
-                  (containerRef.current?.clientWidth || 0) / 2 / z) /
-                  CELL_SIZE
-              );
-              const centerY = Math.floor(
-                (viewRef.current.y +
-                  (containerRef.current?.clientHeight || 0) / 2 / z) /
-                  CELL_SIZE
-              );
-              const R = 8; // radius in cells to scan for flags
-              const nearby = new Set();
-              for (let dy = -R; dy <= R; dy++) {
-                for (let dx = -R; dx <= R; dx++) {
-                  const id = flaggedCellsRef.current.get(
-                    `${centerX + dx},${centerY + dy}`
-                  );
-                  if (Number.isFinite(id)) nearby.add(id);
-                }
-              }
-              const pick =
-                FLAG_IDS.find((id) => !nearby.has(id)) ?? FLAG_IDS[0];
-              if (Number.isFinite(pick)) setFlagID(pick);
-            } catch {}
-          }}
-          className="help-button"
-          style={{
-            position: "fixed",
-            top: 52, // below the score chip
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 21,
-          }}
-        >
-          Home
-        </button>
-      )}
       {showMinimapOverlay && (
         <div
           style={{
@@ -1528,9 +1512,25 @@ function App() {
 
       {/* Help & Scoring dropdown */}
       <div className="help-dropdown">
-        <button className="help-button" onClick={() => setHelpOpen((v) => !v)}>
-          {helpOpen ? "Close" : "Help & Scoring"}
-        </button>
+        <div style={{ display: "flex", gap: 6 }}>
+          {!showHomeOverlay && (
+            <button
+              className="help-button"
+              onClick={openHome}
+              title="Home"
+              aria-label="Home"
+              style={{ fontSize: 15, lineHeight: "14px", padding: "4px 9px" }}
+            >
+              ⌂
+            </button>
+          )}
+          <button
+            className="help-button"
+            onClick={() => setHelpOpen((v) => !v)}
+          >
+            {helpOpen ? "Close" : "Help & Scoring"}
+          </button>
+        </div>
         {helpOpen && (
           <div className="help-content">
             <h3 style={{ marginTop: 0 }}>Scoring</h3>
