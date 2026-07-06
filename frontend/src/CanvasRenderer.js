@@ -1,13 +1,22 @@
 import { CHUNK } from "./useGameState.js";
-import { drawSprite, getHexForFlag } from "./sprites/index.js";
+import { drawSprite } from "./sprites/index.js";
+
+// Effective px/cell thresholds for LOD switching. The chunk-cache raster
+// (used below FULL_QUALITY_THRESHOLD) is rendered at baseCell resolution
+// equal to this threshold, so at the exact LOD0/LOD1 boundary the cached
+// bitmap is blitted at native resolution with no up/downscaling artifact.
+const MINIMAL_RENDERING_THRESHOLD = 5; // below this: minimal cached chunks
+const FULL_QUALITY_THRESHOLD = 20; // above this: per-cell rendering
 
 export class CanvasRenderer {
   constructor() {
     this.canvasSizeRef = { w: 0, h: 0, dpr: 1 };
     // Per-chunk raster cache: key "cx,cy" -> { canvas, version }
     this.chunkCache = new Map();
-    this.maxCachedChunks = 200;
-    this.baseCell = 16; // offscreen raster base size per cell
+    this.baseCell = FULL_QUALITY_THRESHOLD; // offscreen raster base size per cell
+    // maxCachedChunks is tuned so total cache memory stays roughly constant
+    // regardless of baseCell (chunk pixel area grows with baseCell^2).
+    this.maxCachedChunks = Math.round(200 * (16 / this.baseCell) ** 2);
   }
 
   // 3D Cell Drawing Functions
@@ -142,6 +151,11 @@ export class CanvasRenderer {
     }
   }
 
+  // Rasterizes a chunk using the exact same per-cell renderer as LOD0
+  // (beveled cells, real flag/mine sprites), so the cached bitmap used at
+  // LOD1/LOD2 is visually identical in style to close-up rendering. Only
+  // the resolution (baseCell) differs, and only near the LOD0 boundary is
+  // that resolution difference perceptible at all.
   _rasterizeChunk(cx, cy, refs) {
     const { revealedCellsRef, flaggedCellsRef, getNumberColor } = refs;
     const size = this.baseCell;
@@ -154,76 +168,34 @@ export class CanvasRenderer {
           });
     const ctx = off.getContext("2d");
     ctx.imageSmoothingEnabled = false;
-    // Draw background
-    ctx.fillStyle = "#c0c0c0";
-    ctx.fillRect(0, 0, off.width, off.height);
 
     const prefix = `${cx},${cy},`;
     for (let ly = 0; ly < CHUNK; ly++) {
       for (let lx = 0; lx < CHUNK; lx++) {
         const cell = ly * CHUNK + lx;
-        const cellData = revealedCellsRef.current.get(prefix + cell);
+        const cellDataRaw = revealedCellsRef.current.get(prefix + cell) || null;
         const wx = cx * CHUNK + lx;
         const wy = cy * CHUNK + ly;
-        const isFlagged = flaggedCellsRef.current.has(`${wx},${wy}`);
+        const flagForCell = flaggedCellsRef.current.get(`${wx},${wy}`);
+        const isFlagged = flagForCell !== undefined;
+        const isRevealedState = cellDataRaw !== null;
         const dx = lx * size;
         const dy = ly * size;
 
-        if (!cellData && !isFlagged) {
-          // unrevealed
-          continue; // background already filled
-        }
-        if (!isFlagged) {
-          // revealed flat tile
-          ctx.fillStyle = "#e0e0e0";
-          ctx.fillRect(dx, dy, size, size);
-          if (cellData?.isMine) {
-            ctx.fillStyle = "#101010";
-            const r = Math.max(1, size * 0.25);
-            ctx.beginPath();
-            ctx.arc(dx + size / 2, dy + size / 2, r, 0, Math.PI * 2);
-            ctx.fill();
-          } else if (cellData && cellData.adjacentMines > 0) {
-            ctx.font = `bold ${Math.max(8, size * 0.5)}px monospace`;
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillStyle = getNumberColor(cellData.adjacentMines);
-            ctx.fillText(
-              String(cellData.adjacentMines),
-              dx + size / 2,
-              dy + size / 2 + 1
-            );
-          }
-        }
+        this.renderCell(
+          ctx,
+          dx,
+          dy,
+          size,
+          cellDataRaw,
+          isFlagged,
+          isRevealedState,
+          getNumberColor,
+          0
+        );
+
         if (isFlagged) {
-          const flagKey = `${wx},${wy}`;
-          const flagData = flaggedCellsRef.current.get(flagKey);
-
-          // Use the flag's actual color from sprite metadata
-          let flagColor = "#202020"; // fallback
-          if (flagData) {
-            flagColor = getHexForFlag(flagData);
-          }
-
-          // Make flags larger and more visible in cached chunks
-          const flagPadding = Math.max(0, size * 0.1);
-          ctx.fillStyle = flagColor;
-          ctx.fillRect(
-            dx + flagPadding,
-            dy + flagPadding,
-            size - 2 * flagPadding,
-            size - 2 * flagPadding
-          );
-
-          // Add a subtle border for better definition
-          ctx.strokeStyle = "rgba(0, 0, 0, 0.3)";
-          ctx.lineWidth = Math.max(0.5, size * 0.05);
-          ctx.strokeRect(
-            dx + flagPadding,
-            dy + flagPadding,
-            size - 2 * flagPadding,
-            size - 2 * flagPadding
-          );
+          this.drawSprite(ctx, flagForCell, dx, dy, size, size);
         }
       }
     }
@@ -238,17 +210,22 @@ export class CanvasRenderer {
     drawSprite(ctx, spriteID, dx, dy, dw, dh);
   }
 
-  // Cell Rendering Logic
+  // Cell Rendering Logic. Takes the raw revealed-cell record and flag state
+  // directly (rather than a merged object) to avoid an allocation per cell
+  // per frame at LOD0, where this runs for every visible cell.
   renderCell(
     ctx,
     screenX,
     screenY,
     cellSize,
-    cellData,
-    isRevealed,
+    cellDataRaw,
+    isFlagged,
+    isRevealedState,
     getNumberColor,
     LOD
   ) {
+    const isRevealed = isRevealedState && !isFlagged;
+
     // Base cell: beveled for LOD 0, flat for higher LODs
     if (LOD === 0) {
       this.draw3DCell(ctx, screenX, screenY, cellSize, isRevealed);
@@ -257,14 +234,10 @@ export class CanvasRenderer {
       ctx.fillRect(screenX, screenY, cellSize, cellSize);
     }
 
-    // If not revealed, we're done (content will be handled separately for flags)
+    // Flagged/unrevealed cells are done here; flag sprites are drawn by the caller.
     if (!isRevealed) return;
 
-    // Draw revealed cell content. If the cell is flagged, suppress underlying content
-    if (cellData.isFlagged) {
-      return;
-    }
-    if (cellData.isMine) {
+    if (cellDataRaw.isMine) {
       if (LOD <= 1) {
         // Use the real mine sprite (stable key "mine", ID 162)
         this.drawSprite(ctx, "mine", screenX, screenY, cellSize, cellSize);
@@ -282,13 +255,13 @@ export class CanvasRenderer {
         );
         ctx.fill();
       }
-    } else if (cellData.adjacentMines > 0 && LOD === 0) {
+    } else if (cellDataRaw.adjacentMines > 0 && LOD === 0) {
       this.drawNumber(
         ctx,
         screenX,
         screenY,
         cellSize,
-        cellData.adjacentMines,
+        cellDataRaw.adjacentMines,
         getNumberColor
       );
     }
@@ -325,8 +298,12 @@ export class CanvasRenderer {
       height !== this.canvasSizeRef.h ||
       dpr !== this.canvasSizeRef.dpr
     ) {
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
+      // Round rather than truncate: canvas.width/height coerce to an
+      // unsigned integer, and a fractional dpr (e.g. 1.5, 2.625) truncating
+      // down would leave the backing store a device pixel short of the
+      // container, offsetting the ctx transform's scale from reality.
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       this.canvasSizeRef = { w: width, h: height, dpr };
@@ -337,10 +314,7 @@ export class CanvasRenderer {
 
     const effPx = CELL_SIZE * zoom * dpr;
 
-    // Thresholds are in effective pixels per cell
-    const MINIMAL_RENDERING_THRESHOLD = 5; // below this: minimal cached chunks
-    const FULL_QUALITY_THRESHOLD = 20; // above this: per-cell rendering
-
+    // Thresholds are in effective pixels per cell (module-level constants)
     const LOD =
       effPx < MINIMAL_RENDERING_THRESHOLD
         ? 2
@@ -378,19 +352,14 @@ export class CanvasRenderer {
           const flagForCell = flaggedCellsRef.current.get(flagKey);
           const isFlagged = flagForCell !== undefined;
 
-          const cellData = cellDataRaw
-            ? { ...cellDataRaw, isFlagged: isFlagged || cellDataRaw.isFlagged }
-            : { isMine: false, adjacentMines: 0, isFlagged };
-
-          const isRevealedForRender = isRevealedState && !isFlagged;
-
           this.renderCell(
             ctx,
             screenX,
             screenY,
             CELL_SIZE,
-            cellData,
-            isRevealedForRender,
+            cellDataRaw,
+            isFlagged,
+            isRevealedState,
             getNumberColor,
             LOD
           );
@@ -447,6 +416,16 @@ export class CanvasRenderer {
 
     const refs = { revealedCellsRef, flaggedCellsRef, getNumberColor };
 
+    // Snap each tile's destination rect to whole device pixels. Adjacent
+    // chunk tiles share a boundary computed from the same viewRef/zoom
+    // values, but the browser rasterizes each drawImage call independently;
+    // a fractional-device-pixel edge lets anti-aliased coverage on that
+    // shared seam drift a hair between frames as zoom changes continuously,
+    // which reads as the world "jiggling". Rounding to the current
+    // dpr*zoom scale keeps every tile edge pixel-exact and stable.
+    const scale = dpr * zoom;
+    const snapToDevicePixel = (v) => Math.round(v * scale) / scale;
+
     for (let cy = startCY; cy <= endCY; cy++) {
       for (let cx = startCX; cx <= endCX; cx++) {
         const key = `${cx},${cy}`;
@@ -461,8 +440,12 @@ export class CanvasRenderer {
           this._touch(key);
         }
 
-        const chunkScreenX = cx * CHUNK * CELL_SIZE - viewRef.current.x;
-        const chunkScreenY = cy * CHUNK * CELL_SIZE - viewRef.current.y;
+        const chunkScreenX = snapToDevicePixel(
+          cx * CHUNK * CELL_SIZE - viewRef.current.x
+        );
+        const chunkScreenY = snapToDevicePixel(
+          cy * CHUNK * CELL_SIZE - viewRef.current.y
+        );
         ctx.drawImage(
           entry.canvas,
           0,
