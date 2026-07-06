@@ -339,6 +339,8 @@ func (s *Server) handleProfileUpdate(w http.ResponseWriter, r *http.Request) {
 		s.lbDirty = true
 	}
 
+	s.walLogPlayerLocked(pid, "")
+
 	resp := profileUpdateResp{
 		OK:       true,
 		Name:     s.playerNames[pid],

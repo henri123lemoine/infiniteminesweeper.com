@@ -262,6 +262,7 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 			s.nameToPlayerID[chosenName] = playerID
 			s.playerFlags[playerID] = join.FlagID
 			s.scores[playerID] = 0 // New players always start with a score of 0
+			s.walLogPlayerLocked(playerID, sessionToken)
 			log.Printf("New player identity created: ID=%d, Name=%s", playerID, chosenName)
 		}
 	} else {
@@ -287,6 +288,9 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 		if s.playerFlags[playerID] != join.FlagID {
 			s.playerFlags[playerID] = join.FlagID
 			s.lbDirty = true
+		}
+		if errorMsg == "" {
+			s.walLogPlayerLocked(playerID, "")
 		}
 	}
 
@@ -421,6 +425,10 @@ func (s *Server) handleUpdateProfile(player *Player, update *pb.UpdateProfile) {
 		s.playerFlags[playerID] = update.FlagID
 		player.FlagID = update.FlagID
 		s.lbDirty = true
+	}
+
+	if errorMsg == "" {
+		s.walLogPlayerLocked(playerID, "")
 	}
 
 	// Send response

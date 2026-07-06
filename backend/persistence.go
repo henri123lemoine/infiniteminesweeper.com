@@ -56,9 +56,20 @@ const (
 // WAL entry types
 type WALEntry struct {
 	Timestamp time.Time `json:"timestamp"`
-	Type      string    `json:"type"` // "reveal", "flag", or "score_update"
+	Type      string    `json:"type"` // "reveal", "flag", "score_update", or "player"
 	Data      []byte    `json:"data"` // JSON encoded data
 	Sequence  uint64    `json:"sequence"`
+}
+
+// walPlayerData persists identity changes (join, rename, flag change) so they
+// survive a crash between snapshots. Without it, a crash loses every identity
+// created since the last snapshot: scores replay from the WAL but names and
+// session tokens vanish.
+type walPlayerData struct {
+	PlayerID     uint32 `json:"player_id"`
+	Name         string `json:"name"`
+	FlagID       uint32 `json:"flag_id"`
+	SessionToken string `json:"session_token,omitempty"`
 }
 
 // snapshotData is what actually gets serialized. Gob can handle maps with
@@ -91,6 +102,18 @@ func (s *Server) initAWS() error {
 
 	log.Printf("Using S3 bucket: %s", s.bucketName)
 	return nil
+}
+
+// walLogPlayerLocked records the player's current identity in the WAL.
+// Caller must hold stateMu. Pass the session token only when it was just
+// created; existing tokens are already persisted.
+func (s *Server) walLogPlayerLocked(playerID uint32, sessionToken string) {
+	s.writeWALEntry("player", walPlayerData{
+		PlayerID:     playerID,
+		Name:         s.playerNames[playerID],
+		FlagID:       s.playerFlags[playerID],
+		SessionToken: sessionToken,
+	})
 }
 
 func (s *Server) writeWALEntry(entryType string, data interface{}) {
@@ -411,6 +434,14 @@ func (s *Server) replayWAL() error {
 				continue
 			}
 			s.replayScoreUpdate(scoreData.PlayerID, scoreData.Score)
+
+		case "player":
+			var playerData walPlayerData
+			if err := json.Unmarshal(entry.Data, &playerData); err != nil {
+				log.Printf("[wal] failed to unmarshal player: %v", err)
+				continue
+			}
+			s.replayPlayer(playerData)
 		}
 
 		// Update WAL sequence number
@@ -455,6 +486,26 @@ func (s *Server) replayScoreUpdate(playerID uint32, score int32) {
 	defer s.stateMu.Unlock()
 
 	s.scores[playerID] = score
+}
+
+func (s *Server) replayPlayer(d walPlayerData) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	if prev, ok := s.playerNames[d.PlayerID]; ok && prev != "" && prev != d.Name {
+		delete(s.nameToPlayerID, prev)
+	}
+	s.playerNames[d.PlayerID] = d.Name
+	if d.Name != "" {
+		s.nameToPlayerID[d.Name] = d.PlayerID
+	}
+	s.playerFlags[d.PlayerID] = d.FlagID
+	if d.SessionToken != "" {
+		s.sessionTokens[d.SessionToken] = d.PlayerID
+	}
+	if d.PlayerID >= s.nextPlayerID {
+		s.nextPlayerID = d.PlayerID + 1
+	}
 }
 
 func (s *Server) initPersistence() {
