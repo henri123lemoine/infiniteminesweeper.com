@@ -347,38 +347,90 @@ export const useGameState = () => {
     [ws, connected]
   );
 
-  const countAdjacentMines = useCallback((cx, cy, cell) => {
-    const x = cell % CHUNK;
-    const y = Math.floor(cell / CHUNK);
-    const worldX = cx * CHUNK + x;
-    const worldY = cy * CHUNK + y;
+  // Per-chunk mine bitmaps: one BigInt hashing pass per chunk, then every
+  // mine/adjacency query is a typed-array read. Dense (merged-world) chunk
+  // syncs were spending hundreds of ms/viewport in per-neighbor BigInt math.
+  const mineMapCache = useRef(new Map()); // chunkKey -> Uint8Array(4096) of 0/1
 
-    let count = 0;
-    let hasIncompleteData = false;
-
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0) continue;
-        const {
-          chunkX: ncx,
-          chunkY: ncy,
-          cell: ncell,
-        } = worldToChunk(worldX + dx, worldY + dy);
-        const chunkKey = `${ncx},${ncy}`;
-        const nSeed = seedCache.current.get(chunkKey);
-        const nDensity = densityCache.current.get(chunkKey);
-
-        if (!nSeed || nDensity == null) {
-          hasIncompleteData = true;
-          continue;
-        }
-        if (isMineWith(nSeed, nDensity, ncell)) count++;
-      }
-    }
-
-    // Return -1 to indicate incomplete data, which the caller can render as "?"
-    return hasIncompleteData ? -1 : count;
+  const getMineMap = useCallback((chunkKey) => {
+    let mm = mineMapCache.current.get(chunkKey);
+    if (mm) return mm;
+    const seed = seedCache.current.get(chunkKey);
+    const d = densityCache.current.get(chunkKey);
+    if (seed == null || d == null) return null;
+    mm = new Uint8Array(CHUNK * CHUNK);
+    for (let i = 0; i < mm.length; i++) mm[i] = isMineWith(seed, d, i) ? 1 : 0;
+    mineMapCache.current.set(chunkKey, mm);
+    return mm;
   }, []);
+
+  // null when the chunk's seed isn't cached yet
+  const isMineAt = useCallback(
+    (chunkKey, cell) => {
+      const mm = getMineMap(chunkKey);
+      return mm ? mm[cell] === 1 : null;
+    },
+    [getMineMap]
+  );
+
+  const countAdjacentMines = useCallback(
+    (cx, cy, cell) => {
+      const x = cell % CHUNK;
+      const y = (cell / CHUNK) | 0;
+
+      // Interior cells (94%): all neighbors in this chunk
+      if (x > 0 && x < CHUNK - 1 && y > 0 && y < CHUNK - 1) {
+        const mm = getMineMap(`${cx},${cy}`);
+        if (!mm) return -1;
+        const i = y * CHUNK + x;
+        return (
+          mm[i - CHUNK - 1] +
+          mm[i - CHUNK] +
+          mm[i - CHUNK + 1] +
+          mm[i - 1] +
+          mm[i + 1] +
+          mm[i + CHUNK - 1] +
+          mm[i + CHUNK] +
+          mm[i + CHUNK + 1]
+        );
+      }
+
+      let count = 0;
+      let hasIncompleteData = false;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          let nx = x + dx;
+          let ny = y + dy;
+          let ncx = cx;
+          let ncy = cy;
+          if (nx < 0) {
+            nx += CHUNK;
+            ncx--;
+          } else if (nx >= CHUNK) {
+            nx -= CHUNK;
+            ncx++;
+          }
+          if (ny < 0) {
+            ny += CHUNK;
+            ncy--;
+          } else if (ny >= CHUNK) {
+            ny -= CHUNK;
+            ncy++;
+          }
+          const mm = getMineMap(`${ncx},${ncy}`);
+          if (!mm) {
+            hasIncompleteData = true;
+            continue;
+          }
+          count += mm[ny * CHUNK + nx];
+        }
+      }
+      // -1 = incomplete data, which the caller can render as "?"
+      return hasIncompleteData ? -1 : count;
+    },
+    [getMineMap]
+  );
 
   // Recompute any pending-adjacency cells in the 3x3 chunk neighborhood of
   // (cx, cy) — called when a new seed/density arrives for that chunk.
@@ -395,9 +447,11 @@ export const useGameState = () => {
           const seed = seedCache.current.get(chunkKey);
           const d = densityCache.current.get(chunkKey);
           if (seed == null || d == null) continue;
+          const mm = getMineMap(chunkKey);
+          if (!mm) continue;
           let chunkChanged = false;
           for (const cell of Array.from(set)) {
-            const isMineVal = !!isMineWith(seed, d, cell);
+            const isMineVal = mm[cell] === 1;
             const adjacent = isMineVal ? 0 : countAdjacentMines(ncx, ncy, cell);
             if (adjacent === -1) continue; // some neighbor seed still missing
             const cellKey = `${chunkKey},${cell}`;
@@ -421,7 +475,7 @@ export const useGameState = () => {
       }
       return changed;
     },
-    [countAdjacentMines, bumpChunkVersion]
+    [countAdjacentMines, bumpChunkVersion, getMineMap]
   );
 
   const applyChunkSync = useCallback(
@@ -463,6 +517,7 @@ export const useGameState = () => {
         reveals.byteOffset,
         reveals.byteLength
       );
+      const mm = getMineMap(chunkKey);
       for (let i = 0; i < CHUNK * CHUNK; i++) {
         const wordIndex = Math.floor(i / CHUNK);
         const bitIndex = i % CHUNK;
@@ -472,8 +527,7 @@ export const useGameState = () => {
           0n
         ) {
           const cellKey = `${X},${Y},${i}`;
-          const d = densityCache.current.get(chunkKey);
-          const isMineVal = d != null ? isMineWith(seedBigInt, d, i) : false;
+          const isMineVal = mm ? mm[i] === 1 : false;
           const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, i);
           if (adjacent === -1) registerPendingAdjacency(chunkKey, i);
           revealedCellsRef.current.set(cellKey, {
@@ -497,6 +551,7 @@ export const useGameState = () => {
       requestAdjacentSeeds,
       registerPendingAdjacency,
       recomputeAdjacencyAround,
+      getMineMap,
     ]
   );
 
@@ -724,12 +779,10 @@ export const useGameState = () => {
 
       if (isRightClick) {
         const myFlagId = playerFlagsRef.current.get(username);
-        const seed = seedCache.current.get(chunkKey);
-        const d = densityCache.current.get(chunkKey);
         // Always send flag placement requests to the server
         didLocalMutation = true;
         // If we know the seed and this is NOT a mine, suppress optimistic flag but still send the request.
-        if (seed && !isMineWith(seed, d, cell)) {
+        if (isMineAt(chunkKey, cell) === false) {
           // Don't set optimistic flag for non-mines
         } else if (myFlagId !== undefined) {
           // Only optimistic-flag when unknown or when it is actually a mine
@@ -762,12 +815,11 @@ export const useGameState = () => {
             continue;
           visited.add(cellKey);
 
-          const seed = seedCache.current.get(chunkKey);
-          const d = densityCache.current.get(chunkKey);
-          if (!seed || d == null) continue;
+          const mm = getMineMap(chunkKey);
+          if (!mm) continue;
 
           // reveal
-          const isM = isMineWith(seed, d, cidx);
+          const isM = mm[cidx] === 1;
           const adj = isM ? 0 : countAdjacentMines(cx, cy, cidx);
           revealedCellsRef.current.set(cellKey, {
             isMine: isM,
@@ -787,10 +839,9 @@ export const useGameState = () => {
         }
       } else {
         // Standard reveal
-        const seed = seedCache.current.get(chunkKey);
-        const d = densityCache.current.get(chunkKey);
-        if (seed && d != null) {
-          if (isMineWith(seed, d, cell)) {
+        const mine = isMineAt(chunkKey, cell);
+        if (mine !== null) {
+          if (mine) {
             revealedCellsRef.current.set(cellKey, {
               isMine: true,
               adjacentMines: 0,
@@ -835,7 +886,16 @@ export const useGameState = () => {
         );
       }
     },
-    [ws, connected, countAdjacentMines, countAdjacentFlags, canChord, username]
+    [
+      ws,
+      connected,
+      countAdjacentMines,
+      countAdjacentFlags,
+      canChord,
+      username,
+      isMineAt,
+      getMineMap,
+    ]
   );
 
   const connectWebSocket = useCallback(() => {
@@ -1219,15 +1279,13 @@ export const useGameState = () => {
           if (outcomeType === "revealedCells") {
             // guard against missing or non-array cells
             const cells = Array.isArray(outcome.cells) ? outcome.cells : [];
+            const mm = getMineMap(primaryChunkKey);
             for (const cell of cells) {
               const cellKey = `${primaryChunkKey},${cell}`;
-              const seed = seedCache.current.get(primaryChunkKey);
-              const d = densityCache.current.get(primaryChunkKey);
               const prevCell = revealedCellsRef.current.get(cellKey);
-              const isMineVal =
-                seed && d != null
-                  ? isMineWith(seed, d, cell)
-                  : (prevCell?.isMine ?? false);
+              const isMineVal = mm
+                ? mm[cell] === 1
+                : (prevCell?.isMine ?? false);
               let adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
               if (adjacent === -1 && prevCell && prevCell.adjacentMines >= 0) {
                 adjacent = prevCell.adjacentMines;
@@ -1323,19 +1381,17 @@ export const useGameState = () => {
         if (updateType === "revealedCells") {
           // guard against missing or non-array cells
           const cells = Array.isArray(updateData.cells) ? updateData.cells : [];
+          const mm = getMineMap(chunkKey);
           for (const cell of cells) {
             const cellKey = `${chunkKey},${cell}`;
             const lX = cell % CHUNK,
               lY = Math.floor(cell / CHUNK);
             const worldKey = `${X * CHUNK + lX},${Y * CHUNK + lY}`;
 
-            const seed = seedCache.current.get(chunkKey);
-            const d = densityCache.current.get(chunkKey);
             const prevCell = revealedCellsRef.current.get(cellKey);
-            const isMineVal =
-              seed && d != null
-                ? isMineWith(seed, d, cell)
-                : (prevCell?.isMine ?? false);
+            const isMineVal = mm
+              ? mm[cell] === 1
+              : (prevCell?.isMine ?? false);
             let adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
             // Never downgrade an already-known number to "incomplete"
             if (adjacent === -1 && prevCell && prevCell.adjacentMines >= 0) {
@@ -1467,6 +1523,7 @@ export const useGameState = () => {
     registerPendingAdjacency,
     recomputeAdjacencyAround,
     pushHintPopup,
+    getMineMap,
   ]);
 
   // Join the game by sending a Join message (transitions from SPECTATOR to PLAYER)
