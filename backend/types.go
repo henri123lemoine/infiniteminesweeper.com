@@ -27,6 +27,50 @@ type Flag struct {
 	Owner uint32
 }
 
+// FlagEntry packs one placed flag into 8 bytes. A chunk's flags live in a
+// cell-sorted slice (~9B/flag resident vs ~22B as a map entry) with
+// binary-search lookups and cache-friendly in-order iteration.
+type FlagEntry struct {
+	Cell   uint16
+	FlagID uint16
+	Owner  uint32
+}
+
+type chunkFlags []FlagEntry
+
+func (cf chunkFlags) search(cell uint32) (int, bool) {
+	lo, hi := 0, len(cf)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if uint32(cf[mid].Cell) < cell {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo, lo < len(cf) && uint32(cf[lo].Cell) == cell
+}
+
+func (cf chunkFlags) get(cell uint32) (Flag, bool) {
+	if i, ok := cf.search(cell); ok {
+		return Flag{FlagID: uint32(cf[i].FlagID), Owner: cf[i].Owner}, true
+	}
+	return Flag{}, false
+}
+
+func (cf chunkFlags) set(cell uint32, f Flag) chunkFlags {
+	e := FlagEntry{Cell: uint16(cell), FlagID: uint16(f.FlagID), Owner: f.Owner}
+	i, ok := cf.search(cell)
+	if ok {
+		cf[i] = e
+		return cf
+	}
+	cf = append(cf, FlagEntry{})
+	copy(cf[i+1:], cf[i:])
+	cf[i] = e
+	return cf
+}
+
 type PlayerView struct {
 	Chunk ChunkID
 	Cell  uint32

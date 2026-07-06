@@ -594,10 +594,7 @@ func chebyshevChunkDistance(chunkID ChunkID) uint32 {
 }
 
 func (s *Server) setCellFlagged(chunkID ChunkID, cell uint32, playerID uint32, flagID uint32, collector *map[ChunkID][]*pb.FlagPlacement) {
-	if s.flags[chunkID] == nil {
-		s.flags[chunkID] = make(map[uint32]Flag)
-	}
-	s.flags[chunkID][cell] = Flag{FlagID: flagID, Owner: playerID}
+	s.flags[chunkID] = s.flags[chunkID].set(cell, Flag{FlagID: flagID, Owner: playerID})
 
 	if (*collector)[chunkID] == nil {
 		(*collector)[chunkID] = make([]*pb.FlagPlacement, 0)
@@ -630,12 +627,8 @@ func (s *Server) isCellRevealed(chunkID ChunkID, cell uint32) bool {
 }
 
 func (s *Server) isCellFlagged(chunkID ChunkID, cell uint32) bool {
-	chunkFlags, ok := s.flags[chunkID]
-	if !ok {
-		return false
-	}
-	_, exists := chunkFlags[cell]
-	return exists
+	_, ok := s.flags[chunkID].get(cell)
+	return ok
 }
 
 func (s *Server) countAdjacentFlags(chunkID ChunkID, cell uint32) int {

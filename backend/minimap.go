@@ -209,9 +209,11 @@ func (s *Server) computeFullTileData(cid ChunkID) []byte {
 	flags := s.flags[cid]
 	mines := s.getMineBitmap(cid)
 	data := make([]byte, ChunkSize*ChunkSize)
+	fi := 0 // flags are cell-sorted; walk them in step with the cell loop
 	for i := uint32(0); i < ChunkSize*ChunkSize; i++ {
-		if fl, ok := flags[i]; ok {
-			data[i] = byte(mmFlagBase + minimapFlagBucket(fl.FlagID))
+		if fi < len(flags) && uint32(flags[fi].Cell) == i {
+			data[i] = byte(mmFlagBase + minimapFlagBucket(uint32(flags[fi].FlagID)))
+			fi++
 			continue
 		}
 		if reveals == nil || reveals[i>>6]&(1<<(i&63)) == 0 {

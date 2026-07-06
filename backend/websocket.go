@@ -515,7 +515,7 @@ func (s *Server) handleCellOwnerRequest(playerID uint32, req *pb.CellOwnerReques
 	chunkID := ChunkID{X: req.ChunkId.X, Y: req.ChunkId.Y}
 
 	s.stateMu.RLock()
-	flag, ok := s.flags[chunkID][req.Cell]
+	flag, ok := s.flags[chunkID].get(req.Cell)
 	var name string
 	if ok && flag.Owner != 0 {
 		name = s.playerNames[flag.Owner]
@@ -843,12 +843,13 @@ func (s *Server) getChunkSyncEntry(chunkID ChunkID) *chunkSyncEntry {
 	// revealed on the wire for compression) + group by flag ID. Cells are
 	// always in [0, 4096) so the old bounds check was dead.
 	groups := make(map[uint32]*pb.RevealedCells)
-	for cell, fl := range flagsMap {
+	for _, fe := range flagsMap {
+		cell := uint32(fe.Cell)
 		bits[cell/ChunkSize] |= 1 << (cell % ChunkSize)
-		g := groups[fl.FlagID]
+		g := groups[uint32(fe.FlagID)]
 		if g == nil {
 			g = &pb.RevealedCells{Cells: make([]uint32, 0, len(flagsMap))}
-			groups[fl.FlagID] = g
+			groups[uint32(fe.FlagID)] = g
 		}
 		g.Cells = append(g.Cells, cell)
 	}

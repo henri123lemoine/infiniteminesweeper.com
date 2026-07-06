@@ -12,6 +12,7 @@ import (
 	"math/bits"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -75,8 +76,11 @@ type walPlayerData struct {
 // snapshotData is what actually gets serialized. Gob can handle maps with
 // struct keys, so we keep the exact types.
 type snapshotData struct {
-	Chunks       map[ChunkID]*ChunkBits
+	Chunks map[ChunkID]*ChunkBits
+	// Flags is the legacy map encoding, read from pre-2026-07 snapshots and
+	// never written anymore; FlagsV2 is the compact cell-sorted encoding.
 	Flags        map[ChunkID]map[uint32]Flag
+	FlagsV2      map[ChunkID][]FlagEntry
 	Scores       map[uint32]int32
 	Streaks      map[uint32]uint32
 	PlayerNames  map[uint32]string
@@ -494,10 +498,7 @@ func (s *Server) replayFlag(chunkID ChunkID, cell uint32, flagID uint32, owner u
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
-	if s.flags[chunkID] == nil {
-		s.flags[chunkID] = make(map[uint32]Flag)
-	}
-	s.flags[chunkID][cell] = Flag{FlagID: flagID, Owner: owner}
+	s.flags[chunkID] = s.flags[chunkID].set(cell, Flag{FlagID: flagID, Owner: owner})
 }
 
 func (s *Server) replayScoreUpdate(playerID uint32, score int32, streak uint32) {
@@ -632,11 +633,9 @@ func (s *Server) captureSnapshotData() snapshotData {
 		copied := *cb
 		chunks[cid] = &copied
 	}
-	flags := make(map[ChunkID]map[uint32]Flag, len(s.flags))
+	flags := make(map[ChunkID][]FlagEntry, len(s.flags))
 	for cid, fm := range s.flags {
-		inner := make(map[uint32]Flag, len(fm))
-		maps.Copy(inner, fm)
-		flags[cid] = inner
+		flags[cid] = slices.Clone(fm)
 	}
 	scores := make(map[uint32]int32, len(s.scores))
 	maps.Copy(scores, s.scores)
@@ -668,7 +667,7 @@ func (s *Server) captureSnapshotData() snapshotData {
 
 	return snapshotData{
 		Chunks:               chunks,
-		Flags:                flags,
+		FlagsV2:              flags,
 		Scores:               scores,
 		Streaks:              streaks,
 		PlayerNames:          playerNames,
@@ -757,10 +756,25 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 	defer s.stateMu.Unlock()
 
 	s.chunks = data.Chunks
-	if data.Flags != nil {
-		s.flags = data.Flags
+	flagChunks := len(data.FlagsV2)
+	if len(data.Flags) > flagChunks {
+		flagChunks = len(data.Flags)
+	}
+	s.flags = make(map[ChunkID]chunkFlags, flagChunks)
+	if data.FlagsV2 != nil {
+		for cid, entries := range data.FlagsV2 {
+			cf := chunkFlags(entries)
+			slices.SortFunc(cf, func(a, b FlagEntry) int { return int(a.Cell) - int(b.Cell) })
+			s.flags[cid] = cf
+		}
 	} else {
-		s.flags = make(map[ChunkID]map[uint32]Flag)
+		for cid, fm := range data.Flags {
+			cf := make(chunkFlags, 0, len(fm))
+			for cell, f := range fm {
+				cf = cf.set(cell, f)
+			}
+			s.flags[cid] = cf
+		}
 	}
 	s.scores = data.Scores
 	if data.Streaks != nil {

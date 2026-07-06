@@ -32,9 +32,9 @@ type Server struct {
 	stateMu sync.RWMutex
 
 	// World state - just what cells are revealed and by whom
-	chunks map[ChunkID]*ChunkBits      // Which cells are revealed (bitset)
-	flags  map[ChunkID]map[uint32]Flag // cellIndex -> Flag (with id)
-	scores map[uint32]int32            // playerID -> score
+	chunks map[ChunkID]*ChunkBits // Which cells are revealed (bitset)
+	flags  map[ChunkID]chunkFlags // cell-sorted compact flag entries
+	scores map[uint32]int32       // playerID -> score
 	// Consecutive mistake-free actions; feeds the flawless-streak bonus and
 	// resets on any wrong flag or mine hit.
 	streaks map[uint32]uint32
@@ -129,7 +129,7 @@ func NewServer() *Server {
 	return &Server{
 		secret:               []byte("minesweeper-secret-key"),
 		chunks:               make(map[ChunkID]*ChunkBits),
-		flags:                make(map[ChunkID]map[uint32]Flag),
+		flags:                make(map[ChunkID]chunkFlags),
 		scores:               make(map[uint32]int32),
 		streaks:              make(map[uint32]uint32),
 		subs:                 make(map[ChunkID]map[uint32]struct{}),
