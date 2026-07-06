@@ -482,6 +482,26 @@ export class CanvasRenderer {
     const frameStart = performance.now();
     let rerenderNeeded = false;
 
+    // A bucket's static cap can be smaller than one screenful at the low
+    // end of the zoom range it serves (a bucket serves down to half its
+    // native px-per-cell, where 4x more chunks fit on screen). If eviction
+    // ever removes a chunk that is still visible, it gets re-rasterized the
+    // next frame at the cost of evicting another visible chunk — the whole
+    // screen flashes in waves forever. Floor the cap at what this frame
+    // actually needs so eviction only reclaims off-screen chunks.
+    let neededInView = 0;
+    for (let cy = startCY; cy <= endCY; cy++) {
+      for (let cx = startCX; cx <= endCX; cx++) {
+        if ((chunkVersionRef?.current.get(`${cx},${cy}`) || 0) > 0) {
+          neededInView++;
+        }
+      }
+    }
+    const cacheCap = Math.max(
+      RASTER_CACHE_CAP[bucket],
+      Math.ceil(neededInView * 1.25) + 4
+    );
+
     // Snap each tile's destination rect to whole device pixels. Adjacent
     // chunk tiles share a boundary computed from the same viewRef/zoom
     // values, but the browser rasterizes each drawImage call independently;
@@ -517,7 +537,7 @@ export class CanvasRenderer {
                 version,
               };
               cache.set(key, entry);
-              this._evictIfNeeded(cache, RASTER_CACHE_CAP[bucket]);
+              this._evictIfNeeded(cache, cacheCap);
             } else {
               // Over budget: show the stale raster (or the placeholder) now
               // and finish rasterizing on a following frame.
