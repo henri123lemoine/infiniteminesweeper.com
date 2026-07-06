@@ -288,6 +288,20 @@ export const useGameState = () => {
   }, []);
   const playerFlagsRef = useRef(new Map());
   const optimisticActions = useRef(new Map());
+  // Revealed cells whose adjacency was computed before all neighbor seeds
+  // arrived (adjacentMines === -1). Keyed by chunkKey -> Set(cellIdx); they are
+  // recomputed as soon as a seed for any adjacent chunk shows up, otherwise
+  // they would render as blank cells forever.
+  const pendingAdjacencyRef = useRef(new Map());
+
+  const registerPendingAdjacency = useCallback((chunkKey, cell) => {
+    let set = pendingAdjacencyRef.current.get(chunkKey);
+    if (!set) {
+      set = new Set();
+      pendingAdjacencyRef.current.set(chunkKey, set);
+    }
+    set.add(cell);
+  }, []);
 
   // Request seeds and densities for adjacent chunks (pre-emptive caching)
   const requestAdjacentSeeds = useCallback(
@@ -362,6 +376,50 @@ export const useGameState = () => {
     return hasIncompleteData ? -1 : count;
   }, []);
 
+  // Recompute any pending-adjacency cells in the 3x3 chunk neighborhood of
+  // (cx, cy) — called when a new seed/density arrives for that chunk.
+  const recomputeAdjacencyAround = useCallback(
+    (cx, cy) => {
+      let changed = false;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const ncx = cx + dx;
+          const ncy = cy + dy;
+          const chunkKey = `${ncx},${ncy}`;
+          const set = pendingAdjacencyRef.current.get(chunkKey);
+          if (!set || set.size === 0) continue;
+          const seed = seedCache.current.get(chunkKey);
+          const d = densityCache.current.get(chunkKey);
+          if (seed == null || d == null) continue;
+          let chunkChanged = false;
+          for (const cell of Array.from(set)) {
+            const isMineVal = !!isMineWith(seed, d, cell);
+            const adjacent = isMineVal ? 0 : countAdjacentMines(ncx, ncy, cell);
+            if (adjacent === -1) continue; // some neighbor seed still missing
+            const cellKey = `${chunkKey},${cell}`;
+            const prev = revealedCellsRef.current.get(cellKey);
+            if (prev) {
+              revealedCellsRef.current.set(cellKey, {
+                ...prev,
+                isMine: isMineVal,
+                adjacentMines: adjacent,
+              });
+              chunkChanged = true;
+            }
+            set.delete(cell);
+          }
+          if (set.size === 0) pendingAdjacencyRef.current.delete(chunkKey);
+          if (chunkChanged) {
+            bumpChunkVersion(ncx, ncy);
+            changed = true;
+          }
+        }
+      }
+      return changed;
+    },
+    [countAdjacentMines, bumpChunkVersion]
+  );
+
   const applyChunkSync = useCallback(
     (data) => {
       const { chunkId, seed, reveals, flagGroups: fgRaw, density } = data;
@@ -413,7 +471,7 @@ export const useGameState = () => {
           const d = densityCache.current.get(chunkKey);
           const isMineVal = d != null ? isMineWith(seedBigInt, d, i) : false;
           const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, i);
-          // Use -1 as a sentinel value for incomplete data (renders as "?")
+          if (adjacent === -1) registerPendingAdjacency(chunkKey, i);
           revealedCellsRef.current.set(cellKey, {
             isMine: isMineVal,
             adjacentMines: adjacent,
@@ -423,10 +481,19 @@ export const useGameState = () => {
       // Any change to this chunk's content should bump its version
       bumpChunkVersion(X, Y);
 
+      // This chunk's seed may complete the data neighbors were waiting on
+      recomputeAdjacencyAround(X, Y);
+
       // Pre-emptively request seeds for adjacent chunks to prevent cache misses
       requestAdjacentSeeds(X, Y);
     },
-    [countAdjacentMines, bumpChunkVersion, requestAdjacentSeeds]
+    [
+      countAdjacentMines,
+      bumpChunkVersion,
+      requestAdjacentSeeds,
+      registerPendingAdjacency,
+      recomputeAdjacencyAround,
+    ]
   );
 
   // Count flags around a (world-coord) cell
@@ -869,6 +936,7 @@ export const useGameState = () => {
       revealedCellsRef.current.clear();
       flaggedCellsRef.current.clear();
       playerFlagsRef.current.clear();
+      pendingAdjacencyRef.current.clear();
       // If server rejected the join (e.g., invalid or taken username),
       // reset username so the join dialog is shown again.
       if (!didJoinAck) {
@@ -1140,10 +1208,17 @@ export const useGameState = () => {
               const cellKey = `${primaryChunkKey},${cell}`;
               const seed = seedCache.current.get(primaryChunkKey);
               const d = densityCache.current.get(primaryChunkKey);
+              const prevCell = revealedCellsRef.current.get(cellKey);
               const isMineVal =
-                seed && d != null ? isMineWith(seed, d, cell) : false;
-              const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
-              // Store -1 for incomplete data to be rendered as "?"
+                seed && d != null
+                  ? isMineWith(seed, d, cell)
+                  : (prevCell?.isMine ?? false);
+              let adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
+              if (adjacent === -1 && prevCell && prevCell.adjacentMines >= 0) {
+                adjacent = prevCell.adjacentMines;
+              }
+              if (adjacent === -1)
+                registerPendingAdjacency(primaryChunkKey, cell);
               revealedCellsRef.current.set(cellKey, {
                 isMine: isMineVal,
                 adjacentMines: adjacent,
@@ -1212,6 +1287,18 @@ export const useGameState = () => {
         if (!updateType) return; // Or log an error
         const updateData = update[updateType];
 
+        // A reveal can spill into a chunk we've never seen (unbounded
+        // flood-fill). Ask for its seed so the cells get real numbers once
+        // the pending-adjacency recompute runs.
+        if (
+          !seedCache.current.has(chunkKey) &&
+          websocket.readyState === WebSocket.OPEN
+        ) {
+          websocket.send(
+            encodeMsg({ seedRequest: { chunkIds: [{ X, Y }] } })
+          );
+        }
+
         for (const [reqId, action] of optimisticActions.current.entries()) {
           if (action.has(chunkKey)) {
             action.delete(chunkKey);
@@ -1230,9 +1317,17 @@ export const useGameState = () => {
 
             const seed = seedCache.current.get(chunkKey);
             const d = densityCache.current.get(chunkKey);
+            const prevCell = revealedCellsRef.current.get(cellKey);
             const isMineVal =
-              seed && d != null ? isMineWith(seed, d, cell) : false;
-            const adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
+              seed && d != null
+                ? isMineWith(seed, d, cell)
+                : (prevCell?.isMine ?? false);
+            let adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
+            // Never downgrade an already-known number to "incomplete"
+            if (adjacent === -1 && prevCell && prevCell.adjacentMines >= 0) {
+              adjacent = prevCell.adjacentMines;
+            }
+            if (adjacent === -1) registerPendingAdjacency(chunkKey, cell);
 
             // Only clear a flag if this cell is NOT a mine. If it's a mine, keep (or later set) the flag.
             if (!isMineVal) {
@@ -1240,7 +1335,6 @@ export const useGameState = () => {
             }
 
             // Mark revealed; if it's currently flagged, carry that through for rendering suppression
-            // Store -1 for incomplete data to be rendered as "?"
             const isFlagged = flaggedCellsRef.current.has(worldKey);
             revealedCellsRef.current.set(cellKey, {
               isMine: isMineVal,
@@ -1269,6 +1363,7 @@ export const useGameState = () => {
       } else if (type === "seedResponse") {
         // Handle seed response for pre-emptive caching
         const seeds = Array.isArray(data.seeds) ? data.seeds : [];
+        let adjacencyChanged = false;
         for (const seedData of seeds) {
           if (seedData.chunkId && seedData.seed && seedData.density != null) {
             const { X, Y } = normalizeChunkId(seedData.chunkId);
@@ -1282,8 +1377,10 @@ export const useGameState = () => {
             ).getBigUint64(0, true);
             seedCache.current.set(chunkKey, seedBigInt);
             densityCache.current.set(chunkKey, seedData.density);
+            if (recomputeAdjacencyAround(X, Y)) adjacencyChanged = true;
           }
         }
+        if (adjacencyChanged) setTick((t) => t + 1);
       } else if (type === "leaderboard") {
         const entries = Array.isArray(data.entries) ? data.entries : [];
         // De-duplicate by name on the client defensively; keep the highest score
@@ -1309,7 +1406,11 @@ export const useGameState = () => {
     };
 
     return () => websocket.close();
-  }, [countAdjacentMines]);
+  }, [
+    countAdjacentMines,
+    registerPendingAdjacency,
+    recomputeAdjacencyAround,
+  ]);
 
   // Join the game by sending a Join message (transitions from SPECTATOR to PLAYER)
   const joinGame = useCallback(

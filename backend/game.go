@@ -365,7 +365,7 @@ func (s *Server) handleReveal(
 
 	// phase 3: broadcast while *no* lock is held, preventing dead-locks
 	if len(revealsToSend) > 0 || len(flagsToSend) > 0 {
-		s.broadcastUpdates(revealsToSend, flagsToSend)
+		s.broadcastUpdates(revealsToSend, flagsToSend, playerID)
 	}
 }
 
@@ -539,7 +539,12 @@ func (s *Server) sendRevealAck(playerID uint32, requestID uint64, ok bool, ack *
 	s.sendToPlayer(playerID, mustProto(&pb.Msg{Payload: &pb.Msg_RevealAck{RevealAck: ack}}))
 }
 
-func (s *Server) broadcastUpdates(reveals map[ChunkID]*pb.RevealedCells, flags map[ChunkID][]*pb.FlagPlacement) {
+// broadcastUpdates fans chunk updates out to subscribers. actorID (if nonzero)
+// always receives every touched chunk even without a subscription: flood-fills
+// are unbounded and routinely spill past the actor's viewport-based
+// subscription margin — without this, the actor's own reveal silently never
+// reaches them for those chunks.
+func (s *Server) broadcastUpdates(reveals map[ChunkID]*pb.RevealedCells, flags map[ChunkID][]*pb.FlagPlacement, actorID uint32) {
 	var wg sync.WaitGroup
 
 	for chunkID, cells := range reveals {
@@ -550,7 +555,7 @@ func (s *Server) broadcastUpdates(reveals map[ChunkID]*pb.RevealedCells, flags m
 				ChunkId: &pb.ChunkID{X: cid.X, Y: cid.Y},
 				Update:  &pb.ChunkUpdateBroadcast_RevealedCells{RevealedCells: c},
 			}}}
-			s.broadcastToChunkSubs(cid, mustProto(msg))
+			s.broadcastToChunkSubs(cid, mustProto(msg), actorID)
 		}(chunkID, cells)
 	}
 
@@ -563,7 +568,7 @@ func (s *Server) broadcastUpdates(reveals map[ChunkID]*pb.RevealedCells, flags m
 					ChunkId: &pb.ChunkID{X: cid.X, Y: cid.Y},
 					Update:  &pb.ChunkUpdateBroadcast_FlaggedCell{FlaggedCell: placement},
 				}}}
-				s.broadcastToChunkSubs(cid, mustProto(msg))
+				s.broadcastToChunkSubs(cid, mustProto(msg), actorID)
 			}(chunkID, p)
 		}
 	}
@@ -571,19 +576,20 @@ func (s *Server) broadcastUpdates(reveals map[ChunkID]*pb.RevealedCells, flags m
 	wg.Wait()
 }
 
-func (s *Server) broadcastToChunkSubs(chunkID ChunkID, payload []byte) {
+func (s *Server) broadcastToChunkSubs(chunkID ChunkID, payload []byte, alwaysInclude uint32) {
 	s.stateMu.RLock()
-	subscribers, ok := s.subs[chunkID]
-	if !ok || len(subscribers) == 0 {
-		s.stateMu.RUnlock()
-		return
-	}
-
-	subList := make([]uint32, 0, len(subscribers))
+	subscribers := s.subs[chunkID]
+	subList := make([]uint32, 0, len(subscribers)+1)
 	for pid := range subscribers {
 		subList = append(subList, pid)
 	}
 	s.stateMu.RUnlock()
+
+	if alwaysInclude != 0 {
+		if _, ok := subscribers[alwaysInclude]; !ok {
+			subList = append(subList, alwaysInclude)
+		}
+	}
 
 	for _, pid := range subList {
 		s.sendToPlayer(pid, payload)
