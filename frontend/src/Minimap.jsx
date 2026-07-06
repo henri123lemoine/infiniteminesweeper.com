@@ -14,6 +14,8 @@ export default function Minimap({
   containerRef,
   onOpenOverlay,
   mainViewMoveToken,
+  // Jump the main view to a world cell (double-click navigation)
+  onNavigate,
   // Common props
   updateMinimapSubscriptions,
   clearMinimapSubscriptionsFor,
@@ -422,6 +424,32 @@ export default function Minimap({
 
   const lastMmInteractionAtRef = lastInteractionRef;
 
+  const handleDoubleClick = useCallback(
+    (e) => {
+      if (!onNavigate) return;
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      let worldX, worldY;
+      if (mode === "hud") {
+        const cells = Math.max(
+          CHUNK / 2,
+          Math.min(CHUNK * 32, hudViewRef.current.cells)
+        );
+        const scale = MINIMAP_SIZE / cells;
+        worldX = Math.floor(hudViewRef.current.cx - cells / 2) + mx / scale;
+        worldY = Math.floor(hudViewRef.current.cy - cells / 2) + my / scale;
+      } else {
+        const { x, y, zoom: overlayZoom } = overlayViewRef.current;
+        worldX = x + mx / overlayZoom;
+        worldY = y + my / overlayZoom;
+      }
+      onNavigate(Math.floor(worldX), Math.floor(worldY));
+    },
+    [mode, onNavigate, MINIMAP_SIZE]
+  );
+
   // Initialize overlay view to center on user or world origin
   useEffect(() => {
     if (mode !== "overlay") return;
@@ -663,6 +691,8 @@ export default function Minimap({
         <canvas
           ref={canvasRef}
           style={{ width: "100%", height: "100%", cursor: "grab" }}
+          onDoubleClick={handleDoubleClick}
+          title="Double-click to travel"
           {...bind}
         />
         <button
@@ -719,8 +749,28 @@ export default function Minimap({
       <canvas
         ref={canvasRef}
         style={{ width: "100%", height: "100%" }}
+        onDoubleClick={handleDoubleClick}
         {...bind}
       />
+      {onNavigate && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 8,
+            left: "50%",
+            transform: "translateX(-50%)",
+            padding: "4px 10px",
+            background: "rgba(0,0,0,0.55)",
+            color: "#eee",
+            borderRadius: 4,
+            fontSize: 12,
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+          }}
+        >
+          Double-click to travel
+        </div>
+      )}
     </div>
   );
 }

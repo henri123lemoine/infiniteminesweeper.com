@@ -10,9 +10,156 @@ import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
 import { usePinchPanZoom } from "./hooks/usePinchPanZoom.js";
-import { initSprites, getFlagIds } from "./sprites/index.js";
+import { initSprites, getFlagIds, drawSprite } from "./sprites/index.js";
+import { CHAINS, achievementById } from "./achievements.js";
 
 const isEmbed = new URLSearchParams(window.location.search).has("embed");
+
+// Small pixel-art flag icon that only redraws when the flag actually changes
+// (the leaderboard used to redraw every canvas on every broadcast tick).
+// Sized up-front so it never renders at the default 300x150 canvas size, and
+// keyed on flagID so a flag change remounts + redraws.
+const FlagIcon = React.memo(function FlagIcon({ flagID, size = 20 }) {
+  const dpr = window.devicePixelRatio || 1;
+  const draw = useCallback(
+    (c) => {
+      if (!c) return;
+      initSprites().then(() => {
+        if (!c.isConnected) return;
+        const ctx = c.getContext("2d");
+        ctx.imageSmoothingEnabled = false;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, size, size);
+        drawSprite(ctx, flagID ?? 0, 0, 0, size, size);
+      });
+    },
+    [flagID, size, dpr]
+  );
+  return (
+    <canvas
+      key={`${flagID}-${size}`}
+      ref={draw}
+      width={Math.round(size * dpr)}
+      height={Math.round(size * dpr)}
+      style={{ width: size, height: size, imageRendering: "pixelated" }}
+    />
+  );
+});
+
+// Windowed list for the full leaderboard: renders only the ~40 rows in view
+// instead of thousands of DOM nodes redrawn on every 5s refresh. The list
+// NEVER moves on its own — "find me" scrolls once, on demand.
+const LB_ROW_H = 26;
+function VirtualLeaderboard({ rows, myName, formatFullScore, findMeToken }) {
+  const containerRef = useRef(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewH, setViewH] = useState(420);
+  const rafRef = useRef(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (el) setViewH(el.clientHeight || 420);
+  }, []);
+
+  const myIndex = useMemo(
+    () => (myName ? rows.findIndex((r) => r.name === myName) : -1),
+    [rows, myName]
+  );
+
+  // One-shot scroll to my row when the "Find me" button is pressed
+  useEffect(() => {
+    if (!findMeToken || myIndex < 0) return;
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTo({
+      top: Math.max(0, myIndex * LB_ROW_H - viewH / 2),
+      behavior: "smooth",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findMeToken]);
+
+  const onScroll = useCallback((e) => {
+    const top = e.currentTarget.scrollTop;
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      setScrollTop(top);
+    });
+  }, []);
+
+  const start = Math.max(0, Math.floor(scrollTop / LB_ROW_H) - 10);
+  const end = Math.min(
+    rows.length,
+    Math.ceil((scrollTop + viewH) / LB_ROW_H) + 10
+  );
+
+  return (
+    <div
+      ref={containerRef}
+      onScroll={onScroll}
+      style={{
+        height: "60vh",
+        overflowY: "auto",
+        WebkitOverflowScrolling: "touch",
+        scrollbarWidth: "thin",
+        position: "relative",
+      }}
+    >
+      <div style={{ height: rows.length * LB_ROW_H, position: "relative" }}>
+        {rows.slice(start, end).map((row, i) => {
+          const idx = start + i;
+          const isMe = myName && row.name === myName;
+          return (
+            <div
+              key={row.name}
+              className={isMe ? "lb-row lb-me" : "lb-row"}
+              style={{
+                position: "absolute",
+                top: idx * LB_ROW_H,
+                left: 0,
+                right: 8,
+                height: LB_ROW_H,
+                boxSizing: "border-box",
+              }}
+            >
+              <span className="lb-rank" style={{ width: 40 }}>
+                {idx + 1}
+              </span>
+              <FlagIcon flagID={row.flagID ?? 0} size={20} />
+              <span
+                className="lb-name"
+                style={{ fontWeight: isMe ? 600 : undefined }}
+              >
+                {row.name}
+              </span>
+              <span className="lb-score">{formatFullScore(row.score ?? 0)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const LeaderboardRow = React.memo(function LeaderboardRow({
+  rank,
+  name,
+  score,
+  flagID,
+  isMe,
+  formatted,
+}) {
+  return (
+    <li className={isMe ? "lb-row lb-me" : "lb-row"}>
+      <span className="lb-rank">{rank}</span>
+      <FlagIcon flagID={flagID} size={20} />
+      <span className="lb-name" style={{ fontWeight: isMe ? 600 : undefined }}>
+        {name}
+      </span>
+      <span className="lb-score">{formatted}</span>
+    </li>
+  );
+});
 
 function App() {
   const storedName = localStorage.getItem("username") || "";
@@ -23,8 +170,7 @@ function App() {
   const [fullLeaderboard, setFullLeaderboard] = useState(null);
   const [lbLoading, setLbLoading] = useState(false);
   const lbLoadingRef = useRef(false);
-  const [lbFollowMe, setLbFollowMe] = useState(true);
-  const myLbRowRef = useRef(null);
+  const [lbFindMeToken, setLbFindMeToken] = useState(0);
   const [validationError, setValidationError] = useState("");
   const [isRenameAttempt, setIsRenameAttempt] = useState(false);
 
@@ -62,6 +208,10 @@ function App() {
     handleVisibilityChange,
     serverSpawnRef,
     activePlayersRef,
+    advStats,
+    unlockedAdvIds,
+    unlockedFlagIds,
+    advToasts,
   } = useGameState();
 
   const canvasRef = useRef(null);
@@ -416,6 +566,15 @@ function App() {
     }
   }, [connected]);
 
+  // First ever join: surface the Help & Scoring panel once so new players
+  // learn the controls and scoring rules without hunting for them.
+  useEffect(() => {
+    if (connected && !localStorage.getItem("helpSeen")) {
+      localStorage.setItem("helpSeen", "1");
+      setHelpOpen(true);
+    }
+  }, [connected]);
+
   // Ensure overlay is shown when join fails
   useEffect(() => {
     if (joinError && !connected) {
@@ -559,6 +718,16 @@ function App() {
     [CELL_SIZE, scheduleViewUpdate]
   );
 
+  // Double-click navigation from any minimap
+  const navigateToWorld = useCallback(
+    (worldX, worldY) => {
+      userMovedRef.current = true;
+      centerCameraOnWorld(worldX, worldY);
+      bumpMainViewMove();
+    },
+    [centerCameraOnWorld, bumpMainViewMove]
+  );
+
   // On server-suggested spawn, center the camera once
   const lastAppliedSpawnRef = useRef(0);
   useEffect(() => {
@@ -698,16 +867,6 @@ function App() {
     }
   }, [showHomeOverlay, activeTab, fetchHomeLeaderboard]);
 
-  // Keep my row centered if "Follow me" is enabled
-  useEffect(() => {
-    if (!showHomeOverlay || activeTab !== "leaderboard") return;
-    if (!lbFollowMe) return;
-    const el = myLbRowRef.current;
-    if (el && typeof el.scrollIntoView === "function") {
-      el.scrollIntoView({ block: "center" });
-    }
-  }, [fullLeaderboard, showHomeOverlay, activeTab, lbFollowMe]);
-
   // No separate spectator connection needed - unified connection starts in spectator mode
 
   // Handle window resize
@@ -756,15 +915,19 @@ function App() {
     }
 
     if (connected) {
-      // For connected users: this is a rename request - wait for server response
+      if (trimmedName === username) {
+        // Nothing to change — just get back in the game.
+        setShowHomeOverlay(false);
+        return;
+      }
+      // Rename request - wait for server response before closing
       setIsRenameAttempt(true);
       updateProfile(trimmedName, Number(flagID));
-      // Don't close overlay yet - wait for updateAck response
     } else {
       // For new users: this is a join request - wait for server confirmation before hiding overlay
       joinGame(trimmedName, Number(flagID));
     }
-  }, [nameInput, flagID, connected, joinGame, updateProfile]);
+  }, [nameInput, flagID, connected, username, joinGame, updateProfile]);
 
   return (
     <div className={isEmbed ? "game-container embed" : "game-container"}>
@@ -851,20 +1014,16 @@ function App() {
             clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
             minimapTilesRef={minimapTilesRef}
             activePlayersRef={activePlayersRef}
+            onNavigate={(wx, wy) => {
+              navigateToWorld(wx, wy);
+              setShowMinimapOverlay(false);
+            }}
           />
         </div>
       )}
       {showHomeOverlay && (
         <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 20,
-          }}
+          className="home-backdrop"
           onMouseDown={(e) => {
             if (e.currentTarget === e.target) {
               e.preventDefault();
@@ -887,23 +1046,12 @@ function App() {
           }}
         >
           <div
-            style={{
-              background: "white",
-              padding: 20,
-              borderRadius: 8,
-              textAlign: "center",
-              maxWidth: 860,
-              width: "90vw",
-              height: "90vh",
-              overflow: "auto",
-              WebkitOverflowScrolling: "touch",
-              touchAction: "pan-y",
-            }}
+            className="home-modal"
             onMouseDown={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
           >
-            <h1 style={{ marginTop: 0 }}>Infinite Minesweeper</h1>
-            <p style={{ margin: "8px 0 16px", color: "#555" }}>
+            <h1 className="home-title">Infinite Minesweeper</h1>
+            <p className="home-subtitle">
               Discover an endless world together. You are currently spectating
               live explorers.
               {hotspotInfo && hotspotInfo.count > 0 && (
@@ -915,14 +1063,7 @@ function App() {
             </p>
 
             {/* Tabs */}
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                justifyContent: "center",
-                marginBottom: 16,
-              }}
-            >
+            <div className="home-tabs">
               {[
                 { k: "play", label: "Play" },
                 { k: "leaderboard", label: "Leaderboard" },
@@ -941,16 +1082,9 @@ function App() {
                       fetchHomeLeaderboard();
                     }
                   }}
-                  style={{
-                    padding: "6px 10px",
-                    borderRadius: 6,
-                    border:
-                      activeTab === t.k
-                        ? "2px solid #1976d2"
-                        : "1px solid #ccc",
-                    background: activeTab === t.k ? "#e3f2fd" : "#fafafa",
-                    cursor: "pointer",
-                  }}
+                  className={
+                    activeTab === t.k ? "home-tab active" : "home-tab"
+                  }
                 >
                   {t.label}
                 </button>
@@ -963,40 +1097,33 @@ function App() {
                   {connected ? "Change your name" : "Choose a name to join"}
                 </h3>
                 <input
+                  className="join-input"
                   value={nameInput}
                   onChange={(e) => setNameInput(e.target.value)}
-                  style={{
-                    padding: 8,
-                    marginBottom: 10,
-                    borderRadius: 4,
-                    border: "1px solid #ccc",
-                    width: "80%",
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleJoinGame();
                   }}
                   placeholder="Your name"
                   maxLength={20}
                   pattern="[A-Za-z0-9_-]{1,30}"
                   title="Use 1-30 characters: letters, numbers, underscores, or hyphens"
                 />
-                <button
-                  onClick={handleJoinGame}
-                  style={{
-                    padding: "10px 20px",
-                    backgroundColor: "#4CAF50",
-                    color: "white",
-                    border: "none",
-                    borderRadius: 4,
-                    cursor: "pointer",
-                    fontSize: 16,
-                  }}
-                >
-                  {connected ? "Update Name" : "Join Game"}
-                </button>
+                <div>
+                  <button className="join-button" onClick={handleJoinGame}>
+                    {connected
+                      ? (nameInput || "").trim() !== username
+                        ? "Rename & Play"
+                        : "Play"
+                      : "Join Game"}
+                  </button>
+                </div>
                 <div style={{ margin: "15px 0" }}>
                   <div style={{ marginBottom: "10px", fontWeight: "bold" }}>
                     Choose your flag:
                   </div>
                   <FlagSelector
                     value={flagID}
+                    unlockedFlagIds={unlockedFlagIds}
                     onChange={(id) => {
                       setFlagID(id);
                       localStorage.setItem("flagID", id);
@@ -1040,21 +1167,13 @@ function App() {
                         <>Players: {fullLeaderboard.length}</>
                       )}
                   </div>
-                  <label
-                    style={{
-                      fontSize: 12,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                    }}
+                  <button
+                    className="home-tab"
+                    style={{ fontSize: 12, padding: "3px 10px" }}
+                    onClick={() => setLbFindMeToken((t) => t + 1)}
                   >
-                    <input
-                      type="checkbox"
-                      checked={lbFollowMe}
-                      onChange={(e) => setLbFollowMe(e.target.checked)}
-                    />
-                    Follow me
-                  </label>
+                    Find me
+                  </button>
                 </div>
                 {lbLoading && fullLeaderboard == null && (
                   <p>Loading leaderboard…</p>
@@ -1065,71 +1184,16 @@ function App() {
                 {!lbLoading &&
                   Array.isArray(fullLeaderboard) &&
                   fullLeaderboard.length > 0 && (
-                    <ol
-                      style={{
-                        maxHeight: "60vh",
-                        overflow: "auto",
-                        paddingRight: 8,
-                        WebkitOverflowScrolling: "touch",
-                        scrollbarWidth: "thin",
-                      }}
-                    >
-                      {fullLeaderboard.map((row) => {
-                        const myName = (
-                          localStorage.getItem("username") ||
-                          username ||
-                          ""
-                        ).trim();
-                        const isMe = myName && row.name === myName;
-                        return (
-                          <li
-                            key={row.name}
-                            ref={isMe ? myLbRowRef : null}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                              padding: "2px 4px",
-                              borderRadius: 4,
-                              background: isMe ? "#fff8d5" : "transparent",
-                            }}
-                          >
-                            <canvas
-                              ref={(c) => {
-                                if (!c) return;
-                                const ctx = c.getContext("2d");
-                                const cssSize = 20;
-                                const dpr = window.devicePixelRatio || 1;
-                                c.width = Math.round(cssSize * dpr);
-                                c.height = Math.round(cssSize * dpr);
-                                c.style.width = `${cssSize}px`;
-                                c.style.height = `${cssSize}px`;
-                                ctx.imageSmoothingEnabled = false;
-                                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                                rendererRef.current.drawSprite(
-                                  ctx,
-                                  row.flagID ?? 0,
-                                  0,
-                                  0,
-                                  cssSize,
-                                  cssSize
-                                );
-                              }}
-                              style={{ imageRendering: "pixelated" }}
-                            />
-                            <span
-                              style={{
-                                flex: 1,
-                                fontWeight: isMe ? "600" : undefined,
-                              }}
-                            >
-                              {row.name}
-                            </span>
-                            <b>{formatFullScore(row.score ?? 0)}</b>
-                          </li>
-                        );
-                      })}
-                    </ol>
+                    <VirtualLeaderboard
+                      rows={fullLeaderboard}
+                      myName={(
+                        localStorage.getItem("username") ||
+                        username ||
+                        ""
+                      ).trim()}
+                      formatFullScore={formatFullScore}
+                      findMeToken={lbFindMeToken}
+                    />
                   )}
               </div>
             )}
@@ -1148,21 +1212,125 @@ function App() {
                   clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
                   minimapTilesRef={minimapTilesRef}
                   activePlayersRef={activePlayersRef}
+                  onNavigate={(wx, wy) => {
+                    navigateToWorld(wx, wy);
+                    if (connected) setShowHomeOverlay(false);
+                  }}
                 />
               </div>
             )}
 
             {activeTab === "advancements" && (
-              <div style={{ color: "#666" }}>
-                Coming soon: personal milestones, streaks, and discoveries.
+              <div>
+                {!connected && (
+                  <p style={{ color: "#666", marginTop: 0 }}>
+                    Join the game to start earning advancements.
+                  </p>
+                )}
+                <div className="adv-grid">
+                  {CHAINS.map((chain) => {
+                    const rewardUnlockCount = unlockedAdvIds.filter(
+                      (id) => achievementById.get(id)?.hasReward
+                    ).length;
+                    const statVal =
+                      chain.key === "collector"
+                        ? rewardUnlockCount
+                        : advStats
+                          ? Number(advStats[chain.stat]) || 0
+                          : 0;
+                    const unlockedCount = chain.levels.filter((l) =>
+                      unlockedAdvIds.includes(l.id)
+                    ).length;
+                    const next = chain.levels[unlockedCount] || null;
+                    const pct = next
+                      ? Math.min(100, (statVal / next.threshold) * 100)
+                      : 100;
+                    const roman = ["I", "II", "III", "IV", "V"];
+                    return (
+                      <div key={chain.key} className="adv-card">
+                        <div className="adv-card-head">
+                          <span className="adv-card-title">{chain.title}</span>
+                          <span className="adv-card-stat">
+                            {statVal.toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="adv-card-desc">{chain.desc}</div>
+                        <div className="adv-levels">
+                          {chain.levels.map((l, i) => {
+                            const unlocked = unlockedAdvIds.includes(l.id);
+                            return (
+                              <div
+                                key={l.id}
+                                className={
+                                  unlocked ? "adv-pip unlocked" : "adv-pip"
+                                }
+                                title={`${l.name} — ${l.threshold.toLocaleString()}${
+                                  l.rewardFlagId ? " · unlocks a flag" : ""
+                                }`}
+                              >
+                                {l.rewardFlagId ? (
+                                  <FlagIcon flagID={l.rewardFlagId} size={16} />
+                                ) : (
+                                  <span style={{ fontSize: 13 }}>★</span>
+                                )}
+                                <span>{roman[i] || i + 1}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {next ? (
+                          <>
+                            <div className="adv-progress">
+                              <div
+                                className="adv-progress-fill"
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                            <div className="adv-next">
+                              <span>
+                                next: <b>{next.name}</b>
+                              </span>
+                              <span>
+                                {statVal.toLocaleString()} /{" "}
+                                {next.threshold.toLocaleString()}
+                              </span>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="adv-done">Complete ✓</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* Player Score Display */}
-      <div className="player-score">Score: {playerScore ?? 0}</div>
+      {/* Advancement unlock toasts */}
+      {advToasts.length > 0 && (
+        <div className="adv-toast-stack">
+          {advToasts.map((t) => {
+            const def = achievementById.get(t.id);
+            return (
+              <div key={t.toastId} className="adv-toast">
+                <span style={{ fontSize: 22 }}>🏆</span>
+                <div>
+                  <div className="adv-toast-title">Advancement unlocked</div>
+                  <div className="adv-toast-name">{def?.name || t.id}</div>
+                  {t.rewardFlagId > 0 && (
+                    <div style={{ fontSize: 11, color: "#555" }}>
+                      New flag unlocked!
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Help & Scoring dropdown */}
       <div className="help-dropdown">
@@ -1173,10 +1341,18 @@ function App() {
           <div className="help-content">
             <h3 style={{ marginTop: 0 }}>Scoring</h3>
             <ul style={{ paddingLeft: 18, marginTop: 8 }}>
-              <li>Reveal a hidden cell: +1</li>
-              <li>Place a flag on a mine: +10</li>
-              <li>Wrong flag: -20</li>
-              <li>Hit a mine: -100 (ouch!)</li>
+              <li>Reveal a hidden cell: +1 × sector multiplier</li>
+              <li>Place a flag on a mine: +10 × sector multiplier</li>
+              <li>Wrong flag: -20 × sector multiplier</li>
+              <li>Hit a mine: -100 × sector multiplier (ouch!)</li>
+              <li>
+                Flawless streak: +5% per correct action (up to +200%). Any
+                mistake resets it.
+              </li>
+              <li>
+                Denser sectors and nearby players raise the multiplier — up to
+                15×
+              </li>
               <li>Your total score never goes below 0</li>
             </ul>
             <h4 style={{ marginBottom: 6 }}>Learn Minesweeper</h4>
@@ -1291,6 +1467,7 @@ function App() {
         onOpenOverlay={() => setShowMinimapOverlay(true)}
         mainViewMoveToken={mainViewMoveToken}
         activePlayersRef={activePlayersRef}
+        onNavigate={navigateToWorld}
       />
 
       <div className="leaderboard">
@@ -1305,67 +1482,31 @@ function App() {
         {topPlayers.length > 0 ? (
           <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
             {topPlayers.map((p, index) => (
-              <li
+              <LeaderboardRow
                 key={p.name}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  marginBottom: 2,
-                }}
-              >
-                <span style={{ display: "flex", alignItems: "center" }}>
-                  <canvas
-                    ref={(c) => {
-                      if (!c) return;
-                      const ctx = c.getContext("2d");
-                      const cssSize = 25; // CSS pixels
-                      const dpr = window.devicePixelRatio || 1;
-                      c.width = Math.round(cssSize * dpr);
-                      c.height = Math.round(cssSize * dpr);
-                      c.style.width = `${cssSize}px`;
-                      c.style.height = `${cssSize}px`;
-                      ctx.imageSmoothingEnabled = false;
-                      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                      rendererRef.current.drawSprite(
-                        ctx,
-                        playerFlagsRef.current.get(p.name) ?? 0,
-                        0,
-                        0,
-                        cssSize,
-                        cssSize
-                      );
-                    }}
-                    key={`flag-${p.name}-${playerFlagsRef.current.get(p.name) ?? 0}`}
-                    style={{
-                      marginRight: 6,
-                      verticalAlign: "middle",
-                      imageRendering: "pixelated",
-                    }}
-                  />
-                  {p.name}
-                </span>
-                <span style={{ fontWeight: "bold" }}>
-                  {formatScore(p.score ?? 0)}
-                </span>
-              </li>
+                rank={index + 1}
+                name={p.name}
+                score={p.score ?? 0}
+                formatted={formatScore(p.score ?? 0)}
+                flagID={p.flagID ?? playerFlagsRef.current.get(p.name) ?? 0}
+                isMe={connected && p.name === username}
+              />
             ))}
-            {userRank > 10 && (
-              <>
-                <li
-                  style={{
-                    borderTop: "1px solid #ccc",
-                    marginTop: 4,
-                    paddingTop: 4,
-                    marginBottom: 2,
-                  }}
-                >
-                  <span style={{ fontSize: "12px", color: "#666" }}>
-                    You: #{userRank} ({formatScore(playerScore)})
-                  </span>
-                </li>
-              </>
-            )}
+            {connected &&
+              username &&
+              !topPlayers.some((p) => p.name === username) && (
+                <>
+                  <li className="lb-divider">⋯</li>
+                  <LeaderboardRow
+                    rank={userRank > 0 ? userRank : "—"}
+                    name={username}
+                    score={playerScore}
+                    formatted={formatFullScore(playerScore ?? 0)}
+                    flagID={flagID}
+                    isMe
+                  />
+                </>
+              )}
           </ul>
         ) : (
           <p>No players yet</p>
