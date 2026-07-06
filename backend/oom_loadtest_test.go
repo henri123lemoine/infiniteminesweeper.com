@@ -53,7 +53,7 @@ func TestLoadRealisticSustained(t *testing.T) {
 	baseHeap, baseGoroutines := snapshot(t, s, "T=0")
 	for elapsed := time.Duration(0); elapsed < duration; elapsed += duration / 4 {
 		time.Sleep(duration / 4)
-		snapshot(t, s, fmt.Sprintf("T=%v", (elapsed + duration/4).Round(time.Second)))
+		snapshot(t, s, fmt.Sprintf("T=%v", (elapsed+duration/4).Round(time.Second)))
 	}
 	lastHeap, _ := snapshot(t, s, "T=end-of-load")
 

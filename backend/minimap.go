@@ -364,9 +364,11 @@ func (s *Server) minimapSendFullTo(playerID uint32, cid ChunkID) {
 // tiles when delta would exceed half the tile size). Runs in its own goroutine.
 //
 // Work split into two phases to minimize stateMu hold time:
-//   Phase 1 (under stateMu):  read state, compute palette + dirty rects,
-//                             build unmarshaled protobuf messages.
-//   Phase 2 (no lock):        gzip-marshal each message, send to subscribers.
+//
+//	Phase 1 (under stateMu):  read state, compute palette + dirty rects,
+//	                          build unmarshaled protobuf messages.
+//	Phase 2 (no lock):        gzip-marshal each message, send to subscribers.
+//
 // Marshal is the biggest CPU cost per tile (gzip dominates) and touches no
 // shared state, so it doesn't need the lock.
 func (s *Server) runMinimapBroadcaster() {
