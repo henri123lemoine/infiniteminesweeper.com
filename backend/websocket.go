@@ -502,6 +502,34 @@ func (s *Server) handleSeedRequest(playerID uint32, chunkIds []*pb.ChunkID) {
 	}
 }
 
+// handleCellOwnerRequest answers "who placed this flag?" for the tooltip
+// shown when a player clicks someone else's flag.
+func (s *Server) handleCellOwnerRequest(playerID uint32, req *pb.CellOwnerRequest) {
+	if req == nil || req.ChunkId == nil {
+		return
+	}
+	chunkID := ChunkID{X: req.ChunkId.X, Y: req.ChunkId.Y}
+
+	s.stateMu.RLock()
+	flag, ok := s.flags[chunkID][req.Cell]
+	var name string
+	if ok && flag.Owner != 0 {
+		name = s.playerNames[flag.Owner]
+	}
+	s.stateMu.RUnlock()
+
+	if !ok {
+		return
+	}
+	msg := &pb.Msg{Payload: &pb.Msg_CellOwnerResponse{CellOwnerResponse: &pb.CellOwnerResponse{
+		ChunkId: &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
+		Cell:    req.Cell,
+		Name:    name,
+		FlagID:  flag.FlagID,
+	}}}
+	s.sendToPlayer(playerID, mustProto(msg))
+}
+
 func (s *Server) readPump(player *Player) {
 	defer func() {
 		s.removePlayer(player)
@@ -557,6 +585,9 @@ func (s *Server) readPump(player *Player) {
 		case *pb.Msg_UpdateProfile:
 			// FSM: Update profile while PLAYER
 			s.handleUpdateProfile(player, t.UpdateProfile)
+
+		case *pb.Msg_CellOwnerRequest:
+			s.handleCellOwnerRequest(player.ID, t.CellOwnerRequest)
 
 		case *pb.Msg_Reveal:
 			// FSM: Only PLAYER state can send Reveal messages

@@ -682,7 +682,17 @@ export const useGameState = () => {
       const revealedCell = revealedCellsRef.current.get(cellKey);
       if (isChord && !revealedCell) return;
       if (!isChord && revealedCell) return;
-      if (flaggedCellsRef.current.has(flagKey)) return;
+      if (flaggedCellsRef.current.has(flagKey)) {
+        // Left-clicking a flag asks the server whose it is
+        if (!isRightClick && !isChord && ws.readyState === WebSocket.OPEN) {
+          ws.send(
+            encodeMsg({
+              cellOwnerRequest: { chunkId: { X: chunkX, Y: chunkY }, cell },
+            })
+          );
+        }
+        return;
+      }
 
       // Enforce two-cell proximity for non-chord actions
       if (!isChord && !isWithinTwoOfRevealed(worldX, worldY)) {
@@ -1396,6 +1406,17 @@ export const useGameState = () => {
         setTimeout(() => {
           setAdvToasts((prev) => prev.filter((t) => t.toastId !== toastId));
         }, 5000);
+      } else if (type === "cellOwnerResponse") {
+        const { X, Y } = normalizeChunkId(data.chunkId);
+        const cell = Number(data.cell || 0) | 0;
+        const lx = cell % CHUNK;
+        const ly = Math.floor(cell / CHUNK);
+        const name = data.name || "";
+        pushHintPopup(
+          X * CHUNK + lx,
+          Y * CHUNK + ly,
+          name ? `⚑ ${name}` : "⚑ placed before names were tracked"
+        );
       } else if (type === "seedResponse") {
         // Handle seed response for pre-emptive caching
         const seeds = Array.isArray(data.seeds) ? data.seeds : [];
@@ -1446,6 +1467,7 @@ export const useGameState = () => {
     countAdjacentMines,
     registerPendingAdjacency,
     recomputeAdjacencyAround,
+    pushHintPopup,
   ]);
 
   // Join the game by sending a Join message (transitions from SPECTATOR to PLAYER)

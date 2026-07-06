@@ -383,7 +383,8 @@ func (s *Server) handleReveal(
 				ChunkID ChunkID `json:"chunk_id"`
 				Cell    uint32  `json:"cell"`
 				FlagID  uint32  `json:"flag_id"`
-			}{ChunkID: cid, Cell: p.Cell, FlagID: p.FlagID})
+				Owner   uint32  `json:"owner,omitempty"`
+			}{ChunkID: cid, Cell: p.Cell, FlagID: p.FlagID, Owner: playerID})
 		}
 	}
 	// 3) Score update (only if changed this action)
@@ -558,7 +559,7 @@ func (s *Server) setCellFlagged(chunkID ChunkID, cell uint32, playerID uint32, f
 	if s.flags[chunkID] == nil {
 		s.flags[chunkID] = make(map[uint32]Flag)
 	}
-	s.flags[chunkID][cell] = Flag{FlagID: flagID}
+	s.flags[chunkID][cell] = Flag{FlagID: flagID, Owner: playerID}
 
 	if (*collector)[chunkID] == nil {
 		(*collector)[chunkID] = make([]*pb.FlagPlacement, 0)

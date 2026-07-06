@@ -23,6 +23,8 @@ type ChunkBits [64]uint64
 
 type Flag struct {
 	FlagID uint32
+	// PlayerID of whoever placed it; 0 for flags that predate ownership tracking.
+	Owner uint32
 }
 
 type PlayerView struct {

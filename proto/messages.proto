@@ -205,6 +205,20 @@ message PlayerPositions {
   repeated PlayerPosition players = 1;
 }
 
+// Ask who placed the flag at a cell (shown as a tooltip on click)
+message CellOwnerRequest {
+  ChunkID chunkId = 1;
+  uint32 cell = 2;
+}
+
+message CellOwnerResponse {
+  ChunkID chunkId = 1;
+  uint32 cell = 2;
+  // Empty when the flag predates ownership tracking.
+  string name = 3;
+  uint32 flagID = 4;
+}
+
 // Chunk seed information for pre-emptive caching
 message ChunkSeed {
   ChunkID chunkId = 1;
@@ -253,6 +267,7 @@ message Msg {
     SeedRequest seedRequest = 21; // Request seeds and densities for chunks
     Join join = 17; // FSM: SPECTATOR -> PLAYER transition
     UpdateProfile updateProfile = 18; // FSM: Update profile while PLAYER
+    CellOwnerRequest cellOwnerRequest = 25; // Who placed this flag?
 
     // Server -> Client
     ChunkSync chunkSync = 7;
@@ -265,6 +280,7 @@ message Msg {
     UpdateAck updateAck = 20; // FSM: Response to UpdateProfile
     SpawnHint spawnHint = 23; // Sent to spectators on connect
     PlayerPositions playerPositions = 24; // Nearby player locations
+    CellOwnerResponse cellOwnerResponse = 26; // Flag ownership answer
     AdvancementSync advancementSync = 27; // Sent on join: stats + unlocks so far
     AdvancementUnlocked advancementUnlocked = 28; // Sent when a new advancement is unlocked
 

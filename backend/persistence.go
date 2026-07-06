@@ -424,12 +424,13 @@ func (s *Server) replayWAL() error {
 				ChunkID ChunkID `json:"chunk_id"`
 				Cell    uint32  `json:"cell"`
 				FlagID  uint32  `json:"flag_id"`
+				Owner   uint32  `json:"owner"`
 			}
 			if err := json.Unmarshal(entry.Data, &flagData); err != nil {
 				log.Printf("[wal] failed to unmarshal flag: %v", err)
 				continue
 			}
-			s.replayFlag(flagData.ChunkID, flagData.Cell, flagData.FlagID)
+			s.replayFlag(flagData.ChunkID, flagData.Cell, flagData.FlagID, flagData.Owner)
 
 		case "score_update":
 			var scoreData struct {
@@ -491,14 +492,14 @@ func (s *Server) replayReveal(chunkID ChunkID, cells []uint32) {
 	}
 }
 
-func (s *Server) replayFlag(chunkID ChunkID, cell uint32, flagID uint32) {
+func (s *Server) replayFlag(chunkID ChunkID, cell uint32, flagID uint32, owner uint32) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
 	if s.flags[chunkID] == nil {
 		s.flags[chunkID] = make(map[uint32]Flag)
 	}
-	s.flags[chunkID][cell] = Flag{FlagID: flagID}
+	s.flags[chunkID][cell] = Flag{FlagID: flagID, Owner: owner}
 }
 
 func (s *Server) replayScoreUpdate(playerID uint32, score int32, streak uint32) {
