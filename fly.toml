@@ -44,3 +44,6 @@ processes = ['app']
 
 [[vm]]
 size = 'shared-cpu-1x'
+# The merged world idles at ~95MB heap and the periodic snapshot deep-copies
+# all state; 256MB left no headroom and GC-death-spiraled the machine.
+memory = '512mb'
