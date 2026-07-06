@@ -326,13 +326,13 @@ body {
   position: fixed;
   top: 10px;
   right: 10px;
-  background: white;
-  padding: 15px;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  background: var(--ms-face);
+  border: 2px solid;
+  border-color: var(--ms-light) var(--ms-shadow) var(--ms-shadow) var(--ms-light);
+  padding: 12px;
   width: 220px;
   z-index: 10;
-  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-family: var(--ms-font);
   overflow: hidden;
   height: auto;
   max-height: 90vh;

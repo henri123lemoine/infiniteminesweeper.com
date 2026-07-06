@@ -1172,18 +1172,13 @@ function App() {
               if (Number.isFinite(pick)) setFlagID(pick);
             } catch {}
           }}
+          className="help-button"
           style={{
             position: "fixed",
             top: 52, // below the score chip
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 21,
-            background: "#fff",
-            border: "1px solid #ccc",
-            borderRadius: 6,
-            padding: "6px 10px",
-            cursor: "pointer",
-            boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
           }}
         >
           Home
