@@ -20,13 +20,15 @@ const (
 	// Active player scoring boost parameters
 	// Radius in chunks around the action chunk to measure unique players
 	activeRadiusChunks = 2 // looks at a 5x5 chunk window
-	// Linear boost per unique nearby player (configured so 12 players -> 5x)
-	activeBoostPerPlayer = (5.0 - 1.0) / 12.0
+	// Linear boost per unique nearby player (configured so 12 players -> 3x)
+	activeBoostPerPlayer = (3.0 - 1.0) / 12.0
 	// Cap the number of players contributing to the boost
 	activeBoostPlayerCap = 12
-	// Clamp active multiplier
+	// Clamp active multiplier. Capped lower than the historical 5x: penalties
+	// now scale with the multiplier too, so the ceiling bounds how much a
+	// single mistake can swing.
 	activeMinMultiplier = 1.0
-	activeMaxMultiplier = 5.0
+	activeMaxMultiplier = 3.0
 )
 
 // Quintic fade 6t^5 - 15t^4 + 10t^3
@@ -153,7 +155,7 @@ func (s *Server) getActivePlayerMultiplier(chunkID ChunkID) float64 {
 }
 
 // getBombDensityMultiplier implements the density-based score multiplier as defined in
-// scripts/python/score_multiplier.py. It maps density percent in [10,50] to [0.2x,10x]
+// scripts/python/score_multiplier.py. It maps density percent in [10,50] to [0.2x,5x]
 // using a quintic smoothstep of t^q, with 1.0x at 21%.
 func (s *Server) getBombDensityMultiplier(chunkID ChunkID) float64 {
 	d := s.getChunkDensity(chunkID) // [0,1]
@@ -162,8 +164,8 @@ func (s *Server) getBombDensityMultiplier(chunkID ChunkID) float64 {
 		dLo = 10.0
 		dHi = 50.0
 		yLo = 0.2
-		yHi = 10.0
-		q   = 1.1453726926484111 // chosen so f(21%) == 1.0
+		yHi = 5.0
+		q   = 0.9256676850711592 // chosen so f(21%) == 1.0
 	)
 	if dPct <= dLo {
 		return yLo

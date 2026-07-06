@@ -28,10 +28,13 @@ type Server struct {
 	stateMu sync.RWMutex
 
 	// World state - just what cells are revealed and by whom
-	chunks map[ChunkID]*ChunkBits          // Which cells are revealed (bitset)
-	flags  map[ChunkID]map[uint32]Flag     // cellIndex -> Flag (with id)
-	scores map[uint32]int32                // playerID -> score
-	subs   map[ChunkID]map[uint32]struct{} // who wants reveals for each chunk
+	chunks map[ChunkID]*ChunkBits      // Which cells are revealed (bitset)
+	flags  map[ChunkID]map[uint32]Flag // cellIndex -> Flag (with id)
+	scores map[uint32]int32            // playerID -> score
+	// Consecutive mistake-free actions; feeds the flawless-streak bonus and
+	// resets on any wrong flag or mine hit.
+	streaks map[uint32]uint32
+	subs    map[ChunkID]map[uint32]struct{} // who wants reveals for each chunk
 	// Reverse index of per-player subscriptions for fast diffing of view updates
 	playerSubs map[uint32]map[ChunkID]struct{}
 	// Recency tracking for per-player subscriptions (for LRU eviction)
@@ -106,6 +109,7 @@ func NewServer() *Server {
 		chunks:            make(map[ChunkID]*ChunkBits),
 		flags:             make(map[ChunkID]map[uint32]Flag),
 		scores:            make(map[uint32]int32),
+		streaks:           make(map[uint32]uint32),
 		subs:              make(map[ChunkID]map[uint32]struct{}),
 		playerSubs:        make(map[uint32]map[ChunkID]struct{}),
 		playerSubLastSeen: make(map[uint32]map[ChunkID]uint64),

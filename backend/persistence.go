@@ -78,6 +78,7 @@ type snapshotData struct {
 	Chunks       map[ChunkID]*ChunkBits
 	Flags        map[ChunkID]map[uint32]Flag
 	Scores       map[uint32]int32
+	Streaks      map[uint32]uint32
 	PlayerNames  map[uint32]string
 	PlayerFlags  map[uint32]uint32
 	PlayerViews  map[uint32]PlayerView
@@ -428,12 +429,13 @@ func (s *Server) replayWAL() error {
 			var scoreData struct {
 				PlayerID uint32 `json:"player_id"`
 				Score    int32  `json:"score"`
+				Streak   uint32 `json:"streak"`
 			}
 			if err := json.Unmarshal(entry.Data, &scoreData); err != nil {
 				log.Printf("[wal] failed to unmarshal score update: %v", err)
 				continue
 			}
-			s.replayScoreUpdate(scoreData.PlayerID, scoreData.Score)
+			s.replayScoreUpdate(scoreData.PlayerID, scoreData.Score, scoreData.Streak)
 
 		case "player":
 			var playerData walPlayerData
@@ -481,11 +483,12 @@ func (s *Server) replayFlag(chunkID ChunkID, cell uint32, flagID uint32) {
 	s.flags[chunkID][cell] = Flag{FlagID: flagID}
 }
 
-func (s *Server) replayScoreUpdate(playerID uint32, score int32) {
+func (s *Server) replayScoreUpdate(playerID uint32, score int32, streak uint32) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
 	s.scores[playerID] = score
+	s.streaks[playerID] = streak
 }
 
 func (s *Server) replayPlayer(d walPlayerData) {
@@ -600,6 +603,8 @@ func (s *Server) captureSnapshotData() snapshotData {
 	}
 	scores := make(map[uint32]int32, len(s.scores))
 	maps.Copy(scores, s.scores)
+	streaks := make(map[uint32]uint32, len(s.streaks))
+	maps.Copy(streaks, s.streaks)
 	playerNames := make(map[uint32]string, len(s.playerNames))
 	maps.Copy(playerNames, s.playerNames)
 	playerFlags := make(map[uint32]uint32, len(s.playerFlags))
@@ -613,6 +618,7 @@ func (s *Server) captureSnapshotData() snapshotData {
 		Chunks:        chunks,
 		Flags:         flags,
 		Scores:        scores,
+		Streaks:       streaks,
 		PlayerNames:   playerNames,
 		PlayerFlags:   playerFlags,
 		PlayerViews:   playerViews,
@@ -703,6 +709,11 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 		s.flags = make(map[ChunkID]map[uint32]Flag)
 	}
 	s.scores = data.Scores
+	if data.Streaks != nil {
+		s.streaks = data.Streaks
+	} else {
+		s.streaks = make(map[uint32]uint32)
+	}
 	if data.PlayerNames != nil {
 		s.playerNames = data.PlayerNames
 	} else {

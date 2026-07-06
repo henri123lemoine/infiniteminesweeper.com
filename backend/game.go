@@ -63,6 +63,14 @@ func (s *Server) applyScore(playerID uint32, delta int32) int32 {
 	return newScore
 }
 
+// streakBonus rewards flawless play: +5% per consecutive correct action,
+// capped at +200% (3x after 40 flawless actions). Guessers can't sustain a
+// streak, so this favors skill without adding extra penalty swing.
+// Caller must hold stateMu.
+func (s *Server) streakBonus(playerID uint32) float64 {
+	return 1.0 + math.Min(0.05*float64(s.streaks[playerID]), 2.0)
+}
+
 // isMine determines if a cell contains a mine using the chunk's seed and density.
 func (s *Server) isMine(chunkID ChunkID, cell uint32) bool {
 	seed := s.generateChunkSeed(chunkID)
@@ -179,15 +187,20 @@ func (s *Server) handleReveal(
 		if s.isMine(chunkID, cell) {
 			// correct flag
 			m := s.getScoreMultiplier(chunkID)
-			scoreDelta = int32(math.Round(10 * m))
+			scoreDelta = int32(math.Round(10 * m * s.streakBonus(playerID)))
 			s.applyScore(playerID, scoreDelta)
+			s.streaks[playerID]++
 			s.setCellFlagged(chunkID, cell, playerID, playerFlagID, &allPlacedFlags)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_FlaggedCell{FlaggedCell: &pb.FlagPlacement{Cell: cell, FlagID: playerFlagID}}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
 		} else {
 			// Wrong flag: deduct points, and perform a flood-fill reveal like a normal reveal.
-			scoreDelta = -20 // wrong flag penalty (no positive points even if many cells revealed)
+			// Penalty scales with the same multiplier as rewards — a flat
+			// penalty made blind flag-spam positive-EV in hot sectors.
+			m := s.getScoreMultiplier(chunkID)
+			scoreDelta = -int32(math.Round(20 * m))
 			s.applyScore(playerID, scoreDelta)
+			s.streaks[playerID] = 0
 			s.floodFillReveal(chunkID, cell, playerID, &allRevealedCells)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
@@ -229,6 +242,7 @@ func (s *Server) handleReveal(
 		}
 
 		// Process flood-fill: reveal neighbors; if zero, enqueue its neighbors
+		minesHit := 0
 		for len(queue) > 0 {
 			curr := queue[0]
 			queue = queue[1:]
@@ -245,6 +259,7 @@ func (s *Server) handleReveal(
 			if s.isMine(curr.Cid, curr.Cidx) {
 				// mine hit under chord
 				scoreDelta -= 100
+				minesHit++
 				s.setCellRevealed(curr.Cid, curr.Cidx, playerID, &allRevealedCells)
 				continue
 			}
@@ -270,10 +285,19 @@ func (s *Server) handleReveal(
 			}
 		}
 
-		// Apply multiplier only if net positive
-		if scoreDelta > 0 {
-			m := s.getScoreMultiplier(chunkID)
+		// The multiplier applies to the net either way — previously only
+		// positive nets were scaled, which made chord mine-hits effectively
+		// free in high-multiplier sectors. The streak bonus only applies to
+		// flawless (no mine) chords.
+		m := s.getScoreMultiplier(chunkID)
+		if minesHit == 0 && scoreDelta > 0 {
+			scoreDelta = int32(math.Round(float64(scoreDelta) * m * s.streakBonus(playerID)))
+			s.streaks[playerID]++
+		} else {
 			scoreDelta = int32(math.Round(float64(scoreDelta) * m))
+			if minesHit > 0 {
+				s.streaks[playerID] = 0
+			}
 		}
 		s.applyScore(playerID, scoreDelta)
 		ack := &pb.RevealAck{
@@ -300,15 +324,19 @@ func (s *Server) handleReveal(
 		}
 
 		if s.isMine(chunkID, cell) {
-			scoreDelta = -100
+			// Penalty scales with the multiplier, matching the reward side.
+			m := s.getScoreMultiplier(chunkID)
+			scoreDelta = -int32(math.Round(100 * m))
 			s.applyScore(playerID, scoreDelta)
+			s.streaks[playerID] = 0
 			s.setCellRevealed(chunkID, cell, playerID, &allRevealedCells)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
 		} else if s.countAdjacentMines(chunkID, cell) > 0 {
 			m := s.getScoreMultiplier(chunkID)
-			scoreDelta = int32(math.Round(1 * m))
+			scoreDelta = int32(math.Round(1 * m * s.streakBonus(playerID)))
 			s.applyScore(playerID, scoreDelta)
+			s.streaks[playerID]++
 			s.setCellRevealed(chunkID, cell, playerID, &allRevealedCells)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
@@ -319,7 +347,8 @@ func (s *Server) handleReveal(
 			scoreDelta = int32(countAllRevealedCells(allRevealedCells) - startCount)
 			if scoreDelta > 0 {
 				m := s.getScoreMultiplier(chunkID)
-				scoreDelta = int32(math.Round(float64(scoreDelta) * m))
+				scoreDelta = int32(math.Round(float64(scoreDelta) * m * s.streakBonus(playerID)))
+				s.streaks[playerID]++
 			}
 			s.applyScore(playerID, scoreDelta)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
@@ -353,7 +382,8 @@ func (s *Server) handleReveal(
 		s.writeWALEntry("score_update", struct {
 			PlayerID uint32 `json:"player_id"`
 			Score    int32  `json:"score"`
-		}{PlayerID: playerID, Score: s.scores[playerID]})
+			Streak   uint32 `json:"streak"`
+		}{PlayerID: playerID, Score: s.scores[playerID], Streak: s.streaks[playerID]})
 	}
 
 	s.lbDirty = true
