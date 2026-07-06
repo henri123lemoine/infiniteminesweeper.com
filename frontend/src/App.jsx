@@ -15,6 +15,56 @@ import { CHAINS, achievementById } from "./achievements.js";
 
 const isEmbed = new URLSearchParams(window.location.search).has("embed");
 
+// Hand-drawn pixel house in the same style as the flag sprites.
+const HOUSE_PIXELS = [
+  ".....##.....",
+  "....#rr#....",
+  "...#rrrr#...",
+  "..#rrrrrr#..",
+  ".#rrrrrrrr#.",
+  "#rrrrrrrrrr#",
+  "############",
+  ".#wwwwwwww#.",
+  ".#ww#dd#ww#.",
+  ".#ww#dd#ww#.",
+  ".#ww#dd#ww#.",
+  ".##########.",
+];
+const HOUSE_COLORS = {
+  "#": "#101010",
+  r: "#e31c1c",
+  w: "#e0e0e0",
+  d: "#7a4a12",
+};
+const HouseIcon = React.memo(function HouseIcon({ size = 22 }) {
+  const grid = HOUSE_PIXELS.length;
+  const draw = useCallback((c) => {
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    HOUSE_PIXELS.forEach((row, y) => {
+      for (let x = 0; x < row.length; x++) {
+        const color = HOUSE_COLORS[row[x]];
+        if (!color) continue;
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y, 1, 1);
+      }
+    });
+  }, []);
+  return (
+    <canvas
+      ref={draw}
+      width={grid}
+      height={grid}
+      style={{
+        width: size,
+        height: size,
+        imageRendering: "pixelated",
+        display: "block",
+      }}
+    />
+  );
+});
+
 // Pixel-art flag icon; memoized so broadcast ticks don't redraw every row.
 // Sized up-front so it never flashes at the default 300x150 canvas size.
 const FlagIcon = React.memo(function FlagIcon({ flagID, size = 20 }) {
@@ -272,8 +322,7 @@ function VirtualLeaderboard({ rows, myName, formatFullScore, findMeToken }) {
                   top: idx * LB_ROW_H,
                   left: 0,
                   right: 14,
-                  height: LB_ROW_H,
-                  boxSizing: "border-box",
+                  height: LB_ROW_H - 3,
                 }}
               >
                 <span className="lb-rank" style={{ width: 40 }}>
@@ -1519,9 +1568,9 @@ function App() {
               onClick={openHome}
               title="Home"
               aria-label="Home"
-              style={{ fontSize: 15, lineHeight: "14px", padding: "4px 9px" }}
+              style={{ padding: "3px 7px" }}
             >
-              ⌂
+              <HouseIcon size={22} />
             </button>
           )}
           <button
