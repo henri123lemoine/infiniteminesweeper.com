@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"compress/gzip"
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
@@ -697,13 +696,8 @@ func (s *Server) saveSnapshotToS3() error {
 	// the whole buffer just to satisfy the reader contract, doubling peak
 	// memory during a snapshot.
 	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	enc := gob.NewEncoder(gz)
-	if err := enc.Encode(&data); err != nil {
+	if err := encodeSnapshot(&buf, &data); err != nil {
 		return fmt.Errorf("failed to encode snapshot: %v", err)
-	}
-	if err := gz.Close(); err != nil {
-		return fmt.Errorf("failed to close gzip writer: %v", err)
 	}
 
 	_, err := s.s3Client.PutObject(&s3.PutObjectInput{
@@ -736,13 +730,7 @@ func (s *Server) saveSnapshotToDisk() error {
 	if err != nil {
 		return err
 	}
-	gz := gzip.NewWriter(f)
-	enc := gob.NewEncoder(gz)
-	if err := enc.Encode(&data); err != nil {
-		f.Close()
-		return err
-	}
-	if err := gz.Close(); err != nil {
+	if err := encodeSnapshot(f, &data); err != nil {
 		f.Close()
 		return err
 	}
@@ -877,15 +865,8 @@ func (s *Server) loadSnapshotFromS3() error {
 	}
 	defer result.Body.Close()
 
-	gz, err := gzip.NewReader(result.Body)
+	data, err := decodeSnapshot(result.Body)
 	if err != nil {
-		return fmt.Errorf("failed to create gzip reader: %v", err)
-	}
-	defer gz.Close()
-
-	dec := gob.NewDecoder(gz)
-	var data snapshotData
-	if err := dec.Decode(&data); err != nil {
 		return fmt.Errorf("failed to decode snapshot: %v", err)
 	}
 
@@ -902,15 +883,8 @@ func (s *Server) loadSnapshotFromDisk() error {
 	}
 	defer f.Close()
 
-	gz, err := gzip.NewReader(f)
+	data, err := decodeSnapshot(f)
 	if err != nil {
-		return err
-	}
-	defer gz.Close()
-
-	dec := gob.NewDecoder(gz)
-	var data snapshotData
-	if err := dec.Decode(&data); err != nil {
 		return err
 	}
 

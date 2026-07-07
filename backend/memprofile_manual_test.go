@@ -79,7 +79,23 @@ func TestSnapshotEncodeCost(t *testing.T) {
 		t.Fatal(err)
 	}
 	gz.Close()
-	tEncode := time.Since(t0)
+	tGob := time.Since(t0)
 
-	t.Logf("deep copy: %v, gob+gzip encode: %v, output %.1f MB", tCopy, tEncode, float64(buf.Len())/(1<<20))
+	t0 = time.Now()
+	var bbuf bytes.Buffer
+	if err := encodeSnapshot(&bbuf, &data); err != nil {
+		t.Fatal(err)
+	}
+	tBinary := time.Since(t0)
+	binarySize := bbuf.Len()
+
+	t0 = time.Now()
+	if _, err := decodeSnapshot(&bbuf); err != nil {
+		t.Fatal(err)
+	}
+	tDecode := time.Since(t0)
+
+	t.Logf("deep copy: %v", tCopy)
+	t.Logf("gob+gzip encode:   %v -> %.1f MB", tGob, float64(buf.Len())/(1<<20))
+	t.Logf("binary+lz4 encode: %v -> %.1f MB (decode %v)", tBinary, float64(binarySize)/(1<<20), tDecode)
 }
