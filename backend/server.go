@@ -129,17 +129,19 @@ type Server struct {
 
 func NewServer() *Server {
 	return &Server{
-		secret:               []byte("minesweeper-secret-key"),
-		chunks:               make(map[ChunkID]*ChunkBits),
-		flags:                make(map[ChunkID]chunkFlags),
-		territory:            make(map[ChunkID]*chunkTerritory),
-		scores:               make(map[uint32]int32),
-		streaks:              make(map[uint32]uint32),
-		subs:                 make(map[ChunkID]map[uint32]struct{}),
-		playerSubs:           make(map[uint32]map[ChunkID]struct{}),
-		playerSubLastSeen:    make(map[uint32]map[ChunkID]uint64),
-		subTick:              0,
-		maxPlayerSubs:        70,
+		secret:            []byte("minesweeper-secret-key"),
+		chunks:            make(map[ChunkID]*ChunkBits),
+		flags:             make(map[ChunkID]chunkFlags),
+		territory:         make(map[ChunkID]*chunkTerritory),
+		scores:            make(map[uint32]int32),
+		streaks:           make(map[uint32]uint32),
+		subs:              make(map[ChunkID]map[uint32]struct{}),
+		playerSubs:        make(map[uint32]map[ChunkID]struct{}),
+		playerSubLastSeen: make(map[uint32]map[ChunkID]uint64),
+		subTick:           0,
+		// Must fit the largest view rect + prefetch margin (a 4K screen at
+		// min zoom needs ~750 chunks) plus retention slack; LRU is a backstop.
+		maxPlayerSubs:        1536,
 		players:              make(map[uint32]map[*Player]struct{}),
 		playerNames:          make(map[uint32]string),
 		nameToPlayerID:       make(map[string]uint32),

@@ -32,6 +32,16 @@ var gzipWriterPool = sync.Pool{
 
 var gzipReaderPool = sync.Pool{}
 
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
 var bufferPool = sync.Pool{
 	New: func() any {
 		return new(bytes.Buffer)
@@ -641,18 +651,27 @@ func (s *Server) readPump(player *Player) {
 			s.stateMu.Unlock()
 
 			// Determine a proportional region around the viewport.
-			// Convert width/height in world cells to chunk dimensions and add a small margin.
+			// Convert width/height in world cells to chunk dimensions and add a prefetch margin.
 			widthCells := int(vu.WidthCells)
 			heightCells := int(vu.HeightCells)
 			if widthCells <= 0 || heightCells <= 0 {
 				// Fallback: default to 3x3 chunks around the center if client didn't send dims
 				widthCells, heightCells = ChunkSize*3, ChunkSize*3
 			}
+			const maxViewCells = 40 * ChunkSize // bound rect size against bogus dims
+			if widthCells > maxViewCells {
+				widthCells = maxViewCells
+			}
+			if heightCells > maxViewCells {
+				heightCells = maxViewCells
+			}
 			chunksWide := (widthCells + ChunkSize - 1) / ChunkSize
 			chunksHigh := (heightCells + ChunkSize - 1) / ChunkSize
-			// Aim to cover at least the viewport, plus one chunk margin around for smoother panning
-			chunksWide += 2
-			chunksHigh += 2
+			// Prefetch half a viewport beyond each edge (clamped) so panning
+			// stays ahead of loading even when zoomed far out. Mirrored in
+			// the client's viewUpdate coalescing (useGameState.js).
+			chunksWide += 2 * clampInt(chunksWide/2, 2, 8)
+			chunksHigh += 2 * clampInt(chunksHigh/2, 2, 8)
 
 			// Use the chunk coordinates directly from the frontend
 			centerChunkX := vu.ChunkId.X
@@ -703,6 +722,25 @@ func (s *Server) readPump(player *Player) {
 				// Update recency for everything in view
 				s.subTick++
 				lastSeen[cid] = s.subTick
+			}
+
+			// Drop subscriptions well outside the view rect. A stale far sub
+			// never resyncs on return (it still looks subscribed), so it must
+			// not outlive the client's far-chunk cache eviction radius.
+			const retentionMargin = 4
+			for cid := range current {
+				if cid.X >= startX-retentionMargin && cid.X <= endX+retentionMargin &&
+					cid.Y >= startY-retentionMargin && cid.Y <= endY+retentionMargin {
+					continue
+				}
+				if subs, ok := s.subs[cid]; ok {
+					delete(subs, player.ID)
+					if len(subs) == 0 {
+						delete(s.subs, cid)
+					}
+				}
+				delete(current, cid)
+				delete(lastSeen, cid)
 			}
 
 			// Enforce LRU capacity by evicting least-recent from outside the viewport first
