@@ -623,23 +623,31 @@ export const useGameState = () => {
           if (!p) return;
 
           // Long sessions crossing lots of world: drop far-away chunk caches
-          // (~19MB bound at radius 24) instead of growing forever.
+          // (~34MB bound at radius 32) instead of growing forever. Radius
+          // must stay above the server's subscription+retention rect
+          // half-extent (~22 chunks worst case) or still-subscribed chunks
+          // would be dropped locally and never resynced.
           const nowMs = performance.now();
           if (nowMs - lastEvictAt > 30000) {
             lastEvictAt = nowMs;
-            revealedCellsRef.current.evictFarChunks(p.chunkX, p.chunkY, 24);
+            revealedCellsRef.current.evictFarChunks(p.chunkX, p.chunkY, 32);
             for (const m of [
               mineMapCache.current,
               seedCache.current,
               densityCache.current,
             ]) {
-              evictFarKeys(m, p.chunkX, p.chunkY, 24);
+              evictFarKeys(m, p.chunkX, p.chunkY, 32);
             }
           }
 
-          // Compute intended chunk-rect (mirror server logic)
-          const chunksWide = Math.ceil(p.widthCells / CHUNK) + 2;
-          const chunksHigh = Math.ceil(p.heightCells / CHUNK) + 2;
+          // Compute intended chunk-rect (mirror server logic): viewport
+          // chunks plus a half-viewport prefetch margin per side, clamped.
+          let chunksWide = Math.ceil(p.widthCells / CHUNK);
+          let chunksHigh = Math.ceil(p.heightCells / CHUNK);
+          chunksWide +=
+            2 * Math.min(8, Math.max(2, Math.floor(chunksWide / 2)));
+          chunksHigh +=
+            2 * Math.min(8, Math.max(2, Math.floor(chunksHigh / 2)));
           const halfW = Math.floor(chunksWide / 2);
           const halfH = Math.floor(chunksHigh / 2);
           const startX = p.chunkX - halfW;
@@ -866,7 +874,12 @@ export const useGameState = () => {
         const mine = isMineAt(chunkKey, cell);
         if (mine !== null) {
           if (mine) {
-            revealedCellsRef.current.set(chunkX, chunkY, cell, packCell(true, 0));
+            revealedCellsRef.current.set(
+              chunkX,
+              chunkY,
+              cell,
+              packCell(true, 0)
+            );
           } else {
             const adjacent = countAdjacentMines(chunkX, chunkY, cell);
             revealedCellsRef.current.set(
@@ -1305,9 +1318,7 @@ export const useGameState = () => {
             const st = revealedCellsRef.current.ensure(primaryChunkKey);
             for (const cell of cells) {
               const prev = st[cell];
-              const isMineVal = mm
-                ? mm[cell] === 1
-                : (prev & CELL_MINE) !== 0;
+              const isMineVal = mm ? mm[cell] === 1 : (prev & CELL_MINE) !== 0;
               let adjacent = isMineVal ? 0 : countAdjacentMines(X, Y, cell);
               if (
                 adjacent === -1 &&
@@ -1337,7 +1348,12 @@ export const useGameState = () => {
               playerFlagsRef.current.get(username)
             );
             // Also mark the cell as revealed (content suppressed) for continuity
-            revealedCellsRef.current.set(X, Y, cellIdx, packCell(false, 0, true));
+            revealedCellsRef.current.set(
+              X,
+              Y,
+              cellIdx,
+              packCell(false, 0, true)
+            );
             bumpChunkVersion(X, Y);
           }
 
@@ -1384,9 +1400,7 @@ export const useGameState = () => {
           !seedCache.current.has(chunkKey) &&
           websocket.readyState === WebSocket.OPEN
         ) {
-          websocket.send(
-            encodeMsg({ seedRequest: { chunkIds: [{ X, Y }] } })
-          );
+          websocket.send(encodeMsg({ seedRequest: { chunkIds: [{ X, Y }] } }));
         }
 
         for (const [reqId, action] of optimisticActions.current.entries()) {
@@ -1436,7 +1450,12 @@ export const useGameState = () => {
             wY = Y * CHUNK + lY;
           flaggedCellsRef.current.set(`${wX},${wY}`, updateData.flagID ?? 0);
           // Also mark as revealed (content suppressed)
-          revealedCellsRef.current.set(X, Y, updateData.cell, packCell(false, 0, true));
+          revealedCellsRef.current.set(
+            X,
+            Y,
+            updateData.cell,
+            packCell(false, 0, true)
+          );
           bumpChunkVersion(X, Y);
         }
 
@@ -1459,9 +1478,7 @@ export const useGameState = () => {
         const id = data.id;
         if (!id) return;
         const rewardFlagId = Number(data.rewardFlagId) || 0;
-        setUnlockedAdvIds((prev) =>
-          prev.includes(id) ? prev : [...prev, id]
-        );
+        setUnlockedAdvIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
         if (rewardFlagId) {
           setUnlockedFlagIds((prev) =>
             prev.includes(rewardFlagId) ? prev : [...prev, rewardFlagId]

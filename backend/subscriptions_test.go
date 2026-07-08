@@ -14,7 +14,7 @@ func TestViewUpdateSubscriptionsAndLRU(t *testing.T) {
 
 	// Shrink capacity to make eviction easy to observe
 	srv.stateMu.Lock()
-	srv.maxPlayerSubs = 20
+	srv.maxPlayerSubs = 40
 	srv.stateMu.Unlock()
 
 	c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -34,7 +34,7 @@ func TestViewUpdateSubscriptionsAndLRU(t *testing.T) {
 	// drain one leaderboard if present (best-effort)
 	_ = func() error { _, _, err := c.ReadMessage(); return err }()
 
-	// send a view covering 4x4 chunks → expect <= 16 subs
+	// send a view covering 2x2 chunks → 6x6 rect with prefetch margin
 	vu := &pb.Msg{Payload: &pb.Msg_ViewUpdate{ViewUpdate: &pb.ViewUpdate{
 		ChunkId: &pb.ChunkID{X: 0, Y: 0},
 		Cell:    0, WidthCells: 128, HeightCells: 128,
@@ -61,11 +61,12 @@ func TestViewUpdateSubscriptionsAndLRU(t *testing.T) {
 	srv.stateMu.RLock()
 	subCount := len(srv.playerSubs[pid])
 	srv.stateMu.RUnlock()
-	if subCount == 0 || subCount > 16 {
-		t.Fatalf("unexpected subs after view: %d (want 1..16)", subCount)
+	if subCount == 0 || subCount > 36 {
+		t.Fatalf("unexpected subs after view: %d (want 1..36)", subCount)
 	}
 
-	// Move view far away to trigger LRU evictions; send a larger rect 5x5 => 25 but capacity=20
+	// Move view far away: 8x8 rect => 64 wanted but capacity=40, and all
+	// old subs around (0,0) are outside the retention window
 	vu2 := &pb.Msg{Payload: &pb.Msg_ViewUpdate{ViewUpdate: &pb.ViewUpdate{
 		ChunkId: &pb.ChunkID{X: 50, Y: -50},
 		Cell:    0, WidthCells: 256, HeightCells: 256,
@@ -77,8 +78,17 @@ func TestViewUpdateSubscriptionsAndLRU(t *testing.T) {
 
 	srv.stateMu.RLock()
 	subCount2 := len(srv.playerSubs[pid])
+	staleFar := 0
+	for cid := range srv.playerSubs[pid] {
+		if cid.X < 30 {
+			staleFar++
+		}
+	}
 	srv.stateMu.RUnlock()
 	if subCount2 == 0 || subCount2 > srv.maxPlayerSubs {
 		t.Fatalf("LRU not enforced: subs=%d cap=%d", subCount2, srv.maxPlayerSubs)
+	}
+	if staleFar > 0 {
+		t.Fatalf("far subs not pruned: %d chunks near old view remain", staleFar)
 	}
 }
