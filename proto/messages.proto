@@ -295,6 +295,7 @@ message Msg {
     // Minimap streaming (server -> client)
     FullTile minimapFullTile = 15;
     TileDelta minimapTileDelta = 16;
+    FullTileBatch minimapFullTileBatch = 29;
   }
 }
 
@@ -319,6 +320,10 @@ message FullTile {
   uint32 version = 2; // monotonically increasing per tile
   bytes data = 3;     // resolution*resolution palette indices (raw)
   uint32 resolution = 4; // 16, 32, or 64 pixels per tile
+}
+
+message FullTileBatch {
+  repeated FullTile tiles = 1;
 }
 
 message DeltaRect {
