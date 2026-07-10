@@ -214,6 +214,11 @@ export const useGameState = () => {
   ];
   for (let i = 0; i < 10; i++) minimapPalette[10 + i] = flagColors[i];
 
+  const bumpMinimapRevision = useCallback(() => {
+    const tiles = minimapTilesRef.current;
+    tiles.revision = (tiles.revision || 0) + 1;
+  }, []);
+
   const minimapGetCanvas = useCallback((key) => {
     const rec = minimapTilesRef.current.get(key);
     if (!rec) return null;
@@ -359,8 +364,9 @@ export const useGameState = () => {
       }
       minimapTilesRef.current.set(key, rec);
       minimapDrawFull(key);
+      bumpMinimapRevision();
     },
-    [minimapDrawFull, releaseMinimapCanvas]
+    [bumpMinimapRevision, minimapDrawFull, releaseMinimapCanvas]
   );
 
   const drainMinimapFullQueue = useCallback(() => {
@@ -1349,6 +1355,7 @@ export const useGameState = () => {
           minimapDrawRect(key, x, y, w, h);
         }
         rec.version = incVersion;
+        if (rects.length) bumpMinimapRevision();
       } else if (type === "revealAck") {
         // `requestId` arrives as string (because we set `longs:"String"`).
         const reqRaw = data.requestId ?? data.request_id;
@@ -1649,6 +1656,7 @@ export const useGameState = () => {
     getMineMap,
     enqueueMinimapFullTiles,
     releaseMinimapCanvas,
+    bumpMinimapRevision,
   ]);
 
   // Join the game by sending a Join message (transitions from SPECTATOR to PLAYER)
@@ -1832,15 +1840,17 @@ export const useGameState = () => {
             return { x, y };
           });
           s.send(encodeMsg({ minimapUnsubscribe: { tiles } }));
+          let removedTile = false;
           toDel.forEach((k) => {
             minimapActiveSubsRef.current.delete(k);
             const rec = minimapTilesRef.current.get(k);
             releaseMinimapCanvas(rec);
-            minimapTilesRef.current.delete(k);
+            removedTile = minimapTilesRef.current.delete(k) || removedTile;
           });
+          if (removedTile) bumpMinimapRevision();
         }
       },
-      [releaseMinimapCanvas]
+      [bumpMinimapRevision, releaseMinimapCanvas]
     ),
     clearMinimapSubscriptionsFor: useCallback((sourceKey = "default") => {
       // Remove this source's desired set locally first
@@ -1864,14 +1874,16 @@ export const useGameState = () => {
           return { x, y };
         });
         s.send(encodeMsg({ minimapUnsubscribe: { tiles } }));
+        let removedTile = false;
         toDel.forEach((k) => {
           minimapActiveSubsRef.current.delete(k);
           const rec = minimapTilesRef.current.get(k);
           releaseMinimapCanvas(rec);
-          minimapTilesRef.current.delete(k);
+          removedTile = minimapTilesRef.current.delete(k) || removedTile;
         });
+        if (removedTile) bumpMinimapRevision();
       }
-    }, [releaseMinimapCanvas]),
+    }, [bumpMinimapRevision, releaseMinimapCanvas]),
     // Server-suggested spawn location
     serverSpawnRef,
     // Nearby player positions for rendering
