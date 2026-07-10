@@ -51,6 +51,10 @@ ws.on("message", (data) => {
     for (const c of region.chunks || []) countSync(c);
   }
   if (obj.minimapFullTile) { if (tiles === 0) mark("first minimapTile"); tiles++; }
+  if (obj.minimapFullTileBatch) {
+    if (tiles === 0 && obj.minimapFullTileBatch.tiles?.length) mark("first minimapTile");
+    tiles += obj.minimapFullTileBatch.tiles?.length || 0;
+  }
   if (obj.revealAck) mark("revealAck RTT");
   if (spawn && !revealSent && chunkSyncs > 0) {
     revealSent = 1;

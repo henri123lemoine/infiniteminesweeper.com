@@ -173,6 +173,8 @@ export const useGameState = () => {
 
   // Minimap streaming store and helpers
   const minimapTilesRef = useRef(new Map()); // key "x,y" -> { version, data: Uint8Array, canvas, resolution }
+  const minimapFullQueueRef = useRef({ tiles: [], index: 0 });
+  const minimapFullQueueRAFRef = useRef(null);
   // Union of active subscriptions actually sent to the server
   const minimapActiveSubsRef = useRef(new Set());
   // Desired subscriptions per logical source (e.g. 'hud', 'overlay')
@@ -279,6 +281,66 @@ export const useGameState = () => {
     }
     ctx.putImageData(img, x, y);
   }, []);
+
+  const applyMinimapFullTile = useCallback(
+    (data) => {
+      const tr = data.tile || {};
+      const key = `${tr.x},${tr.y}`;
+      const version = Number(data.version) || 0;
+      const existingRec = minimapTilesRef.current.get(key);
+      if (existingRec && (existingRec.version || 0) > version) return;
+
+      const resolution = data.resolution || CHUNK;
+      const rec = {
+        version,
+        data: new Uint8Array(b64ToU8(data.data)),
+        resolution,
+      };
+      if (
+        existingRec &&
+        existingRec.resolution === resolution &&
+        existingRec.canvas
+      ) {
+        rec.canvas = existingRec.canvas;
+      }
+      minimapTilesRef.current.set(key, rec);
+      minimapDrawFull(key);
+    },
+    [minimapDrawFull]
+  );
+
+  const drainMinimapFullQueue = useCallback(() => {
+    minimapFullQueueRAFRef.current = null;
+    const queue = minimapFullQueueRef.current;
+    const startedAt = performance.now();
+    while (
+      queue.index < queue.tiles.length &&
+      performance.now() - startedAt < 6
+    ) {
+      applyMinimapFullTile(queue.tiles[queue.index++]);
+    }
+    if (queue.index < queue.tiles.length) {
+      minimapFullQueueRAFRef.current = requestAnimationFrame(
+        drainMinimapFullQueue
+      );
+    } else {
+      queue.tiles = [];
+      queue.index = 0;
+    }
+  }, [applyMinimapFullTile]);
+
+  const enqueueMinimapFullTiles = useCallback(
+    (tiles) => {
+      const queue = minimapFullQueueRef.current;
+      for (const tile of tiles) queue.tiles.push(tile);
+      if (minimapFullQueueRAFRef.current == null) {
+        minimapFullQueueRAFRef.current = requestAnimationFrame(
+          drainMinimapFullQueue
+        );
+      }
+    },
+    [drainMinimapFullQueue]
+  );
 
   // Game state refs
   const seedCache = useRef(new Map());
@@ -949,6 +1011,11 @@ export const useGameState = () => {
       try {
         minimapActiveSubsRef.current.clear();
       } catch {}
+      if (minimapFullQueueRAFRef.current != null) {
+        cancelAnimationFrame(minimapFullQueueRAFRef.current);
+        minimapFullQueueRAFRef.current = null;
+      }
+      minimapFullQueueRef.current = { tiles: [], index: 0 };
       // Reconcile any desired minimap subscriptions accumulated before open
       const resubscribeAll = () => {
         try {
@@ -1171,30 +1238,9 @@ export const useGameState = () => {
         }
         setTick((t) => t + 1);
       } else if (type === "minimapFullTile") {
-        const tr = data.tile || {};
-        const key = `${tr.x},${tr.y}`;
-        const buf = b64ToU8(data.data);
-        const resolution = data.resolution || CHUNK; // fallback for legacy tiles
-
-        // Check if this is a resolution change - if so, force canvas regeneration
-        const existingRec = minimapTilesRef.current.get(key);
-        const rec = {
-          version: Number(data.version) || 0,
-          data: new Uint8Array(buf),
-          resolution,
-        };
-
-        // If resolution changed, clear old canvas to force regeneration at new size
-        if (
-          existingRec &&
-          existingRec.resolution !== resolution &&
-          existingRec.canvas
-        ) {
-          delete existingRec.canvas;
-        }
-
-        minimapTilesRef.current.set(key, rec);
-        minimapDrawFull(key);
+        enqueueMinimapFullTiles([data]);
+      } else if (type === "minimapFullTileBatch") {
+        enqueueMinimapFullTiles(data.tiles || []);
       } else if (type === "minimapTileDelta") {
         const tr = data.tile || {};
         const key = `${tr.x},${tr.y}`;
@@ -1540,6 +1586,7 @@ export const useGameState = () => {
     recomputeAdjacencyAround,
     pushHintPopup,
     getMineMap,
+    enqueueMinimapFullTiles,
   ]);
 
   // Join the game by sending a Join message (transitions from SPECTATOR to PLAYER)

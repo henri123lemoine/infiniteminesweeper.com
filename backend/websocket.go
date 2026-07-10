@@ -1014,6 +1014,19 @@ func (s *Server) handleMinimapSubscribe(playerID uint32, m *pb.SubscribeTiles) {
 		}
 	}
 
+	const targetBatchBytes = 512 << 10
+	batch := make([]*pb.FullTile, 0, 128)
+	batchBytes := 0
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		msg := &pb.Msg{Payload: &pb.Msg_MinimapFullTileBatch{MinimapFullTileBatch: &pb.FullTileBatch{Tiles: batch}}}
+		s.sendToPlayer(playerID, mustProto(msg))
+		batch = make([]*pb.FullTile, 0, 128)
+		batchBytes = 0
+	}
+
 	for _, cid := range toSend {
 		s.stateMu.RLock()
 		data := s.computeTileDataAtResolution(cid, resolution)
@@ -1026,14 +1039,18 @@ func (s *Server) handleMinimapSubscribe(playerID uint32, m *pb.SubscribeTiles) {
 		if data == nil {
 			continue // all-unseen chunk; skip
 		}
-		msg := &pb.Msg{Payload: &pb.Msg_MinimapFullTile{MinimapFullTile: &pb.FullTile{
+		if batchBytes > 0 && batchBytes+len(data) > targetBatchBytes {
+			flush()
+		}
+		batch = append(batch, &pb.FullTile{
 			Tile:       &pb.TileRef{X: int32(cid.X), Y: int32(cid.Y)},
 			Version:    version,
 			Data:       data,
 			Resolution: resolution,
-		}}}
-		s.sendToPlayer(playerID, mustProto(msg))
+		})
+		batchBytes += len(data)
 	}
+	flush()
 }
 
 func (s *Server) subscribeToChunk(playerID uint32, chunkID ChunkID) {
