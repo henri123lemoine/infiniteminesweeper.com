@@ -35,6 +35,21 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		miniSubs += len(set)
 	}
 	miniTiles := len(s.minimapTiles)
+	overviewSubs := 0
+	for _, byLOD := range s.overviewSubs {
+		overviewSubs += len(byLOD)
+	}
+	overviewImageBytes := 0
+	overviewEncodedBytes := 0
+	for _, image := range s.overviewImages {
+		overviewImageBytes += len(image.Pixels)
+		overviewEncodedBytes += len(image.Encoded)
+	}
+	overviewTileBytes := len(s.overviewTiles) * (1 + 4 + 16 + 64 + 256 + 1024)
+	overviewRequests := s.overviewRequests
+	overviewSnapBytes := s.overviewSnapBytes
+	overviewPatchBytes := s.overviewPatchBytes
+	overviewWireBytes := s.overviewWireBytes
 	s.stateMu.RUnlock()
 
 	s.playersMu.RLock()
@@ -61,6 +76,14 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		{"ims_chunk_subscriptions", "Total (player,chunk) subscription entries for live chunk updates.", "gauge", uint64(chunkSubs)},
 		{"ims_minimap_subscriptions", "Total (player,chunk) minimap tile subscriptions.", "gauge", uint64(miniSubs)},
 		{"ims_minimap_tiles_allocated", "Allocated minimap tile structs (one per chunk that has been dirty since last unsubscribe).", "gauge", uint64(miniTiles)},
+		{"ims_overview_subscriptions", "Active overview image subscriptions by player and LOD.", "gauge", uint64(overviewSubs)},
+		{"ims_overview_image_cache_bytes", "Raw bytes in dense global overview images.", "gauge", uint64(overviewImageBytes)},
+		{"ims_overview_encoded_cache_bytes", "Compressed bytes in reusable global overview snapshots.", "gauge", uint64(overviewEncodedBytes)},
+		{"ims_overview_tile_cache_bytes", "Raw bytes in per-chunk overview pyramids.", "gauge", uint64(overviewTileBytes)},
+		{"ims_overview_requests_total", "Overview snapshot requests handled.", "counter", overviewRequests},
+		{"ims_overview_snapshot_raw_bytes_total", "Raw overview snapshot pixel bytes sent.", "counter", overviewSnapBytes},
+		{"ims_overview_patch_raw_bytes_total", "Raw overview patch pixel bytes sent.", "counter", overviewPatchBytes},
+		{"ims_overview_wire_bytes_total", "Compressed overview bytes enqueued to clients.", "counter", overviewWireBytes},
 	} {
 		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n%s %d\n", x.name, x.help, x.name, x.typ, x.name, x.value)
 	}

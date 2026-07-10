@@ -19,6 +19,7 @@ func TestMetricsEndpoint(t *testing.T) {
 	for _, want := range []string{
 		"go_goroutines ", "go_memstats_sys_bytes ", "ims_players_connected ",
 		"ims_chunk_subscriptions 2", "ims_minimap_subscriptions 1", "ims_minimap_tiles_allocated 1",
+		"ims_overview_image_cache_bytes ", "ims_overview_requests_total ",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in metrics output:\n%s", want, body)
