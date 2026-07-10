@@ -26,11 +26,21 @@ export function targetOverviewLOD(zoom) {
   return 1;
 }
 
-export function overviewRegionForView(view, width, height, lod) {
+export function overviewRegionForView(
+  view,
+  width,
+  height,
+  lod,
+  marginRatio = 0.25
+) {
   const visibleWidth = Math.max(1, Math.ceil(width / view.zoom / CHUNK) + 1);
   const visibleHeight = Math.max(1, Math.ceil(height / view.zoom / CHUNK) + 1);
-  let marginX = Math.max(2, Math.ceil(visibleWidth * 0.25));
-  let marginY = Math.max(2, Math.ceil(visibleHeight * 0.25));
+  let marginX = marginRatio
+    ? Math.max(2, Math.ceil(visibleWidth * marginRatio))
+    : 0;
+  let marginY = marginRatio
+    ? Math.max(2, Math.ceil(visibleHeight * marginRatio))
+    : 0;
   let widthChunks = visibleWidth + marginX * 2;
   let heightChunks = visibleHeight + marginY * 2;
   while (
@@ -239,6 +249,7 @@ export default function OverviewMinimap({
   useEffect(() => {
     if (!size.width || !size.height) return;
     requestLOD(8, true);
+    requestLOD(targetOverviewLOD(viewRef.current.zoom));
   }, [requestLOD, size.height, size.width]);
 
   useEffect(() => {

@@ -63,4 +63,13 @@ assert.equal(
   "coverage checks include complete regional bounds"
 );
 
+const pinnedCache = new OverviewCache(12);
+pinnedCache.put({ ...record(64, 0, 1), pinned: true });
+pinnedCache.put(record(32, 1, 3));
+assert.equal(
+  pinnedCache.recordsAtLOD(64).length,
+  1,
+  "prewarmed regional images survive normal LRU eviction"
+);
+
 console.log("OK  : overview image cache retention and coherent lookup");
