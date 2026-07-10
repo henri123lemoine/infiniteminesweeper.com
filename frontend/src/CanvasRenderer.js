@@ -12,6 +12,7 @@ const FULL_QUALITY_THRESHOLD = 20; // above this: per-cell rendering
 const RASTER_BUCKETS = [20, 10, 5];
 // Per-bucket LRU caps, each ~2 screenfuls on a large retina display.
 const RASTER_CACHE_CAP = { 20: 12, 10: 40, 5: 160 };
+const CELL_STAMP_CACHE_CAP = 100;
 // Max time per frame spent rasterizing chunk canvases. Chunks over budget
 // draw a stale raster or the blank placeholder and finish on later frames.
 const RASTER_BUDGET_MS = 6;
@@ -23,6 +24,7 @@ export class CanvasRenderer {
     this.chunkCaches = new Map(RASTER_BUCKETS.map((b) => [b, new Map()]));
     // Pre-rendered per-resolution number glyphs
     this.stampCache = new Map();
+    this.cellStampCache = new Map();
   }
 
   _makeCanvas(w, h) {
@@ -50,6 +52,29 @@ export class CanvasRenderer {
     return this._stamp(`num,${size},${n}`, size, size, (ctx) =>
       this.drawNumber(ctx, 0, 0, size, n, getNumberColor)
     );
+  }
+
+  _cellStamp(cellSize, effectiveSize, packed, isFlagged, getNumberColor) {
+    const isRevealed = (packed & CELL_REVEALED) !== 0 && !isFlagged;
+    const adj = isRevealed ? cellAdjacency(packed) : 0;
+    const kind = isRevealed ? `r${packed & CELL_MINE ? "m" : adj}` : "u";
+    const key = `cell,${effectiveSize},${kind}`;
+    let stamp = this.cellStampCache.get(key);
+    if (!stamp) {
+      stamp = document.createElement("canvas");
+      stamp.width = effectiveSize;
+      stamp.height = effectiveSize;
+      const stampCtx = stamp.getContext("2d");
+      const scale = effectiveSize / cellSize;
+      stampCtx.setTransform(scale, 0, 0, scale, 0, 0);
+      this.draw3DCell(stampCtx, 0, 0, cellSize, isRevealed);
+      if (isRevealed && !(packed & CELL_MINE) && adj > 0) {
+        this.drawNumber(stampCtx, 0, 0, cellSize, adj, getNumberColor);
+      }
+      this.cellStampCache.set(key, stamp);
+      this._evictIfNeeded(this.cellStampCache, CELL_STAMP_CACHE_CAP);
+    }
+    return stamp;
   }
 
   // 3D Cell Drawing Functions
@@ -236,16 +261,34 @@ export class CanvasRenderer {
 
   // LOD0 (close-up) cell rendering from the packed cell byte. Flag sprites
   // are drawn by the caller.
-  renderCell(ctx, screenX, screenY, cellSize, packed, isFlagged, getNumberColor) {
+  renderCell(
+    ctx,
+    screenX,
+    screenY,
+    cellSize,
+    effectiveSize,
+    packed,
+    isFlagged,
+    getNumberColor
+  ) {
     const isRevealed = (packed & CELL_REVEALED) !== 0 && !isFlagged;
-    this.draw3DCell(ctx, screenX, screenY, cellSize, isRevealed);
+    ctx.drawImage(
+      this._cellStamp(
+        cellSize,
+        effectiveSize,
+        packed,
+        isFlagged,
+        getNumberColor
+      ),
+      screenX,
+      screenY,
+      cellSize,
+      cellSize
+    );
     if (!isRevealed) return;
 
-    const adj = cellAdjacency(packed);
     if (packed & CELL_MINE) {
       this.drawSprite(ctx, "mine", screenX, screenY, cellSize, cellSize);
-    } else if (adj > 0) {
-      this.drawNumber(ctx, screenX, screenY, cellSize, adj, getNumberColor);
     }
   }
 
@@ -345,6 +388,7 @@ export class CanvasRenderer {
             screenX,
             screenY,
             CELL_SIZE,
+            Math.max(1, Math.round(effPx)),
             packed,
             isFlagged,
             getNumberColor
