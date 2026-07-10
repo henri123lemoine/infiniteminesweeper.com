@@ -19,7 +19,7 @@ var content embed.FS
 
 const (
 	ChunkSize   = 64
-	SendBufSize = 4096 // outbound msgs kept per player before back‑pressure
+	SendBufSize = 256 // outbound msgs kept per player before back‑pressure
 )
 
 // findAvailablePort scans ports 8080-8099 and returns the first available one.
