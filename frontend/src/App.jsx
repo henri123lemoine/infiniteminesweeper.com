@@ -1705,6 +1705,7 @@ function App() {
 
       <Minimap
         mode="hud"
+        disabled={showMinimapOverlay}
         CHUNK={CHUNK}
         CELL_SIZE={CELL_SIZE}
         MINIMAP_SIZE={MINIMAP_SIZE}
@@ -1713,6 +1714,7 @@ function App() {
         viewY={viewY}
         containerRef={containerRef}
         updateMinimapSubscriptions={updateMinimapSubscriptions}
+        clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
         minimapTilesRef={minimapTilesRef}
         onOpenOverlay={() => setShowMinimapOverlay(true)}
         mainViewMoveToken={mainViewMoveToken}
