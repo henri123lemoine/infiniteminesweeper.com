@@ -17,6 +17,7 @@ type overviewTile struct {
 	LOD2  [4]byte
 	LOD4  [16]byte
 	LOD8  [64]byte
+	LOD12 [144]byte
 	LOD16 [256]byte
 	LOD32 [1024]byte
 }
@@ -34,6 +35,8 @@ func (t *overviewTile) pixels(lod uint32) []byte {
 		return t.LOD4[:]
 	case 8:
 		return t.LOD8[:]
+	case 12:
+		return t.LOD12[:]
 	case 16:
 		return t.LOD16[:]
 	case 32:
@@ -66,7 +69,7 @@ type overviewPendingSend struct {
 }
 
 func validOverviewLOD(lod uint32) bool {
-	return lod == 1 || lod == 2 || lod == 4 || lod == 8 || lod == 16 || lod == 32 || lod == 64
+	return lod == 1 || lod == 2 || lod == 4 || lod == 8 || lod == 12 || lod == 16 || lod == 32 || lod == 64
 }
 
 func (s *Server) computeOverviewTile(cid ChunkID) *overviewTile {
@@ -83,6 +86,7 @@ func computeOverviewTileFromFull(full []byte) *overviewTile {
 	copy(tile.LOD2[:], downsampleOverviewColor(full, 2))
 	copy(tile.LOD4[:], downsampleOverviewColor(full, 4))
 	copy(tile.LOD8[:], downsampleOverviewColor(full, 8))
+	copy(tile.LOD12[:], downsampleOverviewColor(full, 12))
 	copy(tile.LOD16[:], downsampleOverviewColor(full, 16))
 	copy(tile.LOD32[:], downsampleOverviewColor(full, 32))
 	return tile

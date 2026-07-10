@@ -45,7 +45,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		overviewImageBytes += len(image.Pixels)
 		overviewEncodedBytes += len(image.Encoded)
 	}
-	overviewTileBytes := len(s.overviewTiles) * (1 + 4 + 16 + 64 + 256 + 1024)
+	overviewTileBytes := len(s.overviewTiles) * (1 + 4 + 16 + 64 + 144 + 256 + 1024)
 	overviewRequests := s.overviewRequests
 	overviewSnapBytes := s.overviewSnapBytes
 	overviewPatchBytes := s.overviewPatchBytes

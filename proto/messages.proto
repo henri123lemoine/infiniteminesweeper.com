@@ -349,7 +349,7 @@ message TileDelta {
 }
 
 message OverviewRequest {
-  uint32 lod = 1; // pixels per 64x64 chunk: 1, 2, 4, 8, 16, 32, or 64
+  uint32 lod = 1; // pixels per 64x64 chunk: 1, 2, 4, 8, 12, 16, 32, or 64
   sint32 origin_x = 2;
   sint32 origin_y = 3;
   uint32 width_chunks = 4;
