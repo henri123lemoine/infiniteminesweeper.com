@@ -3,6 +3,7 @@ import pako from "pako";
 import { ms as PB } from "./gen/messages_pb.js";
 import {
   CellStore,
+  FlagStore,
   packCell,
   cellAdjacency,
   CELL_REVEALED,
@@ -294,7 +295,7 @@ export const useGameState = () => {
   const seedCache = useRef(new Map());
   const densityCache = useRef(new Map());
   const revealedCellsRef = useRef(new CellStore());
-  const flaggedCellsRef = useRef(new Map());
+  const flaggedCellsRef = useRef(new FlagStore());
   const chunkVersionRef = useRef(new Map()); // "cx,cy" -> monotonically increasing version
 
   const bumpChunkVersion = useCallback((cx, cy) => {
@@ -631,6 +632,7 @@ export const useGameState = () => {
           if (nowMs - lastEvictAt > 30000) {
             lastEvictAt = nowMs;
             revealedCellsRef.current.evictFarChunks(p.chunkX, p.chunkY, 32);
+            flaggedCellsRef.current.evictFarChunks(p.chunkX, p.chunkY, 32);
             for (const m of [
               mineMapCache.current,
               seedCache.current,

@@ -197,13 +197,12 @@ export class CanvasRenderer {
     ctx.fillRect(0, 0, off.width, off.height);
 
     const st = revealedCellsRef.current.chunk(`${cx},${cy}`);
+    const flags = flaggedCellsRef.current.chunk(`${cx},${cy}`);
     for (let ly = 0; ly < CHUNK; ly++) {
       for (let lx = 0; lx < CHUNK; lx++) {
         const cell = ly * CHUNK + lx;
         const packed = st ? st[cell] : 0;
-        const wx = cx * CHUNK + lx;
-        const wy = cy * CHUNK + ly;
-        const flagForCell = flaggedCellsRef.current.get(`${wx},${wy}`);
+        const flagForCell = flags?.get(cell);
         const isFlagged = flagForCell !== undefined;
         const dx = lx * size;
         const dy = ly * size;
@@ -323,6 +322,7 @@ export class CanvasRenderer {
       let curCx = null;
       let curCy = null;
       let curSt = null;
+      let curFlags = null;
       for (let worldY = startWorldY; worldY <= endWorldY; worldY++) {
         for (let worldX = startWorldX; worldX <= endWorldX; worldX++) {
           const screenX = worldX * CELL_SIZE - viewRef.current.x;
@@ -333,11 +333,11 @@ export class CanvasRenderer {
             curCx = chunkX;
             curCy = chunkY;
             curSt = revealedCellsRef.current.chunk(`${chunkX},${chunkY}`);
+            curFlags = flaggedCellsRef.current.chunk(`${chunkX},${chunkY}`);
           }
           const packed = curSt ? curSt[cell] : 0;
 
-          const flagKey = `${worldX},${worldY}`;
-          const flagForCell = flaggedCellsRef.current.get(flagKey);
+          const flagForCell = curFlags?.get(cell);
           const isFlagged = flagForCell !== undefined;
 
           this.renderCell(

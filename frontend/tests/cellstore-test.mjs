@@ -1,6 +1,7 @@
 // Unit tests for the packed cell store
 import {
   CellStore,
+  FlagStore,
   packCell,
   cellAdjacency,
   CELL_REVEALED,
@@ -52,6 +53,17 @@ check("evict drops far chunk", s2.get(30, 0, 0) === 0);
 const m = new Map([["0,0", 1], ["100,-100", 2]]);
 evictFarKeys(m, 0, 0, 24);
 check("evictFarKeys on plain map", m.has("0,0") && !m.has("100,-100"));
+
+const flags = new FlagStore();
+flags.set("0,0", 7);
+flags.set("-1,-1", 8);
+flags.set("4096,0", 9);
+check("flag get/has", flags.get("0,0") === 7 && flags.has("-1,-1"));
+check("negative flag chunk", flags.chunk("-1,-1")?.get(4095) === 8);
+flags.delete("0,0");
+check("flag delete removes empty chunk", !flags.has("0,0") && flags.chunk("0,0") === null);
+flags.evictFarChunks(0, 0, 32);
+check("flag eviction", flags.has("-1,-1") && !flags.has("4096,0"));
 
 if (failures) process.exit(1);
 console.log("All cellStore checks passed.");
