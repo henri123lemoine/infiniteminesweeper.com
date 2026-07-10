@@ -124,8 +124,8 @@ export default function Minimap({
             // Canvas may be lower resolution (16x16, 32x32) but represents CHUNK x CHUNK cells
             const resolution = rec.resolution || CHUNK;
             const canvasScale = resolution / CHUNK; // how many pixels per world cell in the canvas
-            const canvasSrcX = srcX * canvasScale;
-            const canvasSrcY = srcY * canvasScale;
+            const canvasSrcX = (rec.canvasX || 0) + srcX * canvasScale;
+            const canvasSrcY = (rec.canvasY || 0) + srcY * canvasScale;
             const canvasSrcW = srcW * canvasScale;
             const canvasSrcH = srcH * canvasScale;
 
@@ -226,8 +226,8 @@ export default function Minimap({
             const resolution = rec.resolution || CHUNK;
             ctx.drawImage(
               rec.canvas,
-              0,
-              0,
+              rec.canvasX || 0,
+              rec.canvasY || 0,
               resolution,
               resolution,
               Math.floor(ox * overlayZoom),

@@ -30,6 +30,7 @@ const activeKey = (m) =>
 const normalizeChunkId = (cid = {}) => ({ X: cid.X ?? 0, Y: cid.Y ?? 0 });
 
 export const CHUNK = 64;
+const MINIMAP_ATLAS_SIZE = 512;
 
 function encodeMsg(msg) {
   if (msg && msg.payload && Object.keys(msg).length === 1) {
@@ -173,6 +174,7 @@ export const useGameState = () => {
 
   // Minimap streaming store and helpers
   const minimapTilesRef = useRef(new Map()); // key "x,y" -> { version, data: Uint8Array, canvas, resolution }
+  const minimapAtlasPoolsRef = useRef(new Map());
   const minimapFullQueueRef = useRef({ tiles: [], index: 0 });
   const minimapFullQueueRAFRef = useRef(null);
   // Union of active subscriptions actually sent to the server
@@ -216,18 +218,60 @@ export const useGameState = () => {
     const rec = minimapTilesRef.current.get(key);
     if (!rec) return null;
     if (rec.canvas) return rec.canvas;
-    const resolution = rec.resolution || CHUNK; // fallback to CHUNK for legacy tiles
-    const c =
-      typeof OffscreenCanvas !== "undefined"
-        ? new OffscreenCanvas(resolution, resolution)
-        : (() => {
-            const el = document.createElement("canvas");
-            el.width = resolution;
-            el.height = resolution;
-            return el;
-          })();
-    rec.canvas = c;
-    return c;
+    const resolution = rec.resolution || CHUNK;
+    let pool = minimapAtlasPoolsRef.current.get(resolution);
+    if (!pool) {
+      const tilesPerRow = Math.floor(MINIMAP_ATLAS_SIZE / resolution);
+      pool = {
+        resolution,
+        tilesPerRow,
+        capacity: tilesPerRow * tilesPerRow,
+        pages: [],
+        free: [],
+        next: 0,
+        used: 0,
+      };
+      minimapAtlasPoolsRef.current.set(resolution, pool);
+    }
+    const slot = pool.free.length ? pool.free.pop() : pool.next++;
+    const pageIndex = Math.floor(slot / pool.capacity);
+    const pageSlot = slot % pool.capacity;
+    if (!pool.pages[pageIndex]) {
+      pool.pages[pageIndex] =
+        typeof OffscreenCanvas !== "undefined"
+          ? new OffscreenCanvas(MINIMAP_ATLAS_SIZE, MINIMAP_ATLAS_SIZE)
+          : (() => {
+              const el = document.createElement("canvas");
+              el.width = MINIMAP_ATLAS_SIZE;
+              el.height = MINIMAP_ATLAS_SIZE;
+              return el;
+            })();
+    }
+    rec.canvas = pool.pages[pageIndex];
+    rec.canvasX = (pageSlot % pool.tilesPerRow) * resolution;
+    rec.canvasY = Math.floor(pageSlot / pool.tilesPerRow) * resolution;
+    rec.atlasPool = pool;
+    rec.atlasSlot = slot;
+    pool.used++;
+    return rec.canvas;
+  }, []);
+
+  const releaseMinimapCanvas = useCallback((rec) => {
+    if (!rec?.atlasPool) return;
+    const pool = rec.atlasPool;
+    rec
+      .canvas?.getContext("2d")
+      ?.clearRect(rec.canvasX, rec.canvasY, rec.resolution, rec.resolution);
+    pool.free.push(rec.atlasSlot);
+    pool.used--;
+    if (pool.used === 0) {
+      minimapAtlasPoolsRef.current.delete(pool.resolution);
+    }
+    delete rec.canvas;
+    delete rec.canvasX;
+    delete rec.canvasY;
+    delete rec.atlasPool;
+    delete rec.atlasSlot;
   }, []);
 
   const minimapDrawFull = useCallback((key) => {
@@ -252,7 +296,7 @@ export const useGameState = () => {
       dst[di++] = b;
       dst[di++] = a;
     }
-    ctx.putImageData(img, 0, 0);
+    ctx.putImageData(img, rec.canvasX, rec.canvasY);
   }, []);
 
   const minimapDrawRect = useCallback((key, x, y, w, h) => {
@@ -261,7 +305,9 @@ export const useGameState = () => {
     const c = minimapGetCanvas(key);
     const ctx = c.getContext("2d");
     const resolution = rec.resolution || CHUNK;
-    const img = ctx.getImageData(x, y, w, h);
+    const canvasX = rec.canvasX + x;
+    const canvasY = rec.canvasY + y;
+    const img = ctx.getImageData(canvasX, canvasY, w, h);
     const dst = img.data;
     let di = 0;
     for (let row = 0; row < h; row++) {
@@ -279,18 +325,20 @@ export const useGameState = () => {
         dst[di++] = a;
       }
     }
-    ctx.putImageData(img, x, y);
+    ctx.putImageData(img, canvasX, canvasY);
   }, []);
 
   const applyMinimapFullTile = useCallback(
     (data) => {
       const tr = data.tile || {};
       const key = `${tr.x},${tr.y}`;
+      if (!minimapActiveSubsRef.current.has(key)) return;
       const version = Number(data.version) || 0;
       const existingRec = minimapTilesRef.current.get(key);
       if (existingRec && (existingRec.version || 0) > version) return;
 
       const resolution = data.resolution || CHUNK;
+      if (resolution !== currentResolutionRef.current) return;
       const rec = {
         version,
         data: new Uint8Array(b64ToU8(data.data)),
@@ -302,11 +350,17 @@ export const useGameState = () => {
         existingRec.canvas
       ) {
         rec.canvas = existingRec.canvas;
+        rec.canvasX = existingRec.canvasX;
+        rec.canvasY = existingRec.canvasY;
+        rec.atlasPool = existingRec.atlasPool;
+        rec.atlasSlot = existingRec.atlasSlot;
+      } else if (existingRec) {
+        releaseMinimapCanvas(existingRec);
       }
       minimapTilesRef.current.set(key, rec);
       minimapDrawFull(key);
     },
-    [minimapDrawFull]
+    [minimapDrawFull, releaseMinimapCanvas]
   );
 
   const drainMinimapFullQueue = useCallback(() => {
@@ -1251,8 +1305,10 @@ export const useGameState = () => {
       } else if (type === "minimapTileDelta") {
         const tr = data.tile || {};
         const key = `${tr.x},${tr.y}`;
+        if (!minimapActiveSubsRef.current.has(key)) return;
         let rec = minimapTilesRef.current.get(key);
         const resolution = data.resolution || CHUNK; // fallback for legacy tiles
+        if (resolution !== currentResolutionRef.current) return;
 
         // If we haven't received a full tile yet, bootstrap an unseen tile and apply delta
         if (!rec) {
@@ -1266,9 +1322,7 @@ export const useGameState = () => {
           minimapDrawFull(key);
         } else if (rec.resolution !== resolution) {
           // Resolution changed - replace with new tile at new resolution
-          if (rec.canvas) {
-            delete rec.canvas;
-          }
+          releaseMinimapCanvas(rec);
           rec = {
             version: 0,
             data: new Uint8Array(resolution * resolution),
@@ -1594,6 +1648,7 @@ export const useGameState = () => {
     pushHintPopup,
     getMineMap,
     enqueueMinimapFullTiles,
+    releaseMinimapCanvas,
   ]);
 
   // Join the game by sending a Join message (transitions from SPECTATOR to PLAYER)
@@ -1777,10 +1832,15 @@ export const useGameState = () => {
             return { x, y };
           });
           s.send(encodeMsg({ minimapUnsubscribe: { tiles } }));
-          toDel.forEach((k) => minimapActiveSubsRef.current.delete(k));
+          toDel.forEach((k) => {
+            minimapActiveSubsRef.current.delete(k);
+            const rec = minimapTilesRef.current.get(k);
+            releaseMinimapCanvas(rec);
+            minimapTilesRef.current.delete(k);
+          });
         }
       },
-      []
+      [releaseMinimapCanvas]
     ),
     clearMinimapSubscriptionsFor: useCallback((sourceKey = "default") => {
       // Remove this source's desired set locally first
@@ -1804,9 +1864,14 @@ export const useGameState = () => {
           return { x, y };
         });
         s.send(encodeMsg({ minimapUnsubscribe: { tiles } }));
-        toDel.forEach((k) => minimapActiveSubsRef.current.delete(k));
+        toDel.forEach((k) => {
+          minimapActiveSubsRef.current.delete(k);
+          const rec = minimapTilesRef.current.get(k);
+          releaseMinimapCanvas(rec);
+          minimapTilesRef.current.delete(k);
+        });
       }
-    }, []),
+    }, [releaseMinimapCanvas]),
     // Server-suggested spawn location
     serverSpawnRef,
     // Nearby player positions for rendering
