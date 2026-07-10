@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestMinimapSetAndCollectRects(t *testing.T) {
 	s := NewServer()
@@ -28,5 +31,30 @@ func TestMinimapSetAndCollectRects(t *testing.T) {
 	rects, bytesDelta := collectRectsFromDirty(dirty, data, 64)
 	if bytesDelta == 0 || len(rects) == 0 {
 		t.Fatalf("expected non-empty rects")
+	}
+}
+
+func TestMinimapCache16MatchesFullRender(t *testing.T) {
+	s := NewServer()
+	cid := ChunkID{X: 3, Y: -2}
+	reveals := &ChunkBits{}
+	for cell := uint32(0); cell < 256; cell++ {
+		reveals[cell>>6] |= 1 << (cell & 63)
+	}
+	s.chunks[cid] = reveals
+	s.flags[cid] = chunkFlags{}.set(400, Flag{FlagID: 4, Owner: 1})
+
+	s.rebuildMinimapCache16Locked()
+	want := downsampleTo(cid, s.computeFullTileData(cid), 16)
+	if got := s.minimapCache16[cid]; !bytes.Equal(got, want) {
+		t.Fatal("rebuilt overview cache differs from full render")
+	}
+
+	cell := uint32(500)
+	s.chunks[cid][cell>>6] |= 1 << (cell & 63)
+	s.updateMinimapCache16Cell(cid, cell)
+	want = downsampleTo(cid, s.computeFullTileData(cid), 16)
+	if got := s.minimapCache16[cid]; !bytes.Equal(got, want) {
+		t.Fatal("incremental overview cache differs from full render")
 	}
 }
