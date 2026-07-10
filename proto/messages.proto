@@ -296,6 +296,12 @@ message Msg {
     FullTile minimapFullTile = 15;
     TileDelta minimapTileDelta = 16;
     FullTileBatch minimapFullTileBatch = 29;
+
+    // Coherent minimap overview images
+    OverviewRequest overviewRequest = 30;
+    OverviewRelease overviewRelease = 31;
+    OverviewSnapshot overviewSnapshot = 32;
+    OverviewPatch overviewPatch = 33;
   }
 }
 
@@ -340,4 +346,40 @@ message TileDelta {
   uint32 version = 2; // version AFTER applying this delta
   repeated DeltaRect rects = 3;
   uint32 resolution = 4; // 16, 32, or 64 pixels per tile
+}
+
+message OverviewRequest {
+  uint32 lod = 1; // pixels per 64x64 chunk: 1, 2, 4, 8, 16, 32, or 64
+  sint32 origin_x = 2;
+  sint32 origin_y = 3;
+  uint32 width_chunks = 4;
+  uint32 height_chunks = 5;
+  bool global = 6;
+  uint64 known_revision = 7;
+  bool subscribe = 8;
+}
+
+message OverviewRelease {}
+
+message OverviewSnapshot {
+  uint32 lod = 1;
+  sint32 origin_x = 2;
+  sint32 origin_y = 3;
+  uint32 width_chunks = 4;
+  uint32 height_chunks = 5;
+  uint64 revision = 6;
+  bytes pixels = 7; // dense row-major indexed-color image
+  bool global = 8;
+  bool unchanged = 9;
+}
+
+message OverviewTileUpdate {
+  TileRef tile = 1;
+  bytes data = 2; // lod*lod palette indices
+}
+
+message OverviewPatch {
+  uint32 lod = 1;
+  uint64 revision = 2;
+  repeated OverviewTileUpdate tiles = 3;
 }
