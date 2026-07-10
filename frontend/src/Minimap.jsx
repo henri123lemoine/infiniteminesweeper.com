@@ -5,6 +5,7 @@ import { getHexForFlag } from "./sprites/index.js";
 
 export default function Minimap({
   mode = "hud", // "hud" or "overlay"
+  disabled = false,
   // HUD mode props
   CELL_SIZE,
   MINIMAP_SIZE,
@@ -59,6 +60,7 @@ export default function Minimap({
   );
 
   const schedulePaint = useCallback(() => {
+    if (disabled) return;
     if (rafRef.current) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
@@ -348,6 +350,7 @@ export default function Minimap({
     zoom,
     viewX,
     viewY,
+    disabled,
   ]);
 
   // Pan/zoom/drag handler using the unified hook
@@ -561,7 +564,7 @@ export default function Minimap({
 
   // Initialize HUD minimap center to main view center (spectator-friendly)
   useEffect(() => {
-    if (mode !== "hud") return;
+    if (mode !== "hud" || disabled) return;
     const container = containerRef?.current;
     if (!container || !CELL_SIZE || !zoom) return;
     const width = container.clientWidth || 0;
@@ -583,10 +586,14 @@ export default function Minimap({
       updateMinimapSubscriptions(cwx, cwy, next.cells, next.cells, 2, "hud");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, containerRef, viewX, viewY, zoom, CELL_SIZE]);
+  }, [mode, disabled, containerRef, viewX, viewY, zoom, CELL_SIZE]);
 
   // Keep streaming subscriptions in sync
   useEffect(() => {
+    if (disabled) {
+      clearMinimapSubscriptionsFor?.(mode);
+      return;
+    }
     if (mode === "hud") {
       // For HUD mode, we can subscribe based on hudViewRef alone; no container needed
       const { cx, cy, cells } = hudViewRef.current;
@@ -623,17 +630,19 @@ export default function Minimap({
     }
   }, [
     mode,
+    disabled,
     hudView,
     overlayView,
     updateMinimapSubscriptions,
     containerRef,
     effectiveContainerRef,
     calculateMinimapResolution,
+    clearMinimapSubscriptionsFor,
   ]);
 
   // Auto-follow main view for both modes
   useEffect(() => {
-    if (!mainViewMoveToken) return;
+    if (disabled || !mainViewMoveToken) return;
     if (performance.now() - (lastMmInteractionAtRef.current || 0) < 300) return;
 
     const container = containerRef?.current;
@@ -690,6 +699,7 @@ export default function Minimap({
     }
   }, [
     mainViewMoveToken,
+    disabled,
     mode,
     CELL_SIZE,
     containerRef,
