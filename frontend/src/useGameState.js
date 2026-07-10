@@ -1897,19 +1897,26 @@ export const useGameState = () => {
         // Diff against active set we have on the server
         const toAdd = [];
         const toDel = [];
-        for (const k of union)
-          if (resolutionChanged || !minimapActiveSubsRef.current.has(k))
-            toAdd.push(k);
+        for (const k of union) {
+          if (!resolutionChanged && minimapActiveSubsRef.current.has(k))
+            continue;
+          const comma = k.indexOf(",");
+          const x = Number(k.slice(0, comma));
+          const y = Number(k.slice(comma + 1));
+          const dx = x - centerChunkX;
+          const dy = y - centerChunkY;
+          toAdd.push({ key: k, x, y, distance: dx * dx + dy * dy });
+        }
+        if (toAdd.length > 512) {
+          toAdd.sort((a, b) => a.distance - b.distance);
+        }
         for (const k of minimapActiveSubsRef.current)
           if (!union.has(k)) toDel.push(k);
 
         if (toAdd.length) {
-          const tiles = toAdd.map((k) => {
-            const [x, y] = k.split(",").map(Number);
-            return { x, y };
-          });
+          const tiles = toAdd.map(({ x, y }) => ({ x, y }));
           s.send(encodeMsg({ minimapSubscribe: { tiles, resolution } }));
-          toAdd.forEach((k) => minimapActiveSubsRef.current.add(k));
+          toAdd.forEach(({ key }) => minimapActiveSubsRef.current.add(key));
         }
         if (toDel.length) {
           const tiles = toDel.map((k) => {

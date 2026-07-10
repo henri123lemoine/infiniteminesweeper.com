@@ -25,7 +25,8 @@ export default function Minimap({
 }) {
   const canvasRef = useRef(null);
   const localContainerRef = useRef(null);
-  const effectiveContainerRef = containerRef || localContainerRef;
+  const effectiveContainerRef =
+    mode === "overlay" ? localContainerRef : containerRef || localContainerRef;
 
   // State management based on mode
   const [hudView, setHudView] = useState({ cx: 0, cy: 0, cells: CHUNK * 3 });
