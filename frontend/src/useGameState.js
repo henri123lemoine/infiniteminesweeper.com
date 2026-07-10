@@ -175,7 +175,7 @@ export const useGameState = () => {
   // Minimap streaming store and helpers
   const minimapTilesRef = useRef(new Map()); // key "x,y" -> { version, data: Uint8Array, canvas, resolution }
   const minimapAtlasPoolsRef = useRef(new Map());
-  const minimapFullQueueRef = useRef({ batches: [], index: 0 });
+  const minimapFullQueueRef = useRef({ batches: [], index: 0, changed: false });
   const minimapFullQueueRAFRef = useRef(null);
   // Union of active subscriptions actually sent to the server
   const minimapActiveSubsRef = useRef(new Set());
@@ -440,9 +440,9 @@ export const useGameState = () => {
       for (const page of pages.values()) {
         page.ctx.putImageData(page.image, 0, 0);
       }
-      if (changed) bumpMinimapRevision();
+      return changed;
     },
-    [bumpMinimapRevision, minimapGetCanvas, releaseMinimapCanvas]
+    [minimapGetCanvas, releaseMinimapCanvas]
   );
 
   const drainMinimapFullQueue = useCallback(() => {
@@ -450,10 +450,15 @@ export const useGameState = () => {
     const queue = minimapFullQueueRef.current;
     if (queue.index < queue.batches.length) {
       const batch = queue.batches[queue.index++];
-      if (batch.length === 1) {
-        applyMinimapFullTile(batch[0]);
+      if (batch.tiles.length === 1) {
+        applyMinimapFullTile(batch.tiles[0]);
       } else {
-        applyMinimapFullTileBatch(batch);
+        queue.changed =
+          applyMinimapFullTileBatch(batch.tiles) || queue.changed;
+      }
+      if (batch.final && queue.changed) {
+        bumpMinimapRevision();
+        queue.changed = false;
       }
     }
     if (queue.index < queue.batches.length) {
@@ -464,12 +469,12 @@ export const useGameState = () => {
       queue.batches = [];
       queue.index = 0;
     }
-  }, [applyMinimapFullTile, applyMinimapFullTileBatch]);
+  }, [applyMinimapFullTile, applyMinimapFullTileBatch, bumpMinimapRevision]);
 
   const enqueueMinimapFullTiles = useCallback(
-    (tiles) => {
+    (tiles, final = true) => {
       const queue = minimapFullQueueRef.current;
-      if (tiles.length) queue.batches.push(tiles);
+      if (tiles.length) queue.batches.push({ tiles, final });
       if (minimapFullQueueRAFRef.current == null) {
         minimapFullQueueRAFRef.current = requestAnimationFrame(
           drainMinimapFullQueue
@@ -1152,7 +1157,7 @@ export const useGameState = () => {
         cancelAnimationFrame(minimapFullQueueRAFRef.current);
         minimapFullQueueRAFRef.current = null;
       }
-      minimapFullQueueRef.current = { batches: [], index: 0 };
+      minimapFullQueueRef.current = { batches: [], index: 0, changed: false };
       // Reconcile any desired minimap subscriptions accumulated before open
       const resubscribeAll = () => {
         try {
@@ -1382,9 +1387,9 @@ export const useGameState = () => {
         }
         setTick((t) => t + 1);
       } else if (type === "minimapFullTile") {
-        enqueueMinimapFullTiles([data]);
+        enqueueMinimapFullTiles([data], true);
       } else if (type === "minimapFullTileBatch") {
-        enqueueMinimapFullTiles(data.tiles || []);
+        enqueueMinimapFullTiles(data.tiles || [], data.finalBatch);
       } else if (type === "minimapTileDelta") {
         const tr = data.tile || {};
         const key = `${tr.x},${tr.y}`;

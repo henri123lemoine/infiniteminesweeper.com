@@ -324,6 +324,7 @@ message FullTile {
 
 message FullTileBatch {
   repeated FullTile tiles = 1;
+  bool final_batch = 2;
 }
 
 message DeltaRect {
