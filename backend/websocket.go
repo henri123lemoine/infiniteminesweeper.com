@@ -1014,7 +1014,7 @@ func (s *Server) handleMinimapSubscribe(playerID uint32, m *pb.SubscribeTiles) {
 		}
 	}
 
-	const targetBatchBytes = 512 << 10
+	const targetBatchBytes = 1 << 20
 	batch := make([]*pb.FullTile, 0, 128)
 	batchBytes := 0
 	flush := func() {
