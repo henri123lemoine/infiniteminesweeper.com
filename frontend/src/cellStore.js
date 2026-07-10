@@ -68,6 +68,63 @@ export class CellStore {
   }
 }
 
+export class FlagStore {
+  constructor() {
+    this.chunks = new Map();
+  }
+
+  chunk(chunkKey) {
+    return this.chunks.get(chunkKey) || null;
+  }
+
+  _loc(worldKey) {
+    const comma = worldKey.indexOf(",");
+    const wx = +worldKey.slice(0, comma);
+    const wy = +worldKey.slice(comma + 1);
+    const cx = Math.floor(wx / 64);
+    const cy = Math.floor(wy / 64);
+    return [`${cx},${cy}`, (wy - cy * 64) * 64 + (wx - cx * 64)];
+  }
+
+  get(worldKey) {
+    const [chunkKey, cell] = this._loc(worldKey);
+    return this.chunks.get(chunkKey)?.get(cell);
+  }
+
+  has(worldKey) {
+    const [chunkKey, cell] = this._loc(worldKey);
+    return this.chunks.get(chunkKey)?.has(cell) || false;
+  }
+
+  set(worldKey, flagID) {
+    const [chunkKey, cell] = this._loc(worldKey);
+    let flags = this.chunks.get(chunkKey);
+    if (!flags) {
+      flags = new Map();
+      this.chunks.set(chunkKey, flags);
+    }
+    flags.set(cell, flagID);
+    return this;
+  }
+
+  delete(worldKey) {
+    const [chunkKey, cell] = this._loc(worldKey);
+    const flags = this.chunks.get(chunkKey);
+    if (!flags) return false;
+    const deleted = flags.delete(cell);
+    if (flags.size === 0) this.chunks.delete(chunkKey);
+    return deleted;
+  }
+
+  clear() {
+    this.chunks.clear();
+  }
+
+  evictFarChunks(centerCx, centerCy, keepRadius) {
+    evictFarKeys(this.chunks, centerCx, centerCy, keepRadius);
+  }
+}
+
 // Drop entries of a "cx,cy"-keyed Map farther than keepRadius (Chebyshev,
 // in chunks) from the viewport center. The server re-syncs chunks when they
 // re-enter the subscription window, so eviction is safe for anything
