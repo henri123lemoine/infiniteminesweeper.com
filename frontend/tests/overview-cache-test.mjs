@@ -25,6 +25,7 @@ assert.equal(
   true,
   "global images remain pinned"
 );
+
 assert.equal(
   cache.stats().bytes,
   40,
@@ -46,6 +47,20 @@ assert.equal(
   cache.findForView(32, 3 * 64, 0, 6 * 64, 2 * 64),
   null,
   "partial regional images are never selected"
+);
+
+const fallbackCache = new OverviewCache(1024);
+const coarse = fallbackCache.put(record(16, 3, 6));
+const fine = fallbackCache.put(record(64, 3, 6));
+assert.equal(
+  fallbackCache.findClosestForView(32, 3 * 64, 0, 5 * 64, 2 * 64),
+  fine,
+  "equidistant fallback prefers the higher-detail whole image"
+);
+assert.equal(
+  fallbackCache.recordContainsView(coarse, 3 * 64, 0, 5 * 64, 2 * 64),
+  true,
+  "coverage checks include complete regional bounds"
 );
 
 console.log("OK  : overview image cache retention and coherent lookup");

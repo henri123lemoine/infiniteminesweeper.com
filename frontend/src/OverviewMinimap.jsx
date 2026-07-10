@@ -6,14 +6,21 @@ const CHUNK = 64;
 const MIN_ZOOM = 0.125;
 const MAX_ZOOM = 8;
 const MAX_REGION_PIXELS = 4 << 20;
-const LOD_FADE_MS = 140;
+const LOD_FADE_MS = 280;
 const benchmarkEnabled = new URLSearchParams(window.location.search).has(
   "benchmark"
 );
 
+function logBenchmarkEvent(event) {
+  if (!benchmarkEnabled || typeof window === "undefined") return;
+  window.__overviewEventLog ||= [];
+  window.__overviewEventLog.push({ at: performance.now(), ...event });
+  if (window.__overviewEventLog.length > 100) window.__overviewEventLog.shift();
+}
+
 export function targetOverviewLOD(zoom) {
   const pixelsPerChunk = CHUNK * zoom;
-  for (const lod of [64, 32, 16, 8, 4, 2, 1]) {
+  for (const lod of [64, 32, 16, 12, 8, 4, 2, 1]) {
     if (pixelsPerChunk >= lod) return lod;
   }
   return 1;
@@ -76,6 +83,9 @@ export default function OverviewMinimap({
   const transitionStartedRef = useRef(0);
   const requestedRef = useRef(new Map());
   const interactionAtRef = useRef(0);
+  const zoomSpeedRef = useRef(0);
+  const zoomAtRef = useRef(0);
+  const hasZoomedRef = useRef(false);
   const rafRef = useRef(null);
   const lod = targetOverviewLOD(view.zoom);
 
@@ -140,13 +150,21 @@ export default function OverviewMinimap({
         right: current.x + size.width / current.zoom,
         bottom: current.y + size.height / current.zoom,
       };
+      const leadX = (bounds.right - bounds.left) * 0.1;
+      const leadY = (bounds.bottom - bounds.top) * 0.1;
+      const demand = {
+        left: bounds.left - leadX,
+        top: bounds.top - leadY,
+        right: bounds.right + leadX,
+        bottom: bounds.bottom + leadY,
+      };
       const cache = overviewCacheRef.current;
       const record = cache.findForView(
         requestedLOD,
-        bounds.left,
-        bounds.top,
-        bounds.right,
-        bounds.bottom
+        demand.left,
+        demand.top,
+        demand.right,
+        demand.bottom
       );
       const desiredRegion = overviewRegionForView(
         current,
@@ -179,7 +197,18 @@ export default function OverviewMinimap({
           ].join(":");
       const previous = requestedRef.current.get(requestedLOD);
       const stale = record && knownRevision < serverRevision;
-      if (!force && !stale && previous === fingerprint) return;
+      const previousCoversDemand =
+        previous?.generation === overviewConnectionGeneration &&
+        previous.global === global &&
+        (global ||
+          cache.recordContainsView(
+            previous.region,
+            demand.left,
+            demand.top,
+            demand.right,
+            demand.bottom
+          ));
+      if (!force && !stale && previousCoversDemand) return;
       if (
         requestOverview({
           lod: requestedLOD,
@@ -189,7 +218,12 @@ export default function OverviewMinimap({
           subscribe: true,
         })
       ) {
-        requestedRef.current.set(requestedLOD, fingerprint);
+        requestedRef.current.set(requestedLOD, {
+          fingerprint,
+          generation: overviewConnectionGeneration,
+          global,
+          region: { lod: requestedLOD, global, ...region },
+        });
       }
     },
     [
@@ -211,22 +245,57 @@ export default function OverviewMinimap({
     if (!size.width || !size.height) return;
     const current = viewRef.current;
     const cache = overviewCacheRef.current;
-    const exact = cache.findForView(
+    const candidate = cache.findClosestForView(
       lod,
       current.x,
       current.y,
       current.x + size.width / current.zoom,
       current.y + size.height / current.zoom
     );
-    const candidate =
-      exact || cache.recordsAtLOD(8).find((record) => record.global);
     if (candidate && candidate !== activeRecordRef.current) {
-      previousRecordRef.current = activeRecordRef.current;
+      previousRecordRef.current = cache.recordContainsView(
+        activeRecordRef.current,
+        current.x,
+        current.y,
+        current.x + size.width / current.zoom,
+        current.y + size.height / current.zoom
+      )
+        ? activeRecordRef.current
+        : null;
       transitionStartedRef.current = performance.now();
       activeRecordRef.current = candidate;
       setActiveRecord(candidate);
     }
-    const timer = setTimeout(() => requestLOD(lod), 90);
+    const delay = !hasZoomedRef.current
+      ? 300
+      : zoomSpeedRef.current > 0.004
+        ? 180
+        : 50;
+    logBenchmarkEvent({
+      type: "schedule",
+      lod,
+      delay,
+      hasZoomed: hasZoomedRef.current,
+      speed: zoomSpeedRef.current,
+    });
+    let timer;
+    const requestWhenSettled = () => {
+      const settleDelay = zoomSpeedRef.current > 0.004 ? 180 : 50;
+      const sinceZoom = performance.now() - zoomAtRef.current;
+      logBenchmarkEvent({
+        type: "timer",
+        lod: targetOverviewLOD(viewRef.current.zoom),
+        settleDelay,
+        sinceZoom,
+        speed: zoomSpeedRef.current,
+      });
+      if (hasZoomedRef.current && sinceZoom < settleDelay) {
+        timer = setTimeout(requestWhenSettled, settleDelay - sinceZoom + 1);
+        return;
+      }
+      requestLOD(targetOverviewLOD(viewRef.current.zoom));
+    };
+    timer = setTimeout(requestWhenSettled, delay);
     return () => clearTimeout(timer);
   }, [
     lod,
@@ -263,6 +332,9 @@ export default function OverviewMinimap({
     const drawRecord = (source) => {
       const worldX = source.originX * CHUNK;
       const worldY = source.originY * CHUNK;
+      const sourcePixelScale = (CHUNK / source.lod) * current.zoom;
+      ctx.imageSmoothingEnabled = sourcePixelScale < 1.25;
+      ctx.imageSmoothingQuality = "low";
       ctx.drawImage(
         source.canvas,
         (worldX - current.x) * current.zoom,
@@ -366,7 +438,22 @@ export default function OverviewMinimap({
       );
       const worldX = current.x + point.x / current.zoom;
       const worldY = current.y + point.y / current.zoom;
-      interactionAtRef.current = performance.now();
+      const now = performance.now();
+      const elapsed = now - zoomAtRef.current;
+      const zoomDistance = Math.abs(Math.log(nextZoom / current.zoom));
+      zoomSpeedRef.current =
+        zoomAtRef.current > 0 && elapsed > 0 && elapsed < 500
+          ? zoomDistance / elapsed
+          : zoomDistance / 40;
+      zoomAtRef.current = now;
+      hasZoomedRef.current = true;
+      logBenchmarkEvent({
+        type: "zoom",
+        from: current.zoom,
+        to: nextZoom,
+        speed: zoomSpeedRef.current,
+      });
+      interactionAtRef.current = now;
       setCurrentView({
         x: worldX - point.x / nextZoom,
         y: worldY - point.y / nextZoom,
@@ -405,6 +492,7 @@ export default function OverviewMinimap({
       view,
       cache: cacheStats,
       network: { ...overviewDiagnosticsRef.current },
+      events: [...(window.__overviewEventLog || [])],
     };
   }
 
