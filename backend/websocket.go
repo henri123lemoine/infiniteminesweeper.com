@@ -609,6 +609,12 @@ func (s *Server) readPump(player *Player) {
 		case *pb.Msg_CellOwnerRequest:
 			s.handleCellOwnerRequest(player.ID, t.CellOwnerRequest)
 
+		case *pb.Msg_OverviewRequest:
+			s.handleOverviewRequest(player, t.OverviewRequest)
+
+		case *pb.Msg_OverviewRelease:
+			s.releaseOverview(player)
+
 		case *pb.Msg_Reveal:
 			// FSM: Only PLAYER state can send Reveal messages
 			if player.State != ClientStatePlayer {
@@ -1236,10 +1242,15 @@ func (s *Server) removePlayer(p *Player) {
 		delete(s.playerSubLastSeen, p.ID)
 		delete(s.minimapPlayerRes, p.ID)
 		delete(s.minimapSubCount, p.ID)
+		delete(s.overviewSubs, p)
 		if _, exists := s.playerViews[p.ID]; exists {
 			delete(s.playerViews, p.ID)
 			s.playerViewsVersion++
 		}
+		s.stateMu.Unlock()
+	} else {
+		s.stateMu.Lock()
+		delete(s.overviewSubs, p)
 		s.stateMu.Unlock()
 	}
 

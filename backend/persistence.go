@@ -852,8 +852,8 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 		}
 	}
 	s.totalRevealed = totalRevealed
-	s.rebuildMinimapCache16Locked()
-	log.Printf("[minimap] cached %d overview tiles in %v", len(s.minimapCache16), time.Since(cacheStarted))
+	s.rebuildOverviewLocked()
+	log.Printf("[minimap] cached %d overview tiles and %d global images in %v", len(s.overviewTiles), len(s.overviewImages), time.Since(cacheStarted))
 
 	s.lbDirty = true
 }

@@ -331,11 +331,13 @@ func (s *Server) computeTileDataAtResolution(cid ChunkID, res uint32) []byte {
 // stateMu write-lock.
 func (s *Server) minimapOnReveal(cid ChunkID, cell uint32) {
 	s.updateMinimapCache16Cell(cid, cell)
+	s.overviewDirty[cid] = struct{}{}
 	s.minimapMarkDirty(cid, cell)
 }
 
 func (s *Server) minimapOnFlag(cid ChunkID, cell uint32) {
 	s.updateMinimapCache16Cell(cid, cell)
+	s.overviewDirty[cid] = struct{}{}
 	s.minimapMarkDirty(cid, cell)
 }
 

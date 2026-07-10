@@ -123,12 +123,21 @@ type Server struct {
 
 	// Minimap streaming state. One tile per chunk (palette computed on demand
 	// from authoritative world state rather than cached per-resolution).
-	minimapTiles      map[ChunkID]*MinimapTile        // per-chunk dirty bitset + version
-	minimapSubs       map[ChunkID]map[uint32]struct{} // per-tile subscriber sets
-	minimapPlayerRes  map[uint32]uint32               // player resolution preferences (player ID -> resolution)
-	minimapSubCount   map[uint32]int                  // per-player minimap subscription count (for cap enforcement)
-	minimapDirtyTiles map[ChunkID]struct{}            // tiles with pending dirties
-	minimapCache16    map[ChunkID][]byte              // precomputed 16×16 overview tiles
+	minimapTiles       map[ChunkID]*MinimapTile        // per-chunk dirty bitset + version
+	minimapSubs        map[ChunkID]map[uint32]struct{} // per-tile subscriber sets
+	minimapPlayerRes   map[uint32]uint32               // player resolution preferences (player ID -> resolution)
+	minimapSubCount    map[uint32]int                  // per-player minimap subscription count (for cap enforcement)
+	minimapDirtyTiles  map[ChunkID]struct{}            // tiles with pending dirties
+	minimapCache16     map[ChunkID][]byte              // precomputed 16×16 overview tiles
+	overviewTiles      map[ChunkID]*overviewTile
+	overviewImages     map[uint32]*overviewImage
+	overviewDirty      map[ChunkID]struct{}
+	overviewSubs       map[*Player]map[uint32]overviewSubscription
+	overviewRevision   uint64
+	overviewRequests   uint64
+	overviewSnapBytes  uint64
+	overviewPatchBytes uint64
+	overviewWireBytes  uint64
 }
 
 func NewServer() *Server {
@@ -191,6 +200,10 @@ func NewServer() *Server {
 		minimapSubCount:   make(map[uint32]int),
 		minimapDirtyTiles: make(map[ChunkID]struct{}),
 		minimapCache16:    make(map[ChunkID][]byte),
+		overviewTiles:     make(map[ChunkID]*overviewTile),
+		overviewImages:    make(map[uint32]*overviewImage),
+		overviewDirty:     make(map[ChunkID]struct{}),
+		overviewSubs:      make(map[*Player]map[uint32]overviewSubscription),
 	}
 }
 

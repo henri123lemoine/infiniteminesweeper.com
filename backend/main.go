@@ -100,6 +100,7 @@ func main() {
 
 	go server.runLeaderboardBroadcaster()
 	go server.runMinimapBroadcaster()
+	go server.runOverviewBroadcaster()
 	go server.runPlayerPositionBroadcaster()
 
 	// Optional Prometheus metrics endpoint on a separate port — kept off the
