@@ -6,6 +6,7 @@ import React, {
   useMemo,
 } from "react";
 import Minimap from "./Minimap.jsx";
+import OverviewMinimap from "./OverviewMinimap.jsx";
 import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
@@ -436,6 +437,8 @@ function App() {
     scorePopups,
     hintPopups,
     tick,
+    overviewTick,
+    overviewConnectionGeneration,
     setTick,
     seedCache,
     revealedCellsRef,
@@ -449,6 +452,11 @@ function App() {
     updateMinimapSubscriptions,
     clearMinimapSubscriptionsFor,
     minimapTilesRef,
+    overviewCacheRef,
+    overviewServerRevisionRef,
+    overviewDiagnosticsRef,
+    requestOverview,
+    releaseOverview,
     handleVisibilityChange,
     serverSpawnRef,
     activePlayersRef,
@@ -1236,17 +1244,20 @@ function App() {
               Close
             </button>
           </div>
-          <Minimap
-            mode="overlay"
+          <OverviewMinimap
             CELL_SIZE={CELL_SIZE}
             zoom={zoom}
             viewX={viewX}
             viewY={viewY}
             containerRef={containerRef}
             mainViewMoveToken={mainViewMoveToken}
-            updateMinimapSubscriptions={updateMinimapSubscriptions}
-            clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
-            minimapTilesRef={minimapTilesRef}
+            overviewCacheRef={overviewCacheRef}
+            overviewServerRevisionRef={overviewServerRevisionRef}
+            overviewDiagnosticsRef={overviewDiagnosticsRef}
+            overviewTick={overviewTick}
+            overviewConnectionGeneration={overviewConnectionGeneration}
+            requestOverview={requestOverview}
+            releaseOverview={releaseOverview}
             activePlayersRef={activePlayersRef}
             onNavigate={(wx, wy) => {
               navigateToWorld(wx, wy);
@@ -1434,17 +1445,20 @@ function App() {
 
             {activeTab === "minimap" && (
               <div style={{ width: "100%", height: "72vh" }}>
-                <Minimap
-                  mode="overlay"
+                <OverviewMinimap
                   CELL_SIZE={CELL_SIZE}
                   zoom={zoom}
                   viewX={viewX}
                   viewY={viewY}
                   containerRef={containerRef}
                   mainViewMoveToken={mainViewMoveToken}
-                  updateMinimapSubscriptions={updateMinimapSubscriptions}
-                  clearMinimapSubscriptionsFor={clearMinimapSubscriptionsFor}
-                  minimapTilesRef={minimapTilesRef}
+                  overviewCacheRef={overviewCacheRef}
+                  overviewServerRevisionRef={overviewServerRevisionRef}
+                  overviewDiagnosticsRef={overviewDiagnosticsRef}
+                  overviewTick={overviewTick}
+                  overviewConnectionGeneration={overviewConnectionGeneration}
+                  requestOverview={requestOverview}
+                  releaseOverview={releaseOverview}
                   activePlayersRef={activePlayersRef}
                   onNavigate={(wx, wy) => {
                     navigateToWorld(wx, wy);

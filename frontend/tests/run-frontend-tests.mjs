@@ -35,6 +35,7 @@ ok('encodeMsg/decodeMsg present')
 const { execFileSync } = await import('node:child_process')
 try {
   execFileSync(process.execPath, [path.join(repoRoot, 'frontend', 'tests', 'cellstore-test.mjs')], { stdio: 'inherit' })
+  execFileSync(process.execPath, [path.join(repoRoot, 'frontend', 'tests', 'overview-cache-test.mjs')], { stdio: 'inherit' })
 } catch {
   process.exitCode = 1
 }
@@ -45,4 +46,3 @@ if (process.exitCode) {
 } else {
   console.log('\nAll frontend checks passed.')
 }
-
