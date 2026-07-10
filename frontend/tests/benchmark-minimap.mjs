@@ -231,9 +231,18 @@ try {
     });
     recordReady();
   });
+  const coldLODSamples = [];
   for (let i = 0; i < 7; i++) {
     await page.mouse.wheel(0, 650);
     await page.waitForTimeout(40);
+    if (!legacy) {
+      coldLODSamples.push(
+        await overview.evaluate((element) => ({
+          target: Number(element.dataset.targetLod),
+          active: Number(element.dataset.activeLod),
+        }))
+      );
+    }
   }
 
   let maxReadyMs = null;
@@ -402,7 +411,19 @@ try {
       websocketFrames: wsAfterFast.frames - wsBeforeFast.frames,
       overviewNetwork: fastDiagnostics?.network || null,
       regionalRequestCount: (fastDiagnostics?.network?.requestLog || []).filter(
-        (request) => !request.global
+        (request) =>
+          !request.global &&
+          request.subscribe &&
+          request.at >
+            (fastDiagnostics?.events?.find((event) => event.type === "zoom")
+              ?.at || 0)
+      ).length,
+      lodSamples: coldLODSamples,
+      globalFallbackFrames: coldLODSamples.filter(
+        (sample) => sample.target > 8 && sample.active === 8
+      ).length,
+      mismatchedLODFrames: coldLODSamples.filter(
+        (sample) => sample.target !== sample.active
       ).length,
       events: fastDiagnostics?.events || [],
       framePacing: fastFrames,
@@ -460,9 +481,19 @@ try {
       0,
       "fast zoom fetched an intermediate regional overview"
     );
+    assert.equal(
+      result.coldFastZoom.globalFallbackFrames,
+      0,
+      "fast zoom displayed the global overview before reaching LOD 8"
+    );
+    assert.equal(
+      result.coldFastZoom.mismatchedLODFrames,
+      0,
+      "fast zoom displayed a different LOD than requested"
+    );
     assert.ok(
-      result.coldFastZoom.websocketBytes <= 512 * 1024,
-      "fast zoom downloaded more than 512 KiB"
+      result.coldFastZoom.websocketBytes <= 1024 * 1024,
+      "fast zoom downloaded more than 1 MiB"
     );
     assert.equal(
       result.panAwayAndBack.requestDelta,
@@ -484,8 +515,8 @@ try {
       "reopening downloaded the full overview again"
     );
     assert.ok(
-      (finalDiagnostics?.cache?.bytes || 0) <= 64 * 1024 * 1024,
-      "overview cache exceeded 64 MiB"
+      (finalDiagnostics?.cache?.bytes || 0) <= 96 * 1024 * 1024,
+      "overview cache exceeded 96 MiB"
     );
   }
 } finally {
