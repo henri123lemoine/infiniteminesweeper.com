@@ -280,6 +280,7 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 				chosenFlagID = defaultFlagID // silently clamp to a real free flag
 			}
 			s.playerFlags[playerID] = chosenFlagID
+			s.playerViewsVersion++
 			s.scores[playerID] = 0 // New players always start with a score of 0
 			s.walLogPlayerLocked(playerID, sessionToken)
 			log.Printf("New player identity created: ID=%d, Name=%s", playerID, chosenName)
@@ -306,6 +307,7 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 		// Update flag (allow zero) if different and unlocked for this player
 		if s.playerFlags[playerID] != join.FlagID && s.isFlagUnlockedLocked(playerID, join.FlagID) {
 			s.playerFlags[playerID] = join.FlagID
+			s.playerViewsVersion++
 			s.lbDirty = true
 		}
 		if errorMsg == "" {
@@ -351,7 +353,10 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	s.playersMu.Unlock()
 
 	// Clear spectator ID's accumulated state (we hold stateMu here).
-	delete(s.playerViews, oldID)
+	if _, exists := s.playerViews[oldID]; exists {
+		delete(s.playerViews, oldID)
+		s.playerViewsVersion++
+	}
 	delete(s.playerSubs, oldID)
 	delete(s.playerSubLastSeen, oldID)
 	delete(s.minimapPlayerRes, oldID)
@@ -447,6 +452,7 @@ func (s *Server) handleUpdateProfile(player *Player, update *pb.UpdateProfile) {
 	// Update flag if different and unlocked for this player
 	if s.playerFlags[playerID] != update.FlagID && s.isFlagUnlockedLocked(playerID, update.FlagID) {
 		s.playerFlags[playerID] = update.FlagID
+		s.playerViewsVersion++
 		player.FlagID = update.FlagID
 		s.lbDirty = true
 	}
@@ -647,7 +653,10 @@ func (s *Server) readPump(player *Player) {
 			// Record player's view
 			view := PlayerView{Chunk: ChunkID{X: vu.ChunkId.X, Y: vu.ChunkId.Y}, Cell: vu.Cell}
 			s.stateMu.Lock()
-			s.playerViews[player.ID] = view
+			if previous, exists := s.playerViews[player.ID]; !exists || previous != view {
+				s.playerViews[player.ID] = view
+				s.playerViewsVersion++
+			}
 			s.stateMu.Unlock()
 
 			// Determine a proportional region around the viewport.
@@ -1210,7 +1219,10 @@ func (s *Server) removePlayer(p *Player) {
 		delete(s.playerSubLastSeen, p.ID)
 		delete(s.minimapPlayerRes, p.ID)
 		delete(s.minimapSubCount, p.ID)
-		delete(s.playerViews, p.ID)
+		if _, exists := s.playerViews[p.ID]; exists {
+			delete(s.playerViews, p.ID)
+			s.playerViewsVersion++
+		}
 		s.stateMu.Unlock()
 	}
 
@@ -1225,7 +1237,15 @@ func (s *Server) runPlayerPositionBroadcaster() {
 	ticker := time.NewTicker(broadcastInterval)
 	defer ticker.Stop()
 
+	var lastVersion uint64
 	for range ticker.C {
+		s.stateMu.RLock()
+		version := s.playerViewsVersion
+		s.stateMu.RUnlock()
+		if version == lastVersion {
+			continue
+		}
+		lastVersion = version
 		s.broadcastPlayerPositions(chunkRadius)
 	}
 }
