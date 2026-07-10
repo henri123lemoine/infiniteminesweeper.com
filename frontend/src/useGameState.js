@@ -232,7 +232,7 @@ export const useGameState = () => {
     0xff000000, // dark_gray / black
   ];
   for (let i = 0; i < 10; i++) minimapPalette[10 + i] = flagColors[i];
-  const overviewLevels = [0, 96, 160, 208, 232, 255];
+  const overviewLevels = [0, 96, 144, 192, 224, 255];
   for (let r = 0; r < overviewLevels.length; r++) {
     for (let g = 0; g < overviewLevels.length; g++) {
       for (let b = 0; b < overviewLevels.length; b++) {

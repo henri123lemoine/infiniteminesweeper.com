@@ -23,7 +23,7 @@ func TestOverviewPyramidAveragesColorWithoutSamplingPatterns(t *testing.T) {
 		}
 	}
 	tile := computeOverviewTileFromFull(full)
-	for _, pixels := range [][]byte{tile.LOD1[:], tile.LOD2[:], tile.LOD4[:], tile.LOD8[:], tile.LOD16[:], tile.LOD32[:]} {
+	for _, pixels := range [][]byte{tile.LOD1[:], tile.LOD2[:], tile.LOD4[:], tile.LOD8[:], tile.LOD12[:], tile.LOD16[:], tile.LOD32[:]} {
 		for _, index := range pixels {
 			if index != pixels[0] {
 				t.Fatal("equal color mixtures produced a positional pattern")
@@ -35,8 +35,26 @@ func TestOverviewPyramidAveragesColorWithoutSamplingPatterns(t *testing.T) {
 		t.Fatalf("mixed block retained categorical palette index %d", index)
 	}
 	color := overviewPaletteRGB[index]
-	if color[0] < 150 || color[1] < 150 || color[2] < 150 {
-		t.Fatalf("linear-light average is unexpectedly dark: %v", color)
+	if color[0] < 120 || color[1] < 120 || color[2] < 120 {
+		t.Fatalf("filtered average is unexpectedly dark: %v", color)
+	}
+}
+
+func TestOverviewAreaFilterCoversChunkEdges(t *testing.T) {
+	full := bytes.Repeat([]byte{2}, ChunkSize*ChunkSize)
+	for y := 60; y < ChunkSize; y++ {
+		for x := 0; x < ChunkSize; x++ {
+			full[y*ChunkSize+x] = 1
+		}
+	}
+	for y := 0; y < ChunkSize; y++ {
+		for x := 60; x < ChunkSize; x++ {
+			full[y*ChunkSize+x] = 1
+		}
+	}
+	pixels := downsampleOverviewColor(full, 12)
+	if pixels[len(pixels)-1] == pixels[0] {
+		t.Fatal("fractional LOD ignored the bottom or right chunk edge")
 	}
 }
 
@@ -151,7 +169,7 @@ func TestOverviewPatchUsesRequestedLOD(t *testing.T) {
 	s.overviewDirty[cid] = struct{}{}
 	dirty, revision := s.refreshOverviewDirtyLocked()
 
-	for _, lod := range []uint32{8, 16, 32, 64} {
+	for _, lod := range []uint32{8, 12, 16, 32, 64} {
 		msg := s.overviewPatchLocked(lod, overviewSubscription{Global: true}, dirty, revision)
 		if msg == nil {
 			t.Fatalf("missing LOD %d patch", lod)

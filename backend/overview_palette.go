@@ -4,7 +4,7 @@ import "math"
 
 const overviewColorBase = 20
 
-var overviewColorLevels = [...]uint8{0, 96, 160, 208, 232, 255}
+var overviewColorLevels = [...]uint8{0, 96, 144, 192, 224, 255}
 
 var overviewPaletteRGB = func() [256][3]uint8 {
 	palette := [256][3]uint8{
@@ -39,29 +39,21 @@ var overviewPaletteRGB = func() [256][3]uint8 {
 	return palette
 }()
 
-var overviewSRGBToLinear = func() [256]uint32 {
+const overviewFilterGamma = 1.5
+
+var overviewToFilterSpace = func() [256]uint32 {
 	var table [256]uint32
 	for i := range table {
-		value := float64(i) / 255
-		if value <= 0.04045 {
-			value /= 12.92
-		} else {
-			value = math.Pow((value+0.055)/1.055, 2.4)
-		}
+		value := math.Pow(float64(i)/255, overviewFilterGamma)
 		table[i] = uint32(math.Round(value * 4095))
 	}
 	return table
 }()
 
-var overviewLinearToSRGB = func() [4096]uint8 {
+var overviewFromFilterSpace = func() [4096]uint8 {
 	var table [4096]uint8
 	for i := range table {
-		value := float64(i) / 4095
-		if value <= 0.0031308 {
-			value *= 12.92
-		} else {
-			value = 1.055*math.Pow(value, 1/2.4) - 0.055
-		}
+		value := math.Pow(float64(i)/4095, 1/overviewFilterGamma)
 		table[i] = uint8(math.Round(value * 255))
 	}
 	return table
@@ -91,6 +83,9 @@ func quantizeOverviewColor(red, green, blue uint8) byte {
 }
 
 func downsampleOverviewColor(full []byte, lod int) []byte {
+	if ChunkSize%lod != 0 {
+		return downsampleOverviewColorArea(full, lod)
+	}
 	block := ChunkSize / lod
 	output := make([]byte, lod*lod)
 	for y := 0; y < lod; y++ {
@@ -104,9 +99,9 @@ func downsampleOverviewColor(full []byte, lod int) []byte {
 					index := full[base+dx]
 					uniform = uniform && index == first
 					color := overviewPaletteRGB[index]
-					red += overviewSRGBToLinear[color[0]]
-					green += overviewSRGBToLinear[color[1]]
-					blue += overviewSRGBToLinear[color[2]]
+					red += overviewToFilterSpace[color[0]]
+					green += overviewToFilterSpace[color[1]]
+					blue += overviewToFilterSpace[color[2]]
 				}
 			}
 			if uniform {
@@ -115,9 +110,60 @@ func downsampleOverviewColor(full []byte, lod int) []byte {
 			}
 			count := uint32(block * block)
 			output[y*lod+x] = quantizeOverviewColor(
-				overviewLinearToSRGB[red/count],
-				overviewLinearToSRGB[green/count],
-				overviewLinearToSRGB[blue/count],
+				overviewFromFilterSpace[red/count],
+				overviewFromFilterSpace[green/count],
+				overviewFromFilterSpace[blue/count],
+			)
+		}
+	}
+	return output
+}
+
+func downsampleOverviewColorArea(full []byte, lod int) []byte {
+	output := make([]byte, lod*lod)
+	for y := 0; y < lod; y++ {
+		y0, y1 := y*ChunkSize, (y+1)*ChunkSize
+		for x := 0; x < lod; x++ {
+			x0, x1 := x*ChunkSize, (x+1)*ChunkSize
+			first := full[(y0/lod)*ChunkSize+x0/lod]
+			uniform := true
+			var red, green, blue uint64
+			for sy := y0 / lod; sy < (y1+lod-1)/lod; sy++ {
+				yLower, yUpper := sy*lod, (sy+1)*lod
+				if yLower < y0 {
+					yLower = y0
+				}
+				if yUpper > y1 {
+					yUpper = y1
+				}
+				yWeight := yUpper - yLower
+				for sx := x0 / lod; sx < (x1+lod-1)/lod; sx++ {
+					xLower, xUpper := sx*lod, (sx+1)*lod
+					if xLower < x0 {
+						xLower = x0
+					}
+					if xUpper > x1 {
+						xUpper = x1
+					}
+					xWeight := xUpper - xLower
+					index := full[sy*ChunkSize+sx]
+					uniform = uniform && index == first
+					weight := uint64(xWeight * yWeight)
+					color := overviewPaletteRGB[index]
+					red += uint64(overviewToFilterSpace[color[0]]) * weight
+					green += uint64(overviewToFilterSpace[color[1]]) * weight
+					blue += uint64(overviewToFilterSpace[color[2]]) * weight
+				}
+			}
+			if uniform {
+				output[y*lod+x] = first
+				continue
+			}
+			const totalWeight = ChunkSize * ChunkSize
+			output[y*lod+x] = quantizeOverviewColor(
+				overviewFromFilterSpace[red/totalWeight],
+				overviewFromFilterSpace[green/totalWeight],
+				overviewFromFilterSpace[blue/totalWeight],
 			)
 		}
 	}
