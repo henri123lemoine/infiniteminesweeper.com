@@ -24,6 +24,7 @@ export default function Minimap({
   activePlayersRef,
 }) {
   const canvasRef = useRef(null);
+  const overlayMapCanvasRef = useRef(null);
   const localContainerRef = useRef(null);
   const effectiveContainerRef =
     mode === "overlay" ? localContainerRef : containerRef || localContainerRef;
@@ -44,7 +45,7 @@ export default function Minimap({
   const userHasDraggedRef = useRef(false);
   const rafRef = useRef(null);
   const subscriptionTimerRef = useRef(null);
-  const overlayMapLayerRef = useRef({ canvas: null });
+  const overlayMapLayerRef = useRef({});
 
   // Calculate appropriate minimap resolution based on zoom level
   const calculateMinimapResolution = useCallback(
@@ -217,8 +218,6 @@ export default function Minimap({
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.imageSmoothingEnabled = false;
         ctx.clearRect(0, 0, w, h);
-        ctx.fillStyle = "#c0c0c0";
-        ctx.fillRect(0, 0, w, h);
 
         const { x, y, zoom: overlayZoom } = overlayViewRef.current;
         const tilePx = CHUNK * overlayZoom;
@@ -229,7 +228,8 @@ export default function Minimap({
 
         const revision = minimapTilesRef.current.revision || 0;
         const layer = overlayMapLayerRef.current;
-        if (!layer.canvas) layer.canvas = document.createElement("canvas");
+        const mapCanvas = overlayMapCanvasRef.current;
+        if (!mapCanvas) return;
         const layerChanged =
           layer.x !== x ||
           layer.y !== y ||
@@ -239,13 +239,15 @@ export default function Minimap({
           layer.revision !== revision;
         if (layerChanged) {
           if (
-            layer.canvas.width !== pixelWidth ||
-            layer.canvas.height !== pixelHeight
+            mapCanvas.width !== pixelWidth ||
+            mapCanvas.height !== pixelHeight
           ) {
-            layer.canvas.width = pixelWidth;
-            layer.canvas.height = pixelHeight;
+            mapCanvas.width = pixelWidth;
+            mapCanvas.height = pixelHeight;
           }
-          const layerCtx = layer.canvas.getContext("2d");
+          mapCanvas.style.width = `${w}px`;
+          mapCanvas.style.height = `${h}px`;
+          const layerCtx = mapCanvas.getContext("2d");
           layerCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
           layerCtx.imageSmoothingEnabled = false;
           layerCtx.clearRect(0, 0, w, h);
@@ -279,17 +281,6 @@ export default function Minimap({
           layer.height = pixelHeight;
           layer.revision = revision;
         }
-        ctx.drawImage(
-          layer.canvas,
-          0,
-          0,
-          pixelWidth,
-          pixelHeight,
-          0,
-          0,
-          w,
-          h
-        );
 
         // Draw main viewport rectangle for overlay mode
         if (mode === "overlay" && containerRef?.current && CELL_SIZE) {
@@ -792,12 +783,27 @@ export default function Minimap({
         position: "relative",
         width: "100%",
         height: "100%",
-        background: "#202020",
+        background: "#c0c0c0",
       }}
     >
       <canvas
+        ref={overlayMapCanvasRef}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+        }}
+      />
+      <canvas
         ref={canvasRef}
-        style={{ width: "100%", height: "100%" }}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+        }}
         onDoubleClick={handleDoubleClick}
         {...bind}
       />
