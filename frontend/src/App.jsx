@@ -6,7 +6,7 @@ import React, {
   useMemo,
 } from "react";
 import Minimap from "./Minimap.jsx";
-import OverviewMinimap from "./OverviewMinimap.jsx";
+import OverviewMinimap, { overviewRegionForView } from "./OverviewMinimap.jsx";
 import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
@@ -597,6 +597,53 @@ function App() {
   const [MINIMAP_SIZE, setMINIMAP_SIZE] = useState(() => computeMinimapSize());
   const BASE_CELL_SIZE = 32;
   const CELL_SIZE = BASE_CELL_SIZE;
+
+  useEffect(() => {
+    if (!overviewConnectionGeneration) return;
+    const width = Math.max(1, window.innerWidth);
+    const height = Math.max(1, window.innerHeight);
+    const gameWidth = containerRef.current?.clientWidth || width;
+    const gameHeight = containerRef.current?.clientHeight || height;
+    const gameZoom = zoomRef.current;
+    const centerX = (viewRef.current.x + gameWidth / 2 / gameZoom) / CELL_SIZE;
+    const centerY = (viewRef.current.y + gameHeight / 2 / gameZoom) / CELL_SIZE;
+    const timers = [64, 32, 16, 12].map((lod, index) =>
+      setTimeout(() => {
+        const overviewZoom = lod / 64;
+        const overviewView = {
+          x: centerX - width / (2 * overviewZoom),
+          y: centerY - height / (2 * overviewZoom),
+          zoom: overviewZoom,
+        };
+        const region = overviewRegionForView(
+          overviewView,
+          width,
+          height,
+          lod,
+          0.05
+        );
+        const cached = overviewCacheRef.current.findExact({
+          lod,
+          global: false,
+          ...region,
+        });
+        requestOverview({
+          lod,
+          ...region,
+          global: false,
+          knownRevision: cached?.revision || 0,
+          subscribe: false,
+          prewarm: true,
+        });
+      }, [0, 75, 200, 350][index])
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [
+    CELL_SIZE,
+    overviewCacheRef,
+    overviewConnectionGeneration,
+    requestOverview,
+  ]);
 
   // Convert screen coordinates to world coordinates
   const screenToWorld = useCallback(

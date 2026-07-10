@@ -1,4 +1,4 @@
-const DEFAULT_BUDGET = 64 * 1024 * 1024;
+const DEFAULT_BUDGET = 96 * 1024 * 1024;
 
 const regionKey = ({
   lod,
@@ -23,7 +23,7 @@ export class OverviewCache {
     record.key = regionKey(record);
     record.lastUsed = performance.now();
     record.byteCost = record.canvasByteLength;
-    record.pinned = record.global;
+    record.pinned = record.global || Boolean(record.pinned);
     const previous = this.records.get(record.key);
     if (previous) this.bytes -= previous.byteCost;
     this.records.set(record.key, record);

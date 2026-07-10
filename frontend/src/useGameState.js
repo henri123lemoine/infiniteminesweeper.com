@@ -184,6 +184,7 @@ export const useGameState = () => {
   const overviewCacheRef = useRef(null);
   if (!overviewCacheRef.current) overviewCacheRef.current = new OverviewCache();
   const overviewPendingRef = useRef(new Map());
+  const overviewPinnedRegionsRef = useRef(new Set());
   const overviewRequestSenderRef = useRef(null);
   const overviewServerRevisionRef = useRef(new Map());
   const overviewDiagnosticsRef = useRef({
@@ -310,6 +311,15 @@ export const useGameState = () => {
       overviewCacheRef.current.put({
         ...query,
         revision,
+        pinned: overviewPinnedRegionsRef.current.has(
+          [
+            lod,
+            query.originX,
+            query.originY,
+            query.widthChunks,
+            query.heightChunks,
+          ].join(":")
+        ),
         canvasByteLength: pixels.byteLength * 4,
         canvas: makeOverviewCanvas(pixels, width, height),
       });
@@ -1984,6 +1994,17 @@ export const useGameState = () => {
     ].join(":");
     if (overviewPendingRef.current.get(lod) === fingerprint) return false;
     overviewPendingRef.current.set(lod, fingerprint);
+    if (request.prewarm) {
+      overviewPinnedRegionsRef.current.add(
+        [
+          lod,
+          request.originX || 0,
+          request.originY || 0,
+          request.widthChunks || 0,
+          request.heightChunks || 0,
+        ].join(":")
+      );
+    }
     const bytes = encodeMsg({ overviewRequest: request });
     socket.send(bytes);
     overviewDiagnosticsRef.current.requests++;
@@ -1992,6 +2013,7 @@ export const useGameState = () => {
       at: performance.now(),
       lod,
       global: Boolean(request.global),
+      subscribe: Boolean(request.subscribe),
       widthChunks: request.widthChunks || 0,
       heightChunks: request.heightChunks || 0,
     });
