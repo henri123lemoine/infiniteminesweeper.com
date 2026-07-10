@@ -749,6 +749,7 @@ func (s *Server) saveSnapshotToDisk() error {
 }
 
 func (s *Server) restoreSnapshotData(data snapshotData) {
+	cacheStarted := time.Now()
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
@@ -851,6 +852,8 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 		}
 	}
 	s.totalRevealed = totalRevealed
+	s.rebuildMinimapCache16Locked()
+	log.Printf("[minimap] cached %d overview tiles in %v", len(s.minimapCache16), time.Since(cacheStarted))
 
 	s.lbDirty = true
 }

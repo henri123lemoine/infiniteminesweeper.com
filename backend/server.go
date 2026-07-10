@@ -128,6 +128,7 @@ type Server struct {
 	minimapPlayerRes  map[uint32]uint32               // player resolution preferences (player ID -> resolution)
 	minimapSubCount   map[uint32]int                  // per-player minimap subscription count (for cap enforcement)
 	minimapDirtyTiles map[ChunkID]struct{}            // tiles with pending dirties
+	minimapCache16    map[ChunkID][]byte              // precomputed 16×16 overview tiles
 }
 
 func NewServer() *Server {
@@ -189,6 +190,7 @@ func NewServer() *Server {
 		minimapPlayerRes:  make(map[uint32]uint32),
 		minimapSubCount:   make(map[uint32]int),
 		minimapDirtyTiles: make(map[ChunkID]struct{}),
+		minimapCache16:    make(map[ChunkID][]byte),
 	}
 }
 

@@ -120,7 +120,10 @@ func probabilisticDownsample(cid ChunkID, fullData []byte, blockX, blockY, block
 	if total == 0 {
 		return mmUnseen
 	}
+	return chooseDownsampledPalette(cid, blockX, blockY, counts, total)
+}
 
+func chooseDownsampledPalette(cid ChunkID, blockX, blockY int, counts [256]uint32, total uint32) byte {
 	// Bayer 8x8 threshold matrix to decorrelate patterns across blocks (0..63)
 	var bayer8 = [64]uint8{
 		0, 32, 8, 40, 2, 34, 10, 42,
@@ -154,6 +157,68 @@ func probabilisticDownsample(cid ChunkID, fullData []byte, blockX, blockY, block
 		}
 	}
 	return mmUnseen
+}
+
+func (s *Server) paletteIndexAt(cid ChunkID, cell uint32, reveals *ChunkBits, flags chunkFlags, mines *[512]byte) byte {
+	if flag, ok := flags.get(cell); ok {
+		return byte(mmFlagBase + minimapFlagBucket(flag.FlagID))
+	}
+	if reveals == nil || reveals[cell>>6]&(1<<(cell&63)) == 0 {
+		return mmUnseen
+	}
+	if mines[cell>>3]&(1<<(cell&7)) != 0 {
+		return mmMine
+	}
+	n := s.countAdjacentMines(cid, cell)
+	if n >= 7 {
+		return mmNum7Plus
+	}
+	return byte(mmEmpty0 + n)
+}
+
+func (s *Server) updateMinimapCache16Cell(cid ChunkID, cell uint32) {
+	if !s.chunkHasAnyState(cid) {
+		delete(s.minimapCache16, cid)
+		return
+	}
+	data := s.minimapCache16[cid]
+	if data == nil {
+		data = make([]byte, 16*16)
+		s.minimapCache16[cid] = data
+	}
+
+	const block = 4
+	blockX := int(cell%ChunkSize) / block
+	blockY := int(cell/ChunkSize) / block
+	reveals := s.chunks[cid]
+	flags := s.flags[cid]
+	mines := s.getMineBitmap(cid)
+	var counts [256]uint32
+	for dy := 0; dy < block; dy++ {
+		for dx := 0; dx < block; dx++ {
+			pos := uint32((blockY*block+dy)*ChunkSize + blockX*block + dx)
+			counts[s.paletteIndexAt(cid, pos, reveals, flags, mines)]++
+		}
+	}
+	data[blockY*16+blockX] = chooseDownsampledPalette(cid, blockX, blockY, counts, block*block)
+}
+
+func (s *Server) rebuildMinimapCache16Locked() {
+	cache := make(map[ChunkID][]byte, len(s.chunks)+len(s.flags))
+	for cid := range s.chunks {
+		if data := downsampleTo(cid, s.computeFullTileData(cid), 16); data != nil {
+			cache[cid] = data
+		}
+	}
+	for cid := range s.flags {
+		if _, ok := cache[cid]; ok {
+			continue
+		}
+		if data := downsampleTo(cid, s.computeFullTileData(cid), 16); data != nil {
+			cache[cid] = data
+		}
+	}
+	s.minimapCache16 = cache
 }
 
 func minimapFlagBucket(flagID uint32) int {
@@ -254,16 +319,23 @@ func downsampleTo(cid ChunkID, full []byte, res uint32) []byte {
 // computeTileDataAtResolution returns palette data sized for `res`. Returns nil
 // when the chunk has no state (all-unseen).
 func (s *Server) computeTileDataAtResolution(cid ChunkID, res uint32) []byte {
+	if res == 16 {
+		if data := s.minimapCache16[cid]; data != nil {
+			return data
+		}
+	}
 	return downsampleTo(cid, s.computeFullTileData(cid), res)
 }
 
 // minimapOnReveal / minimapOnFlag are called from the reveal/flag logic under
 // stateMu write-lock.
 func (s *Server) minimapOnReveal(cid ChunkID, cell uint32) {
+	s.updateMinimapCache16Cell(cid, cell)
 	s.minimapMarkDirty(cid, cell)
 }
 
 func (s *Server) minimapOnFlag(cid ChunkID, cell uint32) {
+	s.updateMinimapCache16Cell(cid, cell)
 	s.minimapMarkDirty(cid, cell)
 }
 
@@ -412,12 +484,20 @@ func (s *Server) runMinimapBroadcaster() {
 				playersByRes[res] = append(playersByRes[res], pid)
 			}
 
-			fullData := s.computeFullTileData(cid)
+			var fullData []byte
 			t.Version++
 			version := t.Version
 
 			for res, players := range playersByRes {
-				data := downsampleTo(cid, fullData, res)
+				var data []byte
+				if res == 16 {
+					data = s.computeTileDataAtResolution(cid, res)
+				} else {
+					if fullData == nil {
+						fullData = s.computeFullTileData(cid)
+					}
+					data = downsampleTo(cid, fullData, res)
+				}
 				if data == nil {
 					continue
 				}
