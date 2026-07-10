@@ -42,6 +42,7 @@ export default function Minimap({
   const userHasDraggedRef = useRef(false);
   const rafRef = useRef(null);
   const subscriptionTimerRef = useRef(null);
+  const overlayMapLayerRef = useRef({ canvas: null });
 
   // Calculate appropriate minimap resolution based on zoom level
   const calculateMinimapResolution = useCallback(
@@ -71,8 +72,11 @@ export default function Minimap({
       if (mode === "hud") {
         // HUD mode rendering
         const cssSize = MINIMAP_SIZE;
-        canvas.width = Math.floor(cssSize * dpr);
-        canvas.height = Math.floor(cssSize * dpr);
+        const pixelSize = Math.floor(cssSize * dpr);
+        if (canvas.width !== pixelSize || canvas.height !== pixelSize) {
+          canvas.width = pixelSize;
+          canvas.height = pixelSize;
+        }
         canvas.style.width = `${cssSize}px`;
         canvas.style.height = `${cssSize}px`;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -199,8 +203,12 @@ export default function Minimap({
         // Overlay mode rendering
         const w = container.clientWidth;
         const h = container.clientHeight;
-        canvas.width = Math.floor(w * dpr);
-        canvas.height = Math.floor(h * dpr);
+        const pixelWidth = Math.floor(w * dpr);
+        const pixelHeight = Math.floor(h * dpr);
+        if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+          canvas.width = pixelWidth;
+          canvas.height = pixelHeight;
+        }
         canvas.style.width = `${w}px`;
         canvas.style.height = `${h}px`;
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -216,27 +224,69 @@ export default function Minimap({
         const endChunkX = Math.floor((x + w / overlayZoom) / CHUNK);
         const endChunkY = Math.floor((y + h / overlayZoom) / CHUNK);
 
-        for (let cy = startChunkY; cy <= endChunkY; cy++) {
-          for (let cx = startChunkX; cx <= endChunkX; cx++) {
-            const key = `${cx},${cy}`;
-            const rec = minimapTilesRef.current.get(key);
-            if (!rec || !rec.canvas) continue;
-            const ox = Math.floor(cx * CHUNK - x);
-            const oy = Math.floor(cy * CHUNK - y);
-            const resolution = rec.resolution || CHUNK;
-            ctx.drawImage(
-              rec.canvas,
-              rec.canvasX || 0,
-              rec.canvasY || 0,
-              resolution,
-              resolution,
-              Math.floor(ox * overlayZoom),
-              Math.floor(oy * overlayZoom),
-              Math.ceil(tilePx),
-              Math.ceil(tilePx)
-            );
+        const revision = minimapTilesRef.current.revision || 0;
+        const layer = overlayMapLayerRef.current;
+        if (!layer.canvas) layer.canvas = document.createElement("canvas");
+        const layerChanged =
+          layer.x !== x ||
+          layer.y !== y ||
+          layer.zoom !== overlayZoom ||
+          layer.width !== pixelWidth ||
+          layer.height !== pixelHeight ||
+          layer.revision !== revision;
+        if (layerChanged) {
+          if (
+            layer.canvas.width !== pixelWidth ||
+            layer.canvas.height !== pixelHeight
+          ) {
+            layer.canvas.width = pixelWidth;
+            layer.canvas.height = pixelHeight;
           }
+          const layerCtx = layer.canvas.getContext("2d");
+          layerCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          layerCtx.imageSmoothingEnabled = false;
+          layerCtx.clearRect(0, 0, w, h);
+          layerCtx.fillStyle = "#c0c0c0";
+          layerCtx.fillRect(0, 0, w, h);
+          for (let cy = startChunkY; cy <= endChunkY; cy++) {
+            for (let cx = startChunkX; cx <= endChunkX; cx++) {
+              const key = `${cx},${cy}`;
+              const rec = minimapTilesRef.current.get(key);
+              if (!rec || !rec.canvas) continue;
+              const ox = Math.floor(cx * CHUNK - x);
+              const oy = Math.floor(cy * CHUNK - y);
+              const resolution = rec.resolution || CHUNK;
+              layerCtx.drawImage(
+                rec.canvas,
+                rec.canvasX || 0,
+                rec.canvasY || 0,
+                resolution,
+                resolution,
+                Math.floor(ox * overlayZoom),
+                Math.floor(oy * overlayZoom),
+                Math.ceil(tilePx),
+                Math.ceil(tilePx)
+              );
+            }
+          }
+          layer.x = x;
+          layer.y = y;
+          layer.zoom = overlayZoom;
+          layer.width = pixelWidth;
+          layer.height = pixelHeight;
+          layer.revision = revision;
         }
+        ctx.drawImage(
+          layer.canvas,
+          0,
+          0,
+          pixelWidth,
+          pixelHeight,
+          0,
+          0,
+          w,
+          h
+        );
 
         // Draw main viewport rectangle for overlay mode
         if (mode === "overlay" && containerRef?.current && CELL_SIZE) {
