@@ -58,7 +58,10 @@ await context.addInitScript(() => {
   try {
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
-        window.__frameProbe.longTasks.push(entry.duration);
+        window.__frameProbe.longTasks.push({
+          startTime: entry.startTime,
+          duration: entry.duration,
+        });
       }
     }).observe({ type: "longtask", buffered: true });
   } catch {}
@@ -104,7 +107,11 @@ const readFrameProbe = async () => {
     framesOver20Ms: deltas.filter((value) => value > 20).length,
     framesOver33Ms: deltas.filter((value) => value > 33.34).length,
     longTasks: probe.longTasks.length,
-    longTaskTotalMs: probe.longTasks.reduce((sum, value) => sum + value, 0),
+    longTaskTotalMs: probe.longTasks.reduce(
+      (sum, entry) => sum + entry.duration,
+      0
+    ),
+    longTaskEntries: probe.longTasks,
   };
 };
 
@@ -394,6 +401,10 @@ try {
       websocketBytes: wsAfterFast.bytes - wsBeforeFast.bytes,
       websocketFrames: wsAfterFast.frames - wsBeforeFast.frames,
       overviewNetwork: fastDiagnostics?.network || null,
+      regionalRequestCount: (fastDiagnostics?.network?.requestLog || []).filter(
+        (request) => !request.global
+      ).length,
+      events: fastDiagnostics?.events || [],
       framePacing: fastFrames,
     },
     panAwayAndBack: {
@@ -443,6 +454,15 @@ try {
     assert.ok(
       result.coldFastZoom.maxReadyMs <= 500,
       "max zoom image missed 500ms target"
+    );
+    assert.equal(
+      result.coldFastZoom.regionalRequestCount,
+      0,
+      "fast zoom fetched an intermediate regional overview"
+    );
+    assert.ok(
+      result.coldFastZoom.websocketBytes <= 512 * 1024,
+      "fast zoom downloaded more than 512 KiB"
     );
     assert.equal(
       result.panAwayAndBack.requestDelta,

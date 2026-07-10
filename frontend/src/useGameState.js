@@ -195,6 +195,7 @@ export const useGameState = () => {
     rawPixelBytes: 0,
     prefetchStartedAt: 0,
     prefetchReadyAt: 0,
+    requestLog: [],
   });
   // Union of active subscriptions actually sent to the server
   const minimapActiveSubsRef = useRef(new Set());
@@ -1987,6 +1988,16 @@ export const useGameState = () => {
     socket.send(bytes);
     overviewDiagnosticsRef.current.requests++;
     overviewDiagnosticsRef.current.requestBytes += bytes.byteLength;
+    overviewDiagnosticsRef.current.requestLog.push({
+      at: performance.now(),
+      lod,
+      global: Boolean(request.global),
+      widthChunks: request.widthChunks || 0,
+      heightChunks: request.heightChunks || 0,
+    });
+    if (overviewDiagnosticsRef.current.requestLog.length > 50) {
+      overviewDiagnosticsRef.current.requestLog.shift();
+    }
     return true;
   }, []);
 
