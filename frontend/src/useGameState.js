@@ -1030,7 +1030,14 @@ export const useGameState = () => {
               const [x, y] = k.split(",").map(Number);
               return { x, y };
             });
-            s.send(encodeMsg({ minimapSubscribe: { tiles } }));
+            s.send(
+              encodeMsg({
+                minimapSubscribe: {
+                  tiles,
+                  resolution: currentResolutionRef.current,
+                },
+              })
+            );
             minimapActiveSubsRef.current = new Set(union);
           }
         } catch {}
@@ -1718,23 +1725,9 @@ export const useGameState = () => {
         if (!s || s.readyState !== WebSocket.OPEN) return;
 
         // Check if resolution changed significantly - request new tiles but keep old ones visible
-        const prevResolution = currentResolutionRef.current;
-        if (resolution !== prevResolution) {
+        const resolutionChanged = resolution !== currentResolutionRef.current;
+        if (resolutionChanged) {
           currentResolutionRef.current = resolution;
-
-          // Force re-subscription of all active tiles at new resolution
-          // But keep the old tiles visible until new ones arrive
-          if (minimapActiveSubsRef.current.size > 0) {
-            const allTiles = Array.from(minimapActiveSubsRef.current).map(
-              (k) => {
-                const [x, y] = k.split(",").map(Number);
-                return { x, y };
-              }
-            );
-            s.send(
-              encodeMsg({ minimapSubscribe: { tiles: allTiles, resolution } })
-            );
-          }
         }
 
         const tilesWide = Math.ceil(widthCells / CHUNK) + marginTiles * 2;
@@ -1765,7 +1758,8 @@ export const useGameState = () => {
         const toAdd = [];
         const toDel = [];
         for (const k of union)
-          if (!minimapActiveSubsRef.current.has(k)) toAdd.push(k);
+          if (resolutionChanged || !minimapActiveSubsRef.current.has(k))
+            toAdd.push(k);
         for (const k of minimapActiveSubsRef.current)
           if (!union.has(k)) toDel.push(k);
 

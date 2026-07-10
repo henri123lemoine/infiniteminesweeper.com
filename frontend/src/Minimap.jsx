@@ -41,32 +41,18 @@ export default function Minimap({
   // Interaction state
   const userHasDraggedRef = useRef(false);
   const rafRef = useRef(null);
+  const subscriptionTimerRef = useRef(null);
 
   // Calculate appropriate minimap resolution based on zoom level
   const calculateMinimapResolution = useCallback(
-    (mode, cells, overlayZoom, containerWidth = 0, containerHeight = 0) => {
-      let chunksInView;
-
-      if (mode === "hud") {
-        // HUD mode: calculate how many chunks are in view
-        chunksInView = (cells / CHUNK) * (cells / CHUNK);
-      } else {
-        // Overlay mode: calculate based on overlay zoom and container size
-        const widthInCells = containerWidth / overlayZoom;
-        const heightInCells = containerHeight / overlayZoom;
-        chunksInView = (widthInCells / CHUNK) * (heightInCells / CHUNK);
-      }
-
-      // Keep full-res up to ~70x70 chunks, then 32 up to ~150x150 chunks
-      if (chunksInView < 5000) {
-        // < ~70x70 chunks
-        return 64;
-      } else if (chunksInView < 20000) {
-        // < 150x150 chunks
-        return 32;
-      } else {
-        return 16;
-      }
+    (mode, cells, overlayZoom) => {
+      const tilePixels =
+        mode === "hud"
+          ? MINIMAP_SIZE / Math.max(1, cells / CHUNK)
+          : CHUNK * overlayZoom;
+      if (tilePixels <= 16) return 16;
+      if (tilePixels <= 32) return 32;
+      return 64;
     },
     [MINIMAP_SIZE, CHUNK]
   );
@@ -557,31 +543,33 @@ export default function Minimap({
       const resolution = calculateMinimapResolution("hud", cells);
       updateMinimapSubscriptions(cx, cy, cells, cells, 2, "hud", resolution);
     } else {
-      const el = effectiveContainerRef.current;
-      if (!el) return;
-      const w = el.clientWidth;
-      const h = el.clientHeight;
-      const { x, y, zoom: overlayZoom } = overlayViewRef.current;
-      const widthCells = Math.ceil(w / overlayZoom);
-      const heightCells = Math.ceil(h / overlayZoom);
-      const centerWorldX = Math.floor(x + widthCells / 2);
-      const centerWorldY = Math.floor(y + heightCells / 2);
-      const resolution = calculateMinimapResolution(
-        "overlay",
-        0,
-        overlayZoom,
-        w,
-        h
-      );
-      updateMinimapSubscriptions(
-        centerWorldX,
-        centerWorldY,
-        widthCells,
-        heightCells,
-        2,
-        "overlay",
-        resolution
-      );
+      clearTimeout(subscriptionTimerRef.current);
+      subscriptionTimerRef.current = setTimeout(() => {
+        const el = effectiveContainerRef.current;
+        if (!el) return;
+        const w = el.clientWidth;
+        const h = el.clientHeight;
+        const { x, y, zoom: overlayZoom } = overlayViewRef.current;
+        const widthCells = Math.ceil(w / overlayZoom);
+        const heightCells = Math.ceil(h / overlayZoom);
+        const centerWorldX = Math.floor(x + widthCells / 2);
+        const centerWorldY = Math.floor(y + heightCells / 2);
+        const resolution = calculateMinimapResolution(
+          "overlay",
+          0,
+          overlayZoom
+        );
+        updateMinimapSubscriptions(
+          centerWorldX,
+          centerWorldY,
+          widthCells,
+          heightCells,
+          2,
+          "overlay",
+          resolution
+        );
+      }, 100);
+      return () => clearTimeout(subscriptionTimerRef.current);
     }
   }, [
     mode,
