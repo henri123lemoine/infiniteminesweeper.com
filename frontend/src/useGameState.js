@@ -13,6 +13,7 @@ import {
   ADJ_UNKNOWN,
   evictFarKeys,
 } from "./cellStore.js";
+import { OverviewCache } from "./overviewCache.js";
 
 const log = __DEV__ ? console.log.bind(console) : () => {};
 
@@ -158,6 +159,9 @@ export const useGameState = () => {
   const [scorePopups, setScorePopups] = useState([]);
   const [hintPopups, setHintPopups] = useState([]);
   const [tick, setTick] = useState(0);
+  const [overviewTick, setOverviewTick] = useState(0);
+  const [overviewConnectionGeneration, setOverviewConnectionGeneration] =
+    useState(0);
   const [updateError, setUpdateError] = useState("");
   const [joinError, setJoinError] = useState("");
   // Advancements: lifetime stats + unlock sets synced on join, toasts on unlock
@@ -177,6 +181,21 @@ export const useGameState = () => {
   const minimapAtlasPoolsRef = useRef(new Map());
   const minimapFullQueueRef = useRef({ batches: [], index: 0, changed: false });
   const minimapFullQueueRAFRef = useRef(null);
+  const overviewCacheRef = useRef(null);
+  if (!overviewCacheRef.current) overviewCacheRef.current = new OverviewCache();
+  const overviewPendingRef = useRef(new Map());
+  const overviewRequestSenderRef = useRef(null);
+  const overviewServerRevisionRef = useRef(new Map());
+  const overviewDiagnosticsRef = useRef({
+    requests: 0,
+    requestBytes: 0,
+    snapshots: 0,
+    patches: 0,
+    responseBytes: 0,
+    rawPixelBytes: 0,
+    prefetchStartedAt: 0,
+    prefetchReadyAt: 0,
+  });
   // Union of active subscriptions actually sent to the server
   const minimapActiveSubsRef = useRef(new Set());
   // Desired subscriptions per logical source (e.g. 'hud', 'overlay')
@@ -213,6 +232,18 @@ export const useGameState = () => {
     0xff000000, // dark_gray / black
   ];
   for (let i = 0; i < 10; i++) minimapPalette[10 + i] = flagColors[i];
+  const overviewLevels = [0, 96, 160, 208, 232, 255];
+  for (let r = 0; r < overviewLevels.length; r++) {
+    for (let g = 0; g < overviewLevels.length; g++) {
+      for (let b = 0; b < overviewLevels.length; b++) {
+        minimapPalette[20 + r * 36 + g * 6 + b] =
+          0xff000000 |
+          (overviewLevels[r] << 16) |
+          (overviewLevels[g] << 8) |
+          overviewLevels[b];
+      }
+    }
+  }
   const minimapPaletteRGBA = new Uint32Array(256);
   for (let i = 0; i < minimapPalette.length; i++) {
     const color = minimapPalette[i] >>> 0;
@@ -222,6 +253,117 @@ export const useGameState = () => {
       (color & 0x00ff00) |
       ((color >>> 16) & 0xff);
   }
+
+  const makeOverviewCanvas = useCallback((pixels, width, height) => {
+    const canvas =
+      typeof OffscreenCanvas !== "undefined"
+        ? new OffscreenCanvas(width, height)
+        : document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    const image = ctx.createImageData(width, height);
+    const rgba = new Uint32Array(image.data.buffer);
+    for (let i = 0; i < pixels.length; i++) {
+      rgba[i] = minimapPaletteRGBA[pixels[i]];
+    }
+    ctx.putImageData(image, 0, 0);
+    return canvas;
+  }, []);
+
+  const applyOverviewSnapshot = useCallback(
+    (data) => {
+      const lod = Number(data.lod) || 0;
+      const revision = Number(data.revision) || 0;
+      const query = {
+        lod,
+        global: Boolean(data.global),
+        originX: Number(data.originX) || 0,
+        originY: Number(data.originY) || 0,
+        widthChunks: Number(data.widthChunks) || 0,
+        heightChunks: Number(data.heightChunks) || 0,
+      };
+      overviewPendingRef.current.delete(lod);
+      overviewServerRevisionRef.current.set(lod, revision);
+      overviewDiagnosticsRef.current.snapshots++;
+      if (
+        lod === 8 &&
+        query.global &&
+        !overviewDiagnosticsRef.current.prefetchReadyAt
+      ) {
+        overviewDiagnosticsRef.current.prefetchReadyAt = performance.now();
+      }
+
+      if (data.unchanged) {
+        const cached = overviewCacheRef.current.findExact(query);
+        if (cached) cached.revision = revision;
+        setOverviewTick((value) => value + 1);
+        return;
+      }
+
+      const pixels = new Uint8Array(b64ToU8(data.pixels));
+      const width = query.widthChunks * lod;
+      const height = query.heightChunks * lod;
+      if (!lod || !width || !height || pixels.length !== width * height) return;
+      overviewDiagnosticsRef.current.rawPixelBytes += pixels.byteLength;
+      overviewCacheRef.current.put({
+        ...query,
+        revision,
+        canvasByteLength: pixels.byteLength * 4,
+        canvas: makeOverviewCanvas(pixels, width, height),
+      });
+      setOverviewTick((value) => value + 1);
+    },
+    [makeOverviewCanvas]
+  );
+
+  const applyOverviewPatch = useCallback((data) => {
+    const lod = Number(data.lod) || 0;
+    const revision = Number(data.revision) || 0;
+    const tiles = data.tiles || [];
+    overviewServerRevisionRef.current.set(lod, revision);
+    overviewDiagnosticsRef.current.patches++;
+    overviewDiagnosticsRef.current.rawPixelBytes += tiles.reduce(
+      (sum, tile) => sum + b64ToU8(tile.data).byteLength,
+      0
+    );
+
+    for (const record of overviewCacheRef.current.recordsAtLOD(lod)) {
+      let complete = true;
+      let changed = false;
+      const ctx = record.canvas.getContext("2d", { alpha: false });
+      for (const update of tiles) {
+        const chunkX = Number(update.tile?.x) || 0;
+        const chunkY = Number(update.tile?.y) || 0;
+        const localX = chunkX - record.originX;
+        const localY = chunkY - record.originY;
+        if (
+          localX < 0 ||
+          localY < 0 ||
+          localX >= record.widthChunks ||
+          localY >= record.heightChunks
+        ) {
+          complete = false;
+          continue;
+        }
+        const pixels = b64ToU8(update.data);
+        if (pixels.length !== lod * lod) {
+          complete = false;
+          continue;
+        }
+        const image = ctx.createImageData(lod, lod);
+        const rgba = new Uint32Array(image.data.buffer);
+        for (let i = 0; i < pixels.length; i++) {
+          rgba[i] = minimapPaletteRGBA[pixels[i]];
+        }
+        ctx.putImageData(image, localX * lod, localY * lod);
+        changed = true;
+      }
+      if (complete) record.revision = revision;
+      if (changed) record.lastUsed = performance.now();
+    }
+    setOverviewTick((value) => value + 1);
+  }, []);
 
   const bumpMinimapRevision = useCallback(() => {
     const tiles = minimapTilesRef.current;
@@ -273,8 +415,8 @@ export const useGameState = () => {
   const releaseMinimapCanvas = useCallback((rec) => {
     if (!rec?.atlasPool) return;
     const pool = rec.atlasPool;
-    rec
-      .canvas?.getContext("2d")
+    rec.canvas
+      ?.getContext("2d")
       ?.clearRect(rec.canvasX, rec.canvasY, rec.resolution, rec.resolution);
     pool.free.push(rec.atlasSlot);
     pool.used--;
@@ -453,8 +595,7 @@ export const useGameState = () => {
       if (batch.tiles.length === 1) {
         applyMinimapFullTile(batch.tiles[0]);
       } else {
-        queue.changed =
-          applyMinimapFullTileBatch(batch.tiles) || queue.changed;
+        queue.changed = applyMinimapFullTileBatch(batch.tiles) || queue.changed;
       }
       if (batch.final && queue.changed) {
         bumpMinimapRevision();
@@ -1158,6 +1299,27 @@ export const useGameState = () => {
         minimapFullQueueRAFRef.current = null;
       }
       minimapFullQueueRef.current = { batches: [], index: 0, changed: false };
+      overviewPendingRef.current.clear();
+      setOverviewConnectionGeneration((value) => value + 1);
+      requestAnimationFrame(() => {
+        const global = overviewCacheRef.current
+          .recordsAtLOD(8)
+          .find((record) => record.global);
+        const sent = overviewRequestSenderRef.current?.({
+          lod: 8,
+          originX: 0,
+          originY: 0,
+          widthChunks: 1,
+          heightChunks: 1,
+          global: true,
+          knownRevision: global?.revision || 0,
+          subscribe: false,
+        });
+        if (sent) {
+          overviewDiagnosticsRef.current.prefetchStartedAt = performance.now();
+          overviewDiagnosticsRef.current.prefetchReadyAt = 0;
+        }
+      });
       // Reconcile any desired minimap subscriptions accumulated before open
       const resubscribeAll = () => {
         try {
@@ -1248,6 +1410,7 @@ export const useGameState = () => {
       try {
         minimapActiveSubsRef.current.clear();
       } catch {}
+      overviewPendingRef.current.clear();
       optimisticActions.current.clear();
       revealedCellsRef.current.clear();
       flaggedCellsRef.current.clear();
@@ -1264,6 +1427,10 @@ export const useGameState = () => {
       const msg = decodeMsg(event.data);
       const type = activeKey(msg);
       const data = msg[type];
+
+      if (type === "overviewSnapshot" || type === "overviewPatch") {
+        overviewDiagnosticsRef.current.responseBytes += event.data.byteLength;
+      }
 
       if (type === "joinAck") {
         didJoinAck = true;
@@ -1390,6 +1557,10 @@ export const useGameState = () => {
         enqueueMinimapFullTiles([data], true);
       } else if (type === "minimapFullTileBatch") {
         enqueueMinimapFullTiles(data.tiles || [], data.finalBatch);
+      } else if (type === "overviewSnapshot") {
+        applyOverviewSnapshot(data);
+      } else if (type === "overviewPatch") {
+        applyOverviewPatch(data);
       } else if (type === "minimapTileDelta") {
         const tr = data.tile || {};
         const key = `${tr.x},${tr.y}`;
@@ -1739,6 +1910,8 @@ export const useGameState = () => {
     enqueueMinimapFullTiles,
     releaseMinimapCanvas,
     bumpMinimapRevision,
+    applyOverviewSnapshot,
+    applyOverviewPatch,
   ]);
 
   // Join the game by sending a Join message (transitions from SPECTATOR to PLAYER)
@@ -1795,6 +1968,45 @@ export const useGameState = () => {
     }
   }, [ws]);
 
+  const requestOverview = useCallback((request) => {
+    const socket = wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    const lod = Number(request.lod) || 0;
+    const fingerprint = [
+      lod,
+      request.global ? 1 : 0,
+      request.originX || 0,
+      request.originY || 0,
+      request.widthChunks || 0,
+      request.heightChunks || 0,
+      request.knownRevision || 0,
+    ].join(":");
+    if (overviewPendingRef.current.get(lod) === fingerprint) return false;
+    overviewPendingRef.current.set(lod, fingerprint);
+    const bytes = encodeMsg({ overviewRequest: request });
+    socket.send(bytes);
+    overviewDiagnosticsRef.current.requests++;
+    overviewDiagnosticsRef.current.requestBytes += bytes.byteLength;
+    return true;
+  }, []);
+
+  const releaseOverview = useCallback(() => {
+    overviewPendingRef.current.clear();
+    const socket = wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(encodeMsg({ overviewRelease: {} }));
+  }, []);
+  overviewRequestSenderRef.current = requestOverview;
+  if (
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).has("benchmark")
+  ) {
+    window.__overviewPrefetchBenchmark = {
+      network: { ...overviewDiagnosticsRef.current },
+      cache: overviewCacheRef.current.stats(),
+    };
+  }
+
   // Handle page visibility changes for mobile reconnection
   const handleVisibilityChange = useCallback(() => {
     if (document.visibilityState === "visible") {
@@ -1827,6 +2039,8 @@ export const useGameState = () => {
     scorePopups,
     hintPopups,
     tick,
+    overviewTick,
+    overviewConnectionGeneration,
     setTick,
     seedCache,
     revealedCellsRef,
@@ -1856,6 +2070,11 @@ export const useGameState = () => {
     handleVisibilityChange,
     // Minimap streaming
     minimapTilesRef,
+    overviewCacheRef,
+    overviewServerRevisionRef,
+    overviewDiagnosticsRef,
+    requestOverview,
+    releaseOverview,
     updateMinimapSubscriptions: useCallback(
       (
         centerWorldX,
@@ -1941,38 +2160,41 @@ export const useGameState = () => {
       },
       [bumpMinimapRevision, releaseMinimapCanvas]
     ),
-    clearMinimapSubscriptionsFor: useCallback((sourceKey = "default") => {
-      // Remove this source's desired set locally first
-      minimapDesiredBySourceRef.current.delete(sourceKey);
+    clearMinimapSubscriptionsFor: useCallback(
+      (sourceKey = "default") => {
+        // Remove this source's desired set locally first
+        minimapDesiredBySourceRef.current.delete(sourceKey);
 
-      const s = wsRef.current;
-      if (!s || s.readyState !== WebSocket.OPEN) return; // will reconcile on next open/call
+        const s = wsRef.current;
+        if (!s || s.readyState !== WebSocket.OPEN) return; // will reconcile on next open/call
 
-      // Recompute union
-      const union = new Set();
-      for (const set of minimapDesiredBySourceRef.current.values()) {
-        for (const k of set) union.add(k);
-      }
-      // Anything active but not in union should be unsubscribed
-      const toDel = [];
-      for (const k of minimapActiveSubsRef.current)
-        if (!union.has(k)) toDel.push(k);
-      if (toDel.length) {
-        const tiles = toDel.map((k) => {
-          const [x, y] = k.split(",").map(Number);
-          return { x, y };
-        });
-        s.send(encodeMsg({ minimapUnsubscribe: { tiles } }));
-        let removedTile = false;
-        toDel.forEach((k) => {
-          minimapActiveSubsRef.current.delete(k);
-          const rec = minimapTilesRef.current.get(k);
-          releaseMinimapCanvas(rec);
-          removedTile = minimapTilesRef.current.delete(k) || removedTile;
-        });
-        if (removedTile) bumpMinimapRevision();
-      }
-    }, [bumpMinimapRevision, releaseMinimapCanvas]),
+        // Recompute union
+        const union = new Set();
+        for (const set of minimapDesiredBySourceRef.current.values()) {
+          for (const k of set) union.add(k);
+        }
+        // Anything active but not in union should be unsubscribed
+        const toDel = [];
+        for (const k of minimapActiveSubsRef.current)
+          if (!union.has(k)) toDel.push(k);
+        if (toDel.length) {
+          const tiles = toDel.map((k) => {
+            const [x, y] = k.split(",").map(Number);
+            return { x, y };
+          });
+          s.send(encodeMsg({ minimapUnsubscribe: { tiles } }));
+          let removedTile = false;
+          toDel.forEach((k) => {
+            minimapActiveSubsRef.current.delete(k);
+            const rec = minimapTilesRef.current.get(k);
+            releaseMinimapCanvas(rec);
+            removedTile = minimapTilesRef.current.delete(k) || removedTile;
+          });
+          if (removedTile) bumpMinimapRevision();
+        }
+      },
+      [bumpMinimapRevision, releaseMinimapCanvas]
+    ),
     // Server-suggested spawn location
     serverSpawnRef,
     // Nearby player positions for rendering

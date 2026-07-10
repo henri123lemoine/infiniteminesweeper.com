@@ -736,6 +736,7 @@ export default function Minimap({
           {...bind}
         />
         <button
+          data-testid="expand-minimap"
           onClick={onOpenOverlay}
           title="Expand minimap"
           style={{
