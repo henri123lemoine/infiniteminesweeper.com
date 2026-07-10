@@ -58,19 +58,8 @@ function encodeMsg(msg) {
 }
 
 function decodeMsg(data) {
-  let bytes = pako.ungzip(new Uint8Array(data));
-
-  // Convert to plain JS so we can easily introspect keys
-  const decodedPlain = PB.Msg.toObject(PB.Msg.decode(bytes), {
-    longs: String,
-    // Include default values so scalar fields like score=0 are preserved
-    defaults: true,
-  });
-
-  const msg =
-    decodedPlain.payload && Object.keys(decodedPlain).length === 1
-      ? decodedPlain.payload
-      : decodedPlain;
+  const bytes = pako.ungzip(new Uint8Array(data));
+  const msg = PB.Msg.decode(bytes);
 
   if (__DEV__) {
     const k = activeKey(msg) ?? "<unknown>";
@@ -84,7 +73,7 @@ function decodeMsg(data) {
   return msg;
 }
 
-// bytes decoding helper (protobufjs toObject gives base64 strings for bytes)
+// bytes decoding helper
 function b64ToU8(v) {
   if (!v) return new Uint8Array(0);
   if (v instanceof Uint8Array) return v;
@@ -1176,10 +1165,7 @@ export const useGameState = () => {
         applyChunkSync(data);
         setTick((t) => t + 1);
       } else if (type === "chunkRegionSync") {
-        const region = PB.ChunkRegion.toObject(
-          PB.ChunkRegion.decode(data.chunks),
-          { defaults: false }
-        );
+        const region = PB.ChunkRegion.decode(data.chunks);
         for (const cs of region.chunks || []) {
           applyChunkSync(cs);
         }
