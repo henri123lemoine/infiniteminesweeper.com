@@ -38,26 +38,47 @@ export class OverviewCache {
     return record || null;
   }
 
+  recordContainsView(record, left, top, right, bottom) {
+    if (!record) return false;
+    if (record.global) return true;
+    const recordLeft = record.originX * 64;
+    const recordTop = record.originY * 64;
+    const recordRight = recordLeft + record.widthChunks * 64;
+    const recordBottom = recordTop + record.heightChunks * 64;
+    return (
+      recordLeft <= left &&
+      recordTop <= top &&
+      recordRight >= right &&
+      recordBottom >= bottom
+    );
+  }
+
   findForView(lod, left, top, right, bottom) {
     let best = null;
     for (const record of this.records.values()) {
       if (record.lod !== lod) continue;
-      const recordLeft = record.originX * 64;
-      const recordTop = record.originY * 64;
-      const recordRight = recordLeft + record.widthChunks * 64;
-      const recordBottom = recordTop + record.heightChunks * 64;
-      if (
-        !record.global &&
-        (recordLeft > left ||
-          recordTop > top ||
-          recordRight < right ||
-          recordBottom < bottom)
-      ) {
-        continue;
-      }
+      if (!this.recordContainsView(record, left, top, right, bottom)) continue;
       if (!best || record.global || record.lastUsed > best.lastUsed)
         best = record;
       if (record.global) break;
+    }
+    if (best) best.lastUsed = performance.now();
+    return best;
+  }
+
+  findClosestForView(lod, left, top, right, bottom) {
+    let best = null;
+    let bestDistance = Infinity;
+    for (const record of this.records.values()) {
+      if (!this.recordContainsView(record, left, top, right, bottom)) continue;
+      const distance = Math.abs(Math.log2(record.lod / lod));
+      if (
+        distance < bestDistance ||
+        (distance === bestDistance && record.lod > (best?.lod || 0))
+      ) {
+        best = record;
+        bestDistance = distance;
+      }
     }
     if (best) best.lastUsed = performance.now();
     return best;
