@@ -57,6 +57,9 @@ type Server struct {
 	lbDirty     bool
 	playerFlags map[uint32]uint32     // playerID -> flagID
 	playerViews map[uint32]PlayerView // last known view position (chunk, cell)
+	// Incremented whenever a position packet could change, allowing the
+	// broadcaster to stay idle when no client state changed.
+	playerViewsVersion uint64
 
 	// Advancements
 	playerStats          map[uint32]*PlayerStats    // playerID -> lifetime stat counters
@@ -370,8 +373,11 @@ func (s *Server) handleProfileUpdate(w http.ResponseWriter, r *http.Request) {
 
 	// Update flag if provided and unlocked for this player
 	if req.FlagID != nil && s.isFlagUnlockedLocked(pid, *req.FlagID) {
-		s.playerFlags[pid] = *req.FlagID
-		s.lbDirty = true
+		if s.playerFlags[pid] != *req.FlagID {
+			s.playerFlags[pid] = *req.FlagID
+			s.playerViewsVersion++
+			s.lbDirty = true
+		}
 	}
 
 	s.walLogPlayerLocked(pid, "")

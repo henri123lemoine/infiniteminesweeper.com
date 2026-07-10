@@ -68,7 +68,10 @@ func (s *Server) devEnsureBotUser(name string, flagID uint32) uint32 {
 
 	if pid, ok := s.nameToPlayerID[name]; ok {
 		s.botIDs[pid] = true
-		delete(s.playerViews, pid)
+		if _, exists := s.playerViews[pid]; exists {
+			delete(s.playerViews, pid)
+			s.playerViewsVersion++
+		}
 		return pid
 	}
 
@@ -135,6 +138,7 @@ func (s *Server) devStartCountingBot(cfg BotConfig) {
 
 	s.stateMu.Lock()
 	s.playerViews[botID] = PlayerView{Chunk: ChunkID{X: 0, Y: 0}, Cell: uint32(32 + 32*ChunkSize)}
+	s.playerViewsVersion++
 	s.stateMu.Unlock()
 
 	go func() {
@@ -173,6 +177,7 @@ func (s *Server) devStartCountingBot(cfg BotConfig) {
 					}
 					s.stateMu.Lock()
 					s.playerViews[botID] = PlayerView{Chunk: focusCID, Cell: focusCell}
+					s.playerViewsVersion++
 					s.stateMu.Unlock()
 				}
 				continue
@@ -194,6 +199,7 @@ func (s *Server) devStartCountingBot(cfg BotConfig) {
 			// Update playerViews so bots appear on minimap
 			s.stateMu.Lock()
 			s.playerViews[botID] = PlayerView{Chunk: cid, Cell: cell}
+			s.playerViewsVersion++
 			s.stateMu.Unlock()
 		}
 	}()
