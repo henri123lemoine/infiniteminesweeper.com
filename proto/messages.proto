@@ -21,6 +21,8 @@ message ScoreUpdate {
   // The world position where the primary score change occurred.
   ChunkID chunkId = 3;
   uint32 cell = 4;
+  // Current flawless streak (consecutive mistake-free actions).
+  uint32 streak = 5;
 }
 
 message RevealedCells {
@@ -177,6 +179,8 @@ message JoinAck {
   // Current global rank (1-based). Without it the client shows no rank
   // until the first successful action of the session.
   uint32 user_rank = 8;
+  // Current flawless streak, so the HUD indicator survives reconnects.
+  uint32 streak = 9;
 }
 
 // Response to UpdateProfile message
@@ -217,9 +221,11 @@ message CellOwnerRequest {
 message CellOwnerResponse {
   ChunkID chunkId = 1;
   uint32 cell = 2;
-  // Empty when the flag predates ownership tracking.
+  // Empty when the flag/explosion predates ownership tracking.
   string name = 3;
   uint32 flagID = 4;
+  // True when the cell is a revealed mine: `name` is who stepped on it.
+  bool exploded = 5;
 }
 
 // Chunk seed information for pre-emptive caching
