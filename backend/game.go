@@ -5,6 +5,7 @@ import (
 	"math/bits"
 	"regexp"
 	"sync"
+	"time"
 
 	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
 )
@@ -305,6 +306,7 @@ func (s *Server) handleReveal(
 				scoreDelta -= 100
 				minesHit++
 				s.setCellRevealed(curr.Cid, curr.Cidx, playerID, &allRevealedCells)
+				s.recordExplosionLocked(curr.Cid, curr.Cidx, playerID)
 				continue
 			}
 
@@ -376,6 +378,7 @@ func (s *Server) handleReveal(
 			s.streaks[playerID] = 0
 			s.resetSafeStreakLocked(playerID)
 			s.setCellRevealed(chunkID, cell, playerID, &allRevealedCells)
+			s.recordExplosionLocked(chunkID, cell, playerID)
 			ack := &pb.RevealAck{Outcome: &pb.RevealAck_RevealedCells{RevealedCells: allRevealedCells[chunkID]}}
 			s.sendRevealAck(playerID, requestID, true, ack, scoreDelta, chunkID, cell)
 		} else if s.countAdjacentMines(chunkID, cell) > 0 {
@@ -451,9 +454,11 @@ func (s *Server) handleReveal(
 			Stats      PlayerStats `json:"stats"`
 			NewUnlocks []string    `json:"new_unlocks,omitempty"`
 		}{PlayerID: playerID, Stats: *stats, NewUnlocks: unlockedIDs})
-		if len(newUnlocks) > 0 {
-			// Rewards unlock whole shapes; a full sync keeps the client authoritative.
+		// Unlocks always push a full sync (keeps the client authoritative on
+		// rewards); otherwise throttle so progress bars still update live.
+		if len(newUnlocks) > 0 || time.Since(s.advSyncLast[playerID]) >= advSyncMinInterval {
 			advSyncBytes = s.buildAdvancementSyncLocked(playerID)
+			s.advSyncLast[playerID] = time.Now()
 		}
 	}
 
@@ -595,6 +600,20 @@ func chebyshevChunkDistance(chunkID ChunkID) uint32 {
 	return uint32(ay)
 }
 
+// advSyncMinInterval bounds how often stat-only AdvancementSyncs go out per
+// player; new unlocks bypass it.
+const advSyncMinInterval = 2 * time.Second
+
+// recordExplosionLocked notes who revealed the mine at cell. playerID 0
+// (replays of pre-provenance WAL entries) records nothing. Caller must hold
+// stateMu (write).
+func (s *Server) recordExplosionLocked(chunkID ChunkID, cell uint32, playerID uint32) {
+	if playerID == 0 {
+		return
+	}
+	s.explosions[chunkID] = s.explosions[chunkID].set(cell, playerID)
+}
+
 func (s *Server) setCellFlagged(chunkID ChunkID, cell uint32, playerID uint32, flagID uint32, collector *map[ChunkID][]*pb.FlagPlacement) {
 	s.flags[chunkID] = s.flags[chunkID].set(cell, Flag{FlagID: flagID, Owner: playerID})
 
@@ -693,6 +712,7 @@ func (s *Server) sendRevealAck(playerID uint32, requestID uint64, ok bool, ack *
 			Delta:   delta,
 			ChunkId: &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
 			Cell:    cell,
+			Streak:  s.streaks[playerID],
 		}
 
 		// Calculate and include user rank

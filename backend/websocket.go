@@ -390,6 +390,7 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 		FlagID:       player.FlagID,
 		NewState:     ClientStatePlayer.ToPB(),
 		UserRank:     s.getUserRankUnsafe(player.Score),
+		Streak:       s.streaks[playerID],
 	}}}
 	s.sendToPlayer(playerID, mustProto(ackMsg))
 
@@ -522,8 +523,8 @@ func (s *Server) handleSeedRequest(playerID uint32, chunkIds []*pb.ChunkID) {
 	}
 }
 
-// handleCellOwnerRequest answers "who placed this flag?" for the tooltip
-// shown when a player clicks someone else's flag.
+// handleCellOwnerRequest answers "who placed this flag?" / "who stepped on
+// this mine?" for the tooltip shown when a player clicks the cell.
 func (s *Server) handleCellOwnerRequest(playerID uint32, req *pb.CellOwnerRequest) {
 	if req == nil || req.ChunkId == nil {
 		return
@@ -532,6 +533,16 @@ func (s *Server) handleCellOwnerRequest(playerID uint32, req *pb.CellOwnerReques
 
 	s.stateMu.RLock()
 	flag, ok := s.flags[chunkID].get(req.Cell)
+	exploded := false
+	if !ok {
+		if owner, eok := s.explosions[chunkID].get(req.Cell); eok {
+			flag = Flag{Owner: owner}
+			ok, exploded = true, true
+		} else if s.isCellRevealed(chunkID, req.Cell) && s.isMine(chunkID, req.Cell) {
+			// Revealed mine that predates explosion tracking.
+			ok, exploded = true, true
+		}
+	}
 	var name string
 	if ok && flag.Owner != 0 {
 		name = s.playerNames[flag.Owner]
@@ -542,10 +553,11 @@ func (s *Server) handleCellOwnerRequest(playerID uint32, req *pb.CellOwnerReques
 		return
 	}
 	msg := &pb.Msg{Payload: &pb.Msg_CellOwnerResponse{CellOwnerResponse: &pb.CellOwnerResponse{
-		ChunkId: &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
-		Cell:    req.Cell,
-		Name:    name,
-		FlagID:  flag.FlagID,
+		ChunkId:  &pb.ChunkID{X: chunkID.X, Y: chunkID.Y},
+		Cell:     req.Cell,
+		Name:     name,
+		FlagID:   flag.FlagID,
+		Exploded: exploded,
 	}}}
 	s.sendToPlayer(playerID, mustProto(msg))
 }

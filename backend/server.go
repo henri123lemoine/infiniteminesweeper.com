@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/google/uuid"
@@ -36,7 +37,9 @@ type Server struct {
 	flags  map[ChunkID]chunkFlags // cell-sorted compact flag entries
 	// Dominant revealer per 8x8 block, for territory attribution
 	territory map[ChunkID]*chunkTerritory
-	scores    map[uint32]int32 // playerID -> score
+	// Who revealed each mine, for the "who stepped on it" tooltip
+	explosions map[ChunkID]chunkExplosions
+	scores     map[uint32]int32 // playerID -> score
 	// Consecutive mistake-free actions; feeds the flawless-streak bonus and
 	// resets on any wrong flag or mine hit.
 	streaks map[uint32]uint32
@@ -65,6 +68,8 @@ type Server struct {
 	playerStats          map[uint32]*PlayerStats    // playerID -> lifetime stat counters
 	unlockedAdvancements map[uint32]map[string]bool // playerID -> set of unlocked achievement IDs
 	unlockedFlags        map[uint32]map[uint32]bool // playerID -> set of unlocked paid flag IDs
+	// Last AdvancementSync push per player; throttles live progress updates.
+	advSyncLast map[uint32]time.Time
 
 	// Players
 	playersMu   sync.RWMutex
@@ -146,6 +151,7 @@ func NewServer() *Server {
 		chunks:            make(map[ChunkID]*ChunkBits),
 		flags:             make(map[ChunkID]chunkFlags),
 		territory:         make(map[ChunkID]*chunkTerritory),
+		explosions:        make(map[ChunkID]chunkExplosions),
 		scores:            make(map[uint32]int32),
 		streaks:           make(map[uint32]uint32),
 		subs:              make(map[ChunkID]map[uint32]struct{}),
@@ -162,6 +168,7 @@ func NewServer() *Server {
 		playerStats:          make(map[uint32]*PlayerStats),
 		unlockedAdvancements: make(map[uint32]map[string]bool),
 		unlockedFlags:        make(map[uint32]map[uint32]bool),
+		advSyncLast:          make(map[uint32]time.Time),
 		sessionTokens:        make(map[string]uint32), // Initialize the new map
 		botIDs:               make(map[uint32]bool),
 		seedCache:            make(map[ChunkID]uint64),

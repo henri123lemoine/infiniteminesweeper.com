@@ -81,6 +81,7 @@ type snapshotData struct {
 	Flags        map[ChunkID]map[uint32]Flag
 	FlagsV2      map[ChunkID][]FlagEntry
 	Territory    map[ChunkID]*chunkTerritory
+	Explosions   map[ChunkID][]ExplosionEntry
 	Scores       map[uint32]int32
 	Streaks      map[uint32]uint32
 	PlayerNames  map[uint32]string
@@ -492,6 +493,11 @@ func (s *Server) replayReveal(chunkID ChunkID, cells []uint32, owner uint32) {
 			s.chunks[chunkID][bitIndex/64] |= mask
 			s.totalRevealed++
 			s.recordTerritoryLocked(chunkID, cell, owner)
+			// Mines are deterministic from the seed, so explosion attribution
+			// rebuilds from plain reveal entries.
+			if owner != 0 && s.isMine(chunkID, cell) {
+				s.recordExplosionLocked(chunkID, cell, owner)
+			}
 		}
 	}
 }
@@ -644,6 +650,10 @@ func (s *Server) captureSnapshotData() snapshotData {
 		copied := *ct
 		territory[cid] = &copied
 	}
+	explosions := make(map[ChunkID][]ExplosionEntry, len(s.explosions))
+	for cid, ce := range s.explosions {
+		explosions[cid] = slices.Clone(ce)
+	}
 	scores := make(map[uint32]int32, len(s.scores))
 	maps.Copy(scores, s.scores)
 	streaks := make(map[uint32]uint32, len(s.streaks))
@@ -676,6 +686,7 @@ func (s *Server) captureSnapshotData() snapshotData {
 		Chunks:               chunks,
 		FlagsV2:              flags,
 		Territory:            territory,
+		Explosions:           explosions,
 		Scores:               scores,
 		Streaks:              streaks,
 		PlayerNames:          playerNames,
@@ -778,6 +789,12 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 		s.territory = data.Territory
 	} else {
 		s.territory = make(map[ChunkID]*chunkTerritory)
+	}
+	s.explosions = make(map[ChunkID]chunkExplosions, len(data.Explosions))
+	for cid, entries := range data.Explosions {
+		ce := chunkExplosions(entries)
+		slices.SortFunc(ce, func(a, b ExplosionEntry) int { return int(a.Cell) - int(b.Cell) })
+		s.explosions[cid] = ce
 	}
 	s.scores = data.Scores
 	if data.Streaks != nil {

@@ -71,6 +71,48 @@ func (cf chunkFlags) set(cell uint32, f Flag) chunkFlags {
 	return cf
 }
 
+// ExplosionEntry records who revealed the mine at a cell. Same cell-sorted
+// per-chunk layout as chunkFlags; revealed mines are rare so these stay tiny.
+type ExplosionEntry struct {
+	Cell  uint16
+	Owner uint32
+}
+
+type chunkExplosions []ExplosionEntry
+
+func (ce chunkExplosions) search(cell uint32) (int, bool) {
+	lo, hi := 0, len(ce)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if uint32(ce[mid].Cell) < cell {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo, lo < len(ce) && uint32(ce[lo].Cell) == cell
+}
+
+func (ce chunkExplosions) get(cell uint32) (uint32, bool) {
+	if i, ok := ce.search(cell); ok {
+		return ce[i].Owner, true
+	}
+	return 0, false
+}
+
+func (ce chunkExplosions) set(cell uint32, owner uint32) chunkExplosions {
+	e := ExplosionEntry{Cell: uint16(cell), Owner: owner}
+	i, ok := ce.search(cell)
+	if ok {
+		ce[i] = e
+		return ce
+	}
+	ce = append(ce, ExplosionEntry{})
+	copy(ce[i+1:], ce[i:])
+	ce[i] = e
+	return ce
+}
+
 type PlayerView struct {
 	Chunk ChunkID
 	Cell  uint32
