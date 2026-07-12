@@ -56,13 +56,16 @@ export default function FlagSelector({ value, onChange, unlockedFlagIds = [] }) 
     [shapes]
   );
 
-  // Shape name -> the achievement that unlocks it
+  // Shape name -> the achievement(s) that unlock it. Shared shapes are
+  // color-split between two achievements, so both names are listed.
   const unlockedBy = useMemo(() => {
     const m = new Map();
     for (const a of ACHIEVEMENTS) {
       if (!a.rewardFlagId) continue;
       const shapeName = frames[String(a.rewardFlagId)]?.name;
-      if (shapeName && !m.has(shapeName)) m.set(shapeName, a.name);
+      if (!shapeName) continue;
+      const prev = m.get(shapeName);
+      m.set(shapeName, prev ? `${prev} / ${a.name}` : a.name);
     }
     return m;
   }, []);
@@ -73,18 +76,30 @@ export default function FlagSelector({ value, onChange, unlockedFlagIds = [] }) 
     shapes.find((s) => s.ids.includes(value)) || shapes[0];
   const colorIdx = Math.max(0, currentShape.ids.indexOf(value));
 
-  const isShapeUnlocked = (shape) =>
+  // Unlocks are per color variant: split-shape achievements grant only half
+  // the palette, so a shape can be partially unlocked.
+  const isVariantUnlocked = (shape, id) =>
     shape.cost <= STARTER_MAX_COST ||
-    shape.ids.includes(value) ||
-    shape.ids.some((id) => unlockedFlagIds.includes(id));
+    id === value ||
+    unlockedFlagIds.includes(id);
+
+  const isShapeUnlocked = (shape) =>
+    shape.ids.some((id) => isVariantUnlocked(shape, id));
 
   const pickShape = (shape) => {
     if (!isShapeUnlocked(shape)) return;
-    onChange(shape.ids[Math.min(colorIdx, shape.ids.length - 1)]);
+    const preferred = shape.ids[Math.min(colorIdx, shape.ids.length - 1)];
+    if (isVariantUnlocked(shape, preferred)) {
+      onChange(preferred);
+      return;
+    }
+    onChange(shape.ids.find((id) => isVariantUnlocked(shape, id)));
   };
   const pickColor = (idx) => {
     if (idx >= currentShape.ids.length) return;
-    onChange(currentShape.ids[idx]);
+    const id = currentShape.ids[idx];
+    if (!isVariantUnlocked(currentShape, id)) return;
+    onChange(id);
   };
 
   return (
@@ -119,19 +134,27 @@ export default function FlagSelector({ value, onChange, unlockedFlagIds = [] }) 
         <div className="flag-colors">
           {Array.from({ length: paletteSize }, (_, idx) => {
             const available = idx < currentShape.ids.length;
+            const colorUnlocked =
+              available && isVariantUnlocked(currentShape, currentShape.ids[idx]);
             const previewId = available
               ? currentShape.ids[idx]
               : shapes[0].ids[idx];
             let cls = "flag-cell color";
-            if (available && idx === colorIdx) cls += " selected";
-            if (!available) cls += " locked";
+            if (colorUnlocked && idx === colorIdx) cls += " selected";
+            if (!available || !colorUnlocked) cls += " locked";
             return (
               <button
                 key={idx}
                 className={cls}
-                disabled={!available}
+                disabled={!available || !colorUnlocked}
                 onClick={() => pickColor(idx)}
-                title={available ? "" : "This flag only comes in one color"}
+                title={
+                  !available
+                    ? "This flag only comes in one color"
+                    : colorUnlocked
+                      ? ""
+                      : "This color belongs to a different advancement"
+                }
               >
                 <Sprite id={previewId} size={22} />
               </button>

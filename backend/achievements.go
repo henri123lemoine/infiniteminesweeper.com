@@ -40,7 +40,21 @@ type AchievementDef struct {
 	ID          string
 	Name        string
 	RewardShape *flagShape // nil = badge only, no flag reward
-	Check       func(*PlayerStats) bool
+	// Subset of RewardShape.variants this achievement grants; nil grants the
+	// whole shape. Lets two achievements share a shape without sharing colors,
+	// so a flag identifies the exact achievement earned.
+	RewardVariants []uint32
+	Check          func(*PlayerStats) bool
+}
+
+func (d *AchievementDef) rewardVariants() []uint32 {
+	if d.RewardShape == nil {
+		return nil
+	}
+	if d.RewardVariants != nil {
+		return d.RewardVariants
+	}
+	return d.RewardShape.variants
 }
 
 // flagShape groups the color variants of one flag design. Wire-level flag IDs
@@ -115,42 +129,44 @@ var paidFlagIDs = func() map[uint32]bool {
 
 // Each chain tracks one stat in ascending difficulty. Every paid shape is
 // rewarded by at least one achievement, at roughly cost-matched difficulty.
+// Shapes shared by two achievements are color-split (first five variants /
+// last five) so every skin maps back to exactly one achievement.
 var achievementDefs = []AchievementDef{
 	// Chunks founded (new territory claimed)
-	{ID: "first_foothold", Name: "First Foothold", RewardShape: shapeWavyTriangle, Check: func(p *PlayerStats) bool { return p.ChunksFounded >= 1 }},
-	{ID: "homesteader", Name: "Homesteader", RewardShape: shapeWavyGuidon, Check: func(p *PlayerStats) bool { return p.ChunksFounded >= 15 }},
+	{ID: "first_foothold", Name: "First Foothold", RewardShape: shapeWavyTriangle, RewardVariants: rangeIDs(102, 106), Check: func(p *PlayerStats) bool { return p.ChunksFounded >= 1 }},
+	{ID: "homesteader", Name: "Homesteader", RewardShape: shapeWavyGuidon, RewardVariants: rangeIDs(112, 116), Check: func(p *PlayerStats) bool { return p.ChunksFounded >= 15 }},
 	{ID: "frontier_baron", Name: "Frontier Baron", RewardShape: shapeDownRectangle, Check: func(p *PlayerStats) bool { return p.ChunksFounded >= 75 }},
-	{ID: "empire_builder", Name: "Empire Builder", RewardShape: shapeBrokenRectangle, Check: func(p *PlayerStats) bool { return p.ChunksFounded >= 400 }},
-	{ID: "continental", Name: "Continental", RewardShape: shapeDragon, Check: func(p *PlayerStats) bool { return p.ChunksFounded >= 2000 }},
+	{ID: "empire_builder", Name: "Empire Builder", RewardShape: shapeBrokenRectangle, RewardVariants: rangeIDs(41, 45), Check: func(p *PlayerStats) bool { return p.ChunksFounded >= 400 }},
+	{ID: "continental", Name: "Continental", RewardShape: shapeDragon, RewardVariants: rangeIDs(72, 76), Check: func(p *PlayerStats) bool { return p.ChunksFounded >= 2000 }},
 
 	// Furthest chunk distance from origin (exploration)
 	{ID: "wanderer", Name: "Wanderer", RewardShape: shapeWavyRectangle, Check: func(p *PlayerStats) bool { return p.FurthestChunkDistance >= 30 }},
 	{ID: "pioneer", Name: "Pioneer", RewardShape: shapeVeryWavyTriangle, Check: func(p *PlayerStats) bool { return p.FurthestChunkDistance >= 150 }},
 	{ID: "pathfinder", Name: "Pathfinder", RewardShape: shapeDownGuidon, Check: func(p *PlayerStats) bool { return p.FurthestChunkDistance >= 750 }},
-	{ID: "edge_of_the_map", Name: "Edge of the Map", RewardShape: shapeDragonEye, Check: func(p *PlayerStats) bool { return p.FurthestChunkDistance >= 3000 }},
+	{ID: "edge_of_the_map", Name: "Edge of the Map", RewardShape: shapeDragonEye, RewardVariants: rangeIDs(62, 66), Check: func(p *PlayerStats) bool { return p.FurthestChunkDistance >= 3000 }},
 
 	// Chunks fully cleared (all 4096 cells revealed)
 	{ID: "land_surveyor", Name: "Land Surveyor", RewardShape: shapeVeryWavyGuidon, Check: func(p *PlayerStats) bool { return p.ChunksCleared >= 1 }},
 	{ID: "territory_controller", Name: "Territory Controller", RewardShape: shapeBlackDownGuidon, Check: func(p *PlayerStats) bool { return p.ChunksCleared >= 15 }},
-	{ID: "regional_commander", Name: "Regional Commander", RewardShape: shapeBrokenGuidon, Check: func(p *PlayerStats) bool { return p.ChunksCleared >= 75 }},
+	{ID: "regional_commander", Name: "Regional Commander", RewardShape: shapeBrokenGuidon, RewardVariants: rangeIDs(51, 55), Check: func(p *PlayerStats) bool { return p.ChunksCleared >= 75 }},
 
 	// Max consecutive mistake-free actions (skill/streak)
 	{ID: "steady_hand", Name: "Steady Hand", RewardShape: shapeDownTriangle, Check: func(p *PlayerStats) bool { return p.MaxSafeStreak >= 150 }},
 	{ID: "master_sweeper", Name: "Master Sweeper", RewardShape: shapeDownPointyRect, Check: func(p *PlayerStats) bool { return p.MaxSafeStreak >= 1500 }},
-	{ID: "nerves_of_steel", Name: "Nerves of Steel", RewardShape: shapeDragonEye, Check: func(p *PlayerStats) bool { return p.MaxSafeStreak >= 7500 }},
+	{ID: "nerves_of_steel", Name: "Nerves of Steel", RewardShape: shapeDragonEye, RewardVariants: rangeIDs(67, 71), Check: func(p *PlayerStats) bool { return p.MaxSafeStreak >= 7500 }},
 
 	// Correct mine flags placed
-	{ID: "deminer", Name: "Deminer", RewardShape: shapeWavyTriangle, Check: func(p *PlayerStats) bool { return p.CorrectFlags >= 250 }},
-	{ID: "bomb_specialist", Name: "Bomb Specialist", RewardShape: shapeBrokenRectangle, Check: func(p *PlayerStats) bool { return p.CorrectFlags >= 2500 }},
+	{ID: "deminer", Name: "Deminer", RewardShape: shapeWavyTriangle, RewardVariants: rangeIDs(107, 111), Check: func(p *PlayerStats) bool { return p.CorrectFlags >= 250 }},
+	{ID: "bomb_specialist", Name: "Bomb Specialist", RewardShape: shapeBrokenRectangle, RewardVariants: rangeIDs(46, 50), Check: func(p *PlayerStats) bool { return p.CorrectFlags >= 2500 }},
 
 	// Cells revealed in high-density (>=32%) chunks
-	{ID: "into_the_fire", Name: "Into the Fire", RewardShape: shapeWavyGuidon, Check: func(p *PlayerStats) bool { return p.HighDensityReveals >= 100 }},
-	{ID: "danger_seeker", Name: "Danger Seeker", RewardShape: shapeBrokenGuidon, Check: func(p *PlayerStats) bool { return p.HighDensityReveals >= 1000 }},
+	{ID: "into_the_fire", Name: "Into the Fire", RewardShape: shapeWavyGuidon, RewardVariants: rangeIDs(117, 121), Check: func(p *PlayerStats) bool { return p.HighDensityReveals >= 100 }},
+	{ID: "danger_seeker", Name: "Danger Seeker", RewardShape: shapeBrokenGuidon, RewardVariants: rangeIDs(56, 60), Check: func(p *PlayerStats) bool { return p.HighDensityReveals >= 1000 }},
 
 	// Total cells revealed (badge-only progression; capped off by a reward)
 	{ID: "explorer", Name: "Explorer", Check: func(p *PlayerStats) bool { return p.CellsRevealed >= 2500 }},
 	{ID: "cartographer", Name: "Cartographer", Check: func(p *PlayerStats) bool { return p.CellsRevealed >= 50000 }},
-	{ID: "world_mapper", Name: "World Mapper", RewardShape: shapeDragon, Check: func(p *PlayerStats) bool { return p.CellsRevealed >= 500000 }},
+	{ID: "world_mapper", Name: "World Mapper", RewardShape: shapeDragon, RewardVariants: rangeIDs(77, 81), Check: func(p *PlayerStats) bool { return p.CellsRevealed >= 500000 }},
 
 	// rising_star / top_of_the_world skipped: rank triggers need re-evaluation
 	// on other players' score changes, not just the actor's own stat deltas.
@@ -189,7 +205,7 @@ func (s *Server) rebuildUnlockedFlagsLocked(pid uint32) {
 		if m == nil {
 			m = make(map[uint32]bool)
 		}
-		for _, id := range def.RewardShape.variants {
+		for _, id := range def.rewardVariants() {
 			m[id] = true
 		}
 	}
@@ -249,21 +265,21 @@ func (s *Server) evaluateAdvancementsLocked(playerID uint32) []*pb.AdvancementUn
 
 	var newUnlocks []*pb.AdvancementUnlocked
 
-	unlock := func(id string, shape *flagShape) {
+	unlock := func(id string, variants []uint32) {
 		if unlocked[id] {
 			return
 		}
 		unlocked[id] = true
 		var rewardFlagID uint32
-		if shape != nil {
+		if len(variants) > 0 {
 			if s.unlockedFlags[playerID] == nil {
 				s.unlockedFlags[playerID] = make(map[uint32]bool)
 			}
 			// The representative (first) variant rides in the toast message.
-			for _, id := range shape.variants {
+			for _, id := range variants {
 				s.unlockedFlags[playerID][id] = true
 			}
-			rewardFlagID = shape.variants[0]
+			rewardFlagID = variants[0]
 		}
 		newUnlocks = append(newUnlocks, &pb.AdvancementUnlocked{Id: id, RewardFlagId: rewardFlagID})
 	}
@@ -273,7 +289,7 @@ func (s *Server) evaluateAdvancementsLocked(playerID uint32) []*pb.AdvancementUn
 			continue // collector: evaluated after the main pass, below
 		}
 		if def.Check(stats) {
-			unlock(def.ID, def.RewardShape)
+			unlock(def.ID, def.rewardVariants())
 		}
 	}
 

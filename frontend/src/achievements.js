@@ -50,7 +50,7 @@ export const CHAINS = [
     levels: [
       { id: "steady_hand", name: "Steady Hand", threshold: 150, rewardFlagId: 21 },
       { id: "master_sweeper", name: "Master Sweeper", threshold: 1500, rewardFlagId: 152 },
-      { id: "nerves_of_steel", name: "Nerves of Steel", threshold: 7500, rewardFlagId: 62 },
+      { id: "nerves_of_steel", name: "Nerves of Steel", threshold: 7500, rewardFlagId: 67 },
     ],
   },
   {
@@ -59,8 +59,8 @@ export const CHAINS = [
     desc: "Mines correctly flagged",
     stat: "correctFlags",
     levels: [
-      { id: "deminer", name: "Deminer", threshold: 250, rewardFlagId: 102 },
-      { id: "bomb_specialist", name: "Bomb Specialist", threshold: 2500, rewardFlagId: 41 },
+      { id: "deminer", name: "Deminer", threshold: 250, rewardFlagId: 107 },
+      { id: "bomb_specialist", name: "Bomb Specialist", threshold: 2500, rewardFlagId: 46 },
     ],
   },
   {
@@ -69,8 +69,8 @@ export const CHAINS = [
     desc: "Safe reveals inside dense minefields",
     stat: "highDensityReveals",
     levels: [
-      { id: "into_the_fire", name: "Into the Fire", threshold: 100, rewardFlagId: 112 },
-      { id: "danger_seeker", name: "Danger Seeker", threshold: 1000, rewardFlagId: 51 },
+      { id: "into_the_fire", name: "Into the Fire", threshold: 100, rewardFlagId: 117 },
+      { id: "danger_seeker", name: "Danger Seeker", threshold: 1000, rewardFlagId: 56 },
     ],
   },
   {
@@ -81,7 +81,7 @@ export const CHAINS = [
     levels: [
       { id: "explorer", name: "Explorer", threshold: 2500, rewardFlagId: 0 },
       { id: "cartographer", name: "Cartographer", threshold: 50000, rewardFlagId: 0 },
-      { id: "world_mapper", name: "World Mapper", threshold: 500000, rewardFlagId: 72 },
+      { id: "world_mapper", name: "World Mapper", threshold: 500000, rewardFlagId: 77 },
     ],
   },
   {

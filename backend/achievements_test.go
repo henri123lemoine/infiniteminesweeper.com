@@ -21,10 +21,16 @@ func TestEvaluateAdvancementsThresholds(t *testing.T) {
 	if !s.unlockedAdvancements[pid]["first_foothold"] {
 		t.Fatalf("first_foothold not recorded as unlocked")
 	}
-	// Shape unlocks grant every color variant, not just the representative.
-	for _, v := range shapeWavyTriangle.variants {
+	// Split-shape unlocks grant exactly this achievement's color variants:
+	// first_foothold gets the first half, deminer's half stays locked.
+	for _, v := range rangeIDs(102, 106) {
 		if !s.unlockedFlags[pid][v] {
-			t.Fatalf("expected all Wavy Triangle variants unlocked, missing %d", v)
+			t.Fatalf("expected first_foothold's Wavy Triangle variants unlocked, missing %d", v)
+		}
+	}
+	for _, v := range rangeIDs(107, 111) {
+		if s.unlockedFlags[pid][v] {
+			t.Fatalf("deminer's Wavy Triangle variant %d must stay locked", v)
 		}
 	}
 
@@ -168,13 +174,18 @@ func TestFlagGatingPaidVsFreeVsGrandfathered(t *testing.T) {
 		}
 	}
 
-	// Once unlocked via an achievement, every variant of the rewarded shape
-	// becomes usable.
-	s.playerStats[pid] = &PlayerStats{ChunksFounded: 1} // unlocks first_foothold -> Wavy Triangle
+	// Once unlocked via an achievement, that achievement's color variants
+	// become usable; the shape's other half belongs to deminer.
+	s.playerStats[pid] = &PlayerStats{ChunksFounded: 1} // unlocks first_foothold -> Wavy Triangle (first half)
 	s.evaluateAdvancementsLocked(pid)
-	for _, v := range shapeWavyTriangle.variants {
+	for _, v := range rangeIDs(102, 106) {
 		if !s.isFlagUnlockedLocked(pid, v) {
 			t.Fatalf("Wavy Triangle variant %d should be usable after first_foothold", v)
+		}
+	}
+	for _, v := range rangeIDs(107, 111) {
+		if s.isFlagUnlockedLocked(pid, v) {
+			t.Fatalf("Wavy Triangle variant %d belongs to deminer and must stay locked", v)
 		}
 	}
 	if s.isFlagUnlockedLocked(pid, dragonVariant) {
