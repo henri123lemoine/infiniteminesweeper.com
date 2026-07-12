@@ -154,6 +154,7 @@ export const useGameState = () => {
   const MIN_VIEW_SEND_INTERVAL_MS = 220;
   const [leaderboard, setLeaderboard] = useState([]);
   const [playerScore, setPlayerScore] = useState(0);
+  const [playerStreak, setPlayerStreak] = useState(0);
   const [userRank, setUserRank] = useState(0);
   const [username, setUsername] = useState(initialName);
   const [scorePopups, setScorePopups] = useState([]);
@@ -1114,7 +1115,21 @@ export const useGameState = () => {
         (revealedCellsRef.current.get(chunkX, chunkY, cell) & CELL_REVEALED) !==
         0;
       if (isChord && !revealedCell) return;
-      if (!isChord && revealedCell) return;
+      if (!isChord && revealedCell) {
+        // Left-clicking a revealed mine asks the server who stepped on it
+        if (
+          !isRightClick &&
+          isMineAt(chunkKey, cell) === true &&
+          ws.readyState === WebSocket.OPEN
+        ) {
+          ws.send(
+            encodeMsg({
+              cellOwnerRequest: { chunkId: { X: chunkX, Y: chunkY }, cell },
+            })
+          );
+        }
+        return;
+      }
       if (flaggedCellsRef.current.has(flagKey)) {
         // Left-clicking a flag asks the server whose it is
         if (!isRightClick && !isChord && ws.readyState === WebSocket.OPEN) {
@@ -1454,6 +1469,7 @@ export const useGameState = () => {
           playerFlagsRef.current.set(data.name, data.flagID);
           setUsername(data.name || "");
           setPlayerScore(data.score ?? 0);
+          setPlayerStreak(Number(data.streak) || 0);
           if (data.userRank) setUserRank(Number(data.userRank));
           setServerFlagID(data.flagID); // Sync server's authoritative flagID
           setJoinError(""); // Clear any previous join errors
@@ -1725,6 +1741,7 @@ export const useGameState = () => {
 
           // update score + popup
           setPlayerScore(scoreUpdate.score);
+          setPlayerStreak(Number(scoreUpdate.streak) || 0);
           if (userRank) {
             setUserRank(userRank);
           }
@@ -1861,11 +1878,14 @@ export const useGameState = () => {
         const lx = cell % CHUNK;
         const ly = Math.floor(cell / CHUNK);
         const name = data.name || "";
-        pushHintPopup(
-          X * CHUNK + lx,
-          Y * CHUNK + ly,
-          name ? `⚑ ${name}` : "⚑ placed before names were tracked"
-        );
+        const message = data.exploded
+          ? name
+            ? `💥 ${name}`
+            : "💥 exploded before names were tracked"
+          : name
+            ? `⚑ ${name}`
+            : "⚑ placed before names were tracked";
+        pushHintPopup(X * CHUNK + lx, Y * CHUNK + ly, message);
       } else if (type === "seedResponse") {
         // Handle seed response for pre-emptive caching
         const seeds = Array.isArray(data.seeds) ? data.seeds : [];
@@ -2065,6 +2085,7 @@ export const useGameState = () => {
   return {
     connected,
     playerScore,
+    playerStreak,
     userRank,
     username,
     setUsername,

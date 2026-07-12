@@ -422,6 +422,7 @@ function App() {
   const {
     connected,
     playerScore,
+    playerStreak,
     userRank,
     username,
     setUsername,
@@ -1792,6 +1793,25 @@ function App() {
         >
           <h3 style={{ margin: 0 }}>Leaderboard</h3>
         </div>
+        {connected && (
+          <div
+            className={`streak-hud${playerStreak >= 40 ? " streak-maxed" : ""}`}
+            title="Flawless streak: +5% score per mistake-free action, ×3 max at 40"
+          >
+            <span className="streak-label">🔥 {playerStreak}</span>
+            <div className="streak-bar">
+              <div
+                className="streak-bar-fill"
+                style={{
+                  width: `${Math.min(playerStreak / 40, 1) * 100}%`,
+                }}
+              />
+            </div>
+            <span className="streak-mult">
+              ×{(1 + Math.min(0.05 * playerStreak, 2)).toFixed(2)}
+            </span>
+          </div>
+        )}
         {topPlayers.length > 0 ? (
           (() => {
             const showMe =

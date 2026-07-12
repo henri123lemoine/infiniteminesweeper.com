@@ -346,6 +346,49 @@ body {
   color: #333;
 }
 
+/* Flawless streak indicator: fills toward the 40-action multiplier cap */
+.streak-hud {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 2px 6px;
+  font-size: 12px;
+  background: var(--ms-face);
+  border: 2px solid;
+  border-color: var(--ms-shadow) var(--ms-light) var(--ms-light) var(--ms-shadow);
+}
+
+.streak-label {
+  white-space: nowrap;
+}
+
+.streak-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--ms-shadow);
+  overflow: hidden;
+}
+
+.streak-bar-fill {
+  height: 100%;
+  background: #e67e22;
+  transition: width 0.2s ease-out;
+}
+
+.streak-maxed .streak-bar-fill {
+  background: #f1c40f;
+}
+
+.streak-mult {
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.streak-maxed .streak-mult {
+  color: #b8860b;
+}
+
 .connection-status {
   padding: 5px 10px;
   border-radius: 4px;
