@@ -33,6 +33,58 @@ const normalizeChunkId = (cid = {}) => ({ X: cid.X ?? 0, Y: cid.Y ?? 0 });
 export const CHUNK = 64;
 const MINIMAP_ATLAS_SIZE = 512;
 
+// 0..9: board background, mines, numbers; 10..19: 10 flag colors
+const minimapPalette = new Uint32Array(256);
+// base board colors
+minimapPalette[0] = 0xffc0c0c0; // unseen
+// Use very dark gray for mines so pure black can be reserved for a flag color
+minimapPalette[1] = 0xff202020; // mine (dark gray)
+minimapPalette[2] = 0xffe0e0e0; // empty
+minimapPalette[3] = 0xffe9ecff; // n1
+minimapPalette[4] = 0xffe9ffea; // n2
+minimapPalette[5] = 0xffffe9ea; // n3
+minimapPalette[6] = 0xffececff; // n4
+minimapPalette[7] = 0xfffff0ea; // n5
+minimapPalette[8] = 0xffd4fff2; // n6
+minimapPalette[9] = 0xfff0e4ff; // n7+ (slightly purple for contrast)
+// 10 flag buckets must align with (flagID % 10) color mapping:
+// 0: light_gray, 1: red, 2: green, 3: blue, 4: yellow,
+// 5: orange, 6: purple, 7: cyan, 8: pink, 9: dark_gray (black)
+const flagColors = [
+  0xffdcdcdc, // light_gray
+  0xffe31c1c, // red
+  0xff22c55e, // green
+  0xff2166f3, // blue
+  0xfff59e0b, // yellow
+  0xffff6b2c, // orange
+  0xffa855f7, // purple
+  0xff06b6d4, // cyan
+  0xffff69b4, // pink
+  0xff000000, // dark_gray / black
+];
+for (let i = 0; i < 10; i++) minimapPalette[10 + i] = flagColors[i];
+const overviewLevels = [0, 96, 144, 192, 224, 255];
+for (let r = 0; r < overviewLevels.length; r++) {
+  for (let g = 0; g < overviewLevels.length; g++) {
+    for (let b = 0; b < overviewLevels.length; b++) {
+      minimapPalette[20 + r * 36 + g * 6 + b] =
+        0xff000000 |
+        (overviewLevels[r] << 16) |
+        (overviewLevels[g] << 8) |
+        overviewLevels[b];
+    }
+  }
+}
+const minimapPaletteRGBA = new Uint32Array(256);
+for (let i = 0; i < minimapPalette.length; i++) {
+  const color = minimapPalette[i] >>> 0;
+  minimapPaletteRGBA[i] =
+    (((color >>> 24) & 0xff) << 24) |
+    ((color & 0xff) << 16) |
+    (color & 0x00ff00) |
+    ((color >>> 16) & 0xff);
+}
+
 function encodeMsg(msg) {
   if (msg && msg.payload && Object.keys(msg).length === 1) {
     msg = msg.payload;
@@ -205,57 +257,6 @@ export const useGameState = () => {
   const minimapDesiredBySourceRef = useRef(new Map()); // sourceKey -> Set("x,y")
   // Track current resolution preference to detect changes
   const currentResolutionRef = useRef(64);
-  // 0..9: board background, mines, numbers; 10..19: 10 flag colors
-  const minimapPalette = new Uint32Array(256);
-  // base board colors
-  minimapPalette[0] = 0xffc0c0c0; // unseen
-  // Use very dark gray for mines so pure black can be reserved for a flag color
-  minimapPalette[1] = 0xff202020; // mine (dark gray)
-  minimapPalette[2] = 0xffe0e0e0; // empty
-  minimapPalette[3] = 0xffe9ecff; // n1
-  minimapPalette[4] = 0xffe9ffea; // n2
-  minimapPalette[5] = 0xffffe9ea; // n3
-  minimapPalette[6] = 0xffececff; // n4
-  minimapPalette[7] = 0xfffff0ea; // n5
-  minimapPalette[8] = 0xffd4fff2; // n6
-  minimapPalette[9] = 0xfff0e4ff; // n7+ (slightly purple for contrast)
-  // 10 flag buckets must align with (flagID % 10) color mapping:
-  // 0: light_gray, 1: red, 2: green, 3: blue, 4: yellow,
-  // 5: orange, 6: purple, 7: cyan, 8: pink, 9: dark_gray (black)
-  const flagColors = [
-    0xffdcdcdc, // light_gray
-    0xffe31c1c, // red
-    0xff22c55e, // green
-    0xff2166f3, // blue
-    0xfff59e0b, // yellow
-    0xffff6b2c, // orange
-    0xffa855f7, // purple
-    0xff06b6d4, // cyan
-    0xffff69b4, // pink
-    0xff000000, // dark_gray / black
-  ];
-  for (let i = 0; i < 10; i++) minimapPalette[10 + i] = flagColors[i];
-  const overviewLevels = [0, 96, 144, 192, 224, 255];
-  for (let r = 0; r < overviewLevels.length; r++) {
-    for (let g = 0; g < overviewLevels.length; g++) {
-      for (let b = 0; b < overviewLevels.length; b++) {
-        minimapPalette[20 + r * 36 + g * 6 + b] =
-          0xff000000 |
-          (overviewLevels[r] << 16) |
-          (overviewLevels[g] << 8) |
-          overviewLevels[b];
-      }
-    }
-  }
-  const minimapPaletteRGBA = new Uint32Array(256);
-  for (let i = 0; i < minimapPalette.length; i++) {
-    const color = minimapPalette[i] >>> 0;
-    minimapPaletteRGBA[i] =
-      (((color >>> 24) & 0xff) << 24) |
-      ((color & 0xff) << 16) |
-      (color & 0x00ff00) |
-      ((color >>> 16) & 0xff);
-  }
 
   const makeOverviewCanvas = useCallback((pixels, width, height) => {
     const canvas =
@@ -651,6 +652,9 @@ export const useGameState = () => {
   }, []);
   const playerFlagsRef = useRef(new Map());
   const optimisticActions = useRef(new Map());
+  // Strictly increasing request IDs: two clicks in the same millisecond must
+  // not share an optimisticActions key (the wire type is uint64).
+  const lastRequestIdRef = useRef(0);
   // Cells revealed before all neighbor seeds arrived (adjacentMines === -1),
   // chunkKey -> Set(cellIdx); recomputed when an adjacent seed shows up,
   // otherwise they'd render blank forever.
@@ -665,45 +669,46 @@ export const useGameState = () => {
     set.add(cell);
   }, []);
 
-  // Request seeds and densities for adjacent chunks (pre-emptive caching)
-  const requestAdjacentSeeds = useCallback(
-    (cx, cy) => {
-      if (!ws || !connected) return;
+  // Request seeds and densities for adjacent chunks (pre-emptive caching).
+  // Requests accumulate in a pending set and flush once per tick: a region
+  // sync applies dozens of chunks back-to-back, and most rings are covered by
+  // seeds arriving later in the same batch. Uses wsRef (not the `ws` state)
+  // so the callback captured by the long-lived onmessage handler stays live.
+  const pendingSeedRequestsRef = useRef(new Set());
+  const pendingSeedFlushRef = useRef(null);
 
-      const adjacentChunks = [];
-      const alreadyRequested = new Set();
-
-      // Check all 8 adjacent chunks around the given chunk
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue; // Skip the center chunk itself
-          const adjX = cx + dx;
-          const adjY = cy + dy;
-          const chunkKey = `${adjX},${adjY}`;
-
-          // Only request if we don't already have the seed cached
-          if (
-            !seedCache.current.has(chunkKey) &&
-            !alreadyRequested.has(chunkKey)
-          ) {
-            adjacentChunks.push({ X: adjX, Y: adjY });
-            alreadyRequested.add(chunkKey);
-          }
+  const requestAdjacentSeeds = useCallback((cx, cy) => {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const chunkKey = `${cx + dx},${cy + dy}`;
+        if (!seedCache.current.has(chunkKey)) {
+          pendingSeedRequestsRef.current.add(chunkKey);
         }
       }
-
-      if (adjacentChunks.length > 0 && ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          encodeMsg({
-            seedRequest: {
-              chunkIds: adjacentChunks,
-            },
-          })
-        );
+    }
+    if (pendingSeedFlushRef.current != null) return;
+    pendingSeedFlushRef.current = setTimeout(() => {
+      pendingSeedFlushRef.current = null;
+      const s = wsRef.current;
+      const pending = pendingSeedRequestsRef.current;
+      pendingSeedRequestsRef.current = new Set();
+      if (!s || s.readyState !== WebSocket.OPEN) return;
+      const chunkIds = [];
+      for (const key of pending) {
+        if (seedCache.current.has(key)) continue;
+        const comma = key.indexOf(",");
+        chunkIds.push({
+          X: Number(key.slice(0, comma)),
+          Y: Number(key.slice(comma + 1)),
+        });
+        if (chunkIds.length >= 512) break; // server per-request cap
       }
-    },
-    [ws, connected]
-  );
+      if (chunkIds.length) {
+        s.send(encodeMsg({ seedRequest: { chunkIds } }));
+      }
+    }, 50);
+  }, []);
 
   // Per-chunk mine bitmaps: one BigInt hashing pass per chunk, then every
   // mine/adjacency query is a typed-array read. Dense (merged-world) chunk
@@ -1115,10 +1120,11 @@ export const useGameState = () => {
         (revealedCellsRef.current.get(chunkX, chunkY, cell) & CELL_REVEALED) !==
         0;
       if (isChord && !revealedCell) return;
-      if (!isChord && revealedCell) {
-        // Left-clicking a revealed mine asks the server who stepped on it
+      if (revealedCell) {
+        // Any click on a revealed mine asks the server who stepped on it:
+        // revealing, flagging, and chording are all no-ops there. Left
+        // clicks arrive as chords, so this must run before the chord path.
         if (
-          !isRightClick &&
           isMineAt(chunkKey, cell) === true &&
           ws.readyState === WebSocket.OPEN
         ) {
@@ -1127,8 +1133,9 @@ export const useGameState = () => {
               cellOwnerRequest: { chunkId: { X: chunkX, Y: chunkY }, cell },
             })
           );
+          return;
         }
-        return;
+        if (!isChord) return;
       }
       if (flaggedCellsRef.current.has(flagKey)) {
         // Left-clicking a flag asks the server whose it is
@@ -1152,7 +1159,11 @@ export const useGameState = () => {
         return;
       }
 
-      const requestId = Date.now().toString();
+      lastRequestIdRef.current = Math.max(
+        Date.now(),
+        lastRequestIdRef.current + 1
+      );
+      const requestId = lastRequestIdRef.current.toString();
       const optimisticChanges = new Map();
       optimisticActions.current.set(requestId, optimisticChanges);
       let didLocalMutation = false; // track if we really changed stuff
@@ -1372,38 +1383,10 @@ export const useGameState = () => {
           }
         } catch {}
       };
-      // Run after layout to also allow initial viewport computation
+      // Run after layout to also allow initial viewport computation.
+      // (The initial view update itself comes from App.jsx's viewport
+      // effects, which fire once connectedRef flips true.)
       requestAnimationFrame(resubscribeAll);
-      // Kick an initial view update on the next frame once the DOM is ready
-      requestAnimationFrame(() => {
-        try {
-          // Use DOM-based helper to compute current viewport in world cells
-          const root = document.querySelector("#root")?.firstElementChild;
-          if (root) {
-            const width = root.clientWidth;
-            const height = root.clientHeight;
-            const worldWidthCells = Math.ceil(width / 1);
-            const worldHeightCells = Math.ceil(height / 1);
-            const centerWorldX = Math.floor(
-              (viewRef.current.x + width / 2) / 1
-            );
-            const centerWorldY = Math.floor(
-              (viewRef.current.y + height / 2) / 1
-            );
-            const { chunkX, chunkY, cell } = worldToChunk(
-              centerWorldX,
-              centerWorldY
-            );
-            sendViewUpdate.current(
-              chunkX,
-              chunkY,
-              cell,
-              worldWidthCells,
-              worldHeightCells
-            );
-          }
-        } catch {}
-      });
 
       // Auto-rejoin if we have stored credentials (handles reconnection after disconnect)
       const storedUsername = localStorage.getItem("username");
@@ -1474,36 +1457,8 @@ export const useGameState = () => {
           setServerFlagID(data.flagID); // Sync server's authoritative flagID
           setJoinError(""); // Clear any previous join errors
           setConnected(true); // Now we're fully connected as a player
-
-          // Send a view update after successful join
-          requestAnimationFrame(() => {
-            try {
-              const root = document.querySelector("#root")?.firstElementChild;
-              if (root) {
-                const width = root.clientWidth;
-                const height = root.clientHeight;
-                const worldWidthCells = Math.ceil(width / 1);
-                const worldHeightCells = Math.ceil(height / 1);
-                const centerWorldX = Math.floor(
-                  (viewRef.current.x + width / 2) / 1
-                );
-                const centerWorldY = Math.floor(
-                  (viewRef.current.y + height / 2) / 1
-                );
-                const { chunkX, chunkY, cell } = worldToChunk(
-                  centerWorldX,
-                  centerWorldY
-                );
-                sendViewUpdate.current(
-                  chunkX,
-                  chunkY,
-                  cell,
-                  worldWidthCells,
-                  worldHeightCells
-                );
-              }
-            } catch {}
-          });
+          // App.jsx's [connected] viewport effect sends the post-join view
+          // update.
         } else {
           // Join failed - stay in spectator mode but notify user
           console.error("Join failed:", data.error);
@@ -1924,7 +1879,8 @@ export const useGameState = () => {
           return a.name.localeCompare(b.name);
         });
         setLeaderboard(uniqueEntries);
-        playerFlagsRef.current.clear();
+        // Merge (don't clear): our own entry drops off the top-10 broadcast,
+        // and losing it breaks optimistic flag placement until the next join.
         for (const entry of uniqueEntries) {
           playerFlagsRef.current.set(entry.name, entry.flagID);
         }
