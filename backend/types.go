@@ -146,10 +146,36 @@ type Player struct {
 	done chan struct{} // closed when player is fully removed
 }
 
-// TokenBucket for rate limiting seed requests (200/min)
+// TokenBucket for rate limiting seed requests (200/min). Only touched from
+// the owning connection's readPump goroutine, so no locking.
 type TokenBucket struct {
 	tokens     int
 	lastRefill time.Time
+}
+
+const (
+	seedRequestBucketCap = 200
+	seedRequestRefillPer = time.Minute / seedRequestBucketCap
+)
+
+// take refills based on elapsed time, then consumes one token. Returns false
+// when the bucket is empty (caller should drop the request).
+func (tb *TokenBucket) take(now time.Time) bool {
+	if tb.lastRefill.IsZero() {
+		tb.lastRefill = now
+	}
+	if refill := int(now.Sub(tb.lastRefill) / seedRequestRefillPer); refill > 0 {
+		tb.tokens += refill
+		if tb.tokens > seedRequestBucketCap {
+			tb.tokens = seedRequestBucketCap
+		}
+		tb.lastRefill = tb.lastRefill.Add(time.Duration(refill) * seedRequestRefillPer)
+	}
+	if tb.tokens <= 0 {
+		return false
+	}
+	tb.tokens--
+	return true
 }
 
 // Convert internal ClientState to protobuf ClientState

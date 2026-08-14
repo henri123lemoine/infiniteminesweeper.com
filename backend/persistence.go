@@ -171,6 +171,16 @@ func (s *Server) flushWAL() error {
 	s.walBuffer = make([]WALEntry, 0, 1024)
 	s.walMutex.Unlock()
 
+	// On any flush failure, put the entries back at the head of the buffer
+	// (sequence order preserved) so a transient S3/disk error doesn't drop
+	// play. Partial writes replay harmlessly: reveal/flag/score entries are
+	// idempotent.
+	requeue := func() {
+		s.walMutex.Lock()
+		s.walBuffer = append(entries, s.walBuffer...)
+		s.walMutex.Unlock()
+	}
+
 	if s.useS3 {
 		// One S3 object per flush under walPrefix; truncate deletes the whole
 		// set after a snapshot. Avoids pulling the cumulative WAL into memory
@@ -179,6 +189,7 @@ func (s *Server) flushWAL() error {
 		encoder := json.NewEncoder(&buf)
 		for _, entry := range entries {
 			if err := encoder.Encode(entry); err != nil {
+				requeue()
 				return fmt.Errorf("failed to encode WAL entry: %v", err)
 			}
 		}
@@ -195,29 +206,34 @@ func (s *Server) flushWAL() error {
 			Body:   bytes.NewReader(buf.Bytes()),
 		})
 		if err != nil {
+			requeue()
 			return fmt.Errorf("failed to upload WAL segment to S3: %v", err)
 		}
 
 		log.Printf("WAL: flushed %d entries to S3 segment %s", len(entries), key)
 	} else {
 		if err := os.MkdirAll(s.dataDir, 0o755); err != nil {
+			requeue()
 			return err
 		}
 		path := filepath.Join(s.dataDir, walFileName)
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
+			requeue()
 			return err
 		}
 		defer f.Close()
 		enc := json.NewEncoder(f)
 		for _, entry := range entries {
 			if err := enc.Encode(entry); err != nil {
+				requeue()
 				return err
 			}
 		}
 		// Without fsync, a machine kill right after "flush" can still truncate
 		// the tail of the file mid-record.
 		if err := f.Sync(); err != nil {
+			requeue()
 			return err
 		}
 		log.Printf("WAL: flushed %d entries to disk", len(entries))
@@ -331,33 +347,37 @@ func (s *Server) truncateWAL() error {
 		if err != nil {
 			return fmt.Errorf("failed to list WAL segments for truncate: %v", err)
 		}
-		if len(segments) == 0 {
-			return nil
-		}
-		// DeleteObjects in batches of up to 1000 (API limit).
-		const batch = 1000
-		for i := 0; i < len(segments); i += batch {
-			end := i + batch
-			if end > len(segments) {
-				end = len(segments)
-			}
-			objs := make([]*s3.ObjectIdentifier, 0, end-i)
-			for _, k := range segments[i:end] {
-				kCopy := k
-				objs = append(objs, &s3.ObjectIdentifier{Key: aws.String(kCopy)})
-			}
-			if _, err := s.s3Client.DeleteObjects(&s3.DeleteObjectsInput{
-				Bucket: aws.String(s.bucketName),
-				Delete: &s3.Delete{Objects: objs, Quiet: aws.Bool(true)},
-			}); err != nil {
-				return fmt.Errorf("failed to delete WAL segments: %v", err)
-			}
-		}
-		return nil
+		return s.deleteWALSegments(segments)
 	}
 	path := filepath.Join(s.dataDir, walFileName)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
+	}
+	return nil
+}
+
+func (s *Server) deleteWALSegments(segments []string) error {
+	if len(segments) == 0 {
+		return nil
+	}
+	// DeleteObjects in batches of up to 1000 (API limit).
+	const batch = 1000
+	for i := 0; i < len(segments); i += batch {
+		end := i + batch
+		if end > len(segments) {
+			end = len(segments)
+		}
+		objs := make([]*s3.ObjectIdentifier, 0, end-i)
+		for _, k := range segments[i:end] {
+			kCopy := k
+			objs = append(objs, &s3.ObjectIdentifier{Key: aws.String(kCopy)})
+		}
+		if _, err := s.s3Client.DeleteObjects(&s3.DeleteObjectsInput{
+			Bucket: aws.String(s.bucketName),
+			Delete: &s3.Delete{Objects: objs, Quiet: aws.Bool(true)},
+		}); err != nil {
+			return fmt.Errorf("failed to delete WAL segments: %v", err)
+		}
 	}
 	return nil
 }
@@ -567,6 +587,12 @@ func (s *Server) initPersistence() {
 		}
 
 		if err := s.loadSnapshotFromS3(); err != nil {
+			// Only a genuinely missing snapshot may start fresh: booting
+			// "fresh" on a transient S3 error would later overwrite the good
+			// snapshot with a near-empty world and truncate the WAL.
+			if !isS3NotFound(err) {
+				log.Fatalf("[snapshot] failed to load snapshot from S3 (refusing to start fresh): %v", err)
+			}
 			log.Printf("[snapshot] no previous snapshot loaded from S3: %v (starting fresh)", err)
 			// Even without a snapshot, attempt to recover state from WAL
 			if err := s.replayWAL(); err != nil {
@@ -596,6 +622,11 @@ func (s *Server) initPersistence() {
 			s.dataDir = dir
 		}
 		if err := s.loadSnapshotFromDisk(); err != nil {
+			// Same rule as S3: a corrupt/unreadable snapshot must not be
+			// silently replaced by an empty world.
+			if !os.IsNotExist(err) {
+				log.Fatalf("[snapshot] failed to load snapshot from disk (refusing to start fresh): %v", err)
+			}
 			log.Printf("[snapshot] no previous snapshot loaded from disk: %v (starting fresh)", err)
 			// Even without a snapshot, attempt to recover state from WAL
 			if err := s.replayWAL(); err != nil {
@@ -700,6 +731,15 @@ func (s *Server) captureSnapshotData() snapshotData {
 }
 
 func (s *Server) saveSnapshotToS3() error {
+	// List segments BEFORE capturing state: entries flushed while the upload
+	// is in flight are not in this snapshot, so their segments must survive
+	// the truncate. Anything listed here is fully covered by the capture.
+	segments, segErr := s.listWALSegments()
+	if segErr != nil {
+		log.Printf("[wal] segment listing failed, skipping truncate this cycle: %v", segErr)
+		segments = nil
+	}
+
 	data := s.captureSnapshotData()
 
 	// Create compressed snapshot in memory. bytes.Buffer + bytes.NewReader is
@@ -720,8 +760,9 @@ func (s *Server) saveSnapshotToS3() error {
 		return fmt.Errorf("failed to upload snapshot to S3: %v", err)
 	}
 
-	// Truncate WAL after successful snapshot
-	if err := s.truncateWAL(); err != nil {
+	// Drop only the segments that predate the capture; newer ones replay on
+	// top of the snapshot at next boot.
+	if err := s.deleteWALSegments(segments); err != nil {
 		log.Printf("[wal] failed to truncate WAL after snapshot: %v", err)
 		// Don't fail the snapshot operation for this
 	}
@@ -742,6 +783,12 @@ func (s *Server) saveSnapshotToDisk() error {
 		return err
 	}
 	if err := encodeSnapshot(f, &data); err != nil {
+		f.Close()
+		return err
+	}
+	// fsync before the rename: without it a power loss can promote a
+	// truncated tmp file over the previous good snapshot.
+	if err := f.Sync(); err != nil {
 		f.Close()
 		return err
 	}

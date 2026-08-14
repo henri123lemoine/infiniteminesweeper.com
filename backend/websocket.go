@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -477,9 +478,9 @@ func (s *Server) handleUpdateProfile(player *Player, update *pb.UpdateProfile) {
 	}
 }
 
-// handleSeedRequest processes a SeedRequest message, returning seeds and densities for requested chunks
-// Enough for any legitimate viewport; caps how long a hostile request can
-// hold the write lock computing HMACs.
+// handleSeedRequest processes a SeedRequest message, returning seeds and
+// densities for requested chunks. Enough for any legitimate viewport. Seeds
+// and densities live behind their own cache mutexes, so no stateMu needed.
 const maxSeedRequestChunks = 512
 
 func (s *Server) handleSeedRequest(playerID uint32, chunkIds []*pb.ChunkID) {
@@ -489,8 +490,6 @@ func (s *Server) handleSeedRequest(playerID uint32, chunkIds []*pb.ChunkID) {
 	if len(chunkIds) > maxSeedRequestChunks {
 		chunkIds = chunkIds[:maxSeedRequestChunks]
 	}
-
-	s.stateMu.Lock()
 
 	seeds := make([]*pb.ChunkSeed, 0, len(chunkIds))
 
@@ -512,8 +511,6 @@ func (s *Server) handleSeedRequest(playerID uint32, chunkIds []*pb.ChunkID) {
 			Density: float32(density),
 		})
 	}
-
-	s.stateMu.Unlock()
 
 	if len(seeds) > 0 {
 		msg := &pb.Msg{Payload: &pb.Msg_SeedResponse{SeedResponse: &pb.SeedResponse{
@@ -568,8 +565,10 @@ func (s *Server) readPump(player *Player) {
 		player.Conn.Close()
 	}()
 
-	// The connection is now established; reset the read deadline.
-	player.Conn.SetReadDeadline(time.Time{})
+	// Rolling deadline: pongs (every 30s ping) push it forward. A peer that
+	// stops ponging — dead TCP path, hostile client — gets reaped instead of
+	// holding the connection open forever.
+	player.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 
 	readBuf := bufferPool.Get().(*bytes.Buffer)
 	defer bufferPool.Put(readBuf)
@@ -594,11 +593,14 @@ func (s *Server) readPump(player *Player) {
 			}
 		}
 
+		// SetReadLimit only bounds the compressed frame; a 1MB gzip bomb can
+		// inflate to ~1GB and OOM the 256MB machine without this cap.
+		const maxDecompressedBytes = 4 << 20
 		readBuf.Reset()
-		_, err = readBuf.ReadFrom(gz)
+		_, err = readBuf.ReadFrom(io.LimitReader(gz, maxDecompressedBytes+1))
 		gz.Close()
 		gzipReaderPool.Put(gz)
-		if err != nil {
+		if err != nil || readBuf.Len() > maxDecompressedBytes {
 			continue
 		}
 
@@ -870,7 +872,7 @@ func (s *Server) readPump(player *Player) {
 			}
 		case *pb.Msg_SeedRequest:
 			m := t.SeedRequest
-			if m != nil {
+			if m != nil && player.TokenBucket.take(time.Now()) {
 				s.handleSeedRequest(player.ID, m.ChunkIds)
 			}
 		}
@@ -1318,59 +1320,50 @@ func (s *Server) broadcastPlayerPositions(chunkRadius int64) {
 	}
 	s.stateMu.RUnlock()
 
-	// For each player, find nearby players and send their positions
-	s.playersMu.RLock()
-	defer s.playersMu.RUnlock()
-
-	for _, set := range s.players {
-		for p := range set {
-			select {
-			case <-p.done:
-				continue
-			default:
+	// For each player, find nearby players and send their positions. Sends
+	// happen outside playersMu: sendToPlayer re-acquires it, and a recursive
+	// RLock deadlocks if a writer is queued in between.
+	for pid := range connectedIDs {
+		// Find this player's position
+		var myView *PlayerView
+		for i := range positions {
+			if positions[i].id == pid {
+				myView = &positions[i].view
+				break
 			}
-
-			// Find this player's position
-			var myView *PlayerView
-			for i := range positions {
-				if positions[i].id == p.ID {
-					myView = &positions[i].view
-					break
-				}
-			}
-			if myView == nil {
-				continue // Player has no known view position
-			}
-
-			// Collect nearby players (excluding self)
-			nearby := make([]*pb.PlayerPosition, 0)
-			for _, other := range positions {
-				if other.id == p.ID {
-					continue // Skip self
-				}
-				dx := other.view.Chunk.X - myView.Chunk.X
-				dy := other.view.Chunk.Y - myView.Chunk.Y
-				if dx < 0 {
-					dx = -dx
-				}
-				if dy < 0 {
-					dy = -dy
-				}
-				if dx <= chunkRadius && dy <= chunkRadius {
-					nearby = append(nearby, &pb.PlayerPosition{
-						PlayerId: other.id,
-						ChunkId:  &pb.ChunkID{X: other.view.Chunk.X, Y: other.view.Chunk.Y},
-						Cell:     other.view.Cell,
-						FlagId:   other.flagID,
-					})
-				}
-			}
-
-			// Always send (even if empty) so clients can clear stale positions
-			msg := &pb.Msg{Payload: &pb.Msg_PlayerPositions{PlayerPositions: &pb.PlayerPositions{
-				Players: nearby,
-			}}}
-			s.sendToPlayer(p.ID, mustProto(msg))
 		}
+		if myView == nil {
+			continue // Player has no known view position
+		}
+
+		// Collect nearby players (excluding self)
+		nearby := make([]*pb.PlayerPosition, 0)
+		for _, other := range positions {
+			if other.id == pid {
+				continue // Skip self
+			}
+			dx := other.view.Chunk.X - myView.Chunk.X
+			dy := other.view.Chunk.Y - myView.Chunk.Y
+			if dx < 0 {
+				dx = -dx
+			}
+			if dy < 0 {
+				dy = -dy
+			}
+			if dx <= chunkRadius && dy <= chunkRadius {
+				nearby = append(nearby, &pb.PlayerPosition{
+					PlayerId: other.id,
+					ChunkId:  &pb.ChunkID{X: other.view.Chunk.X, Y: other.view.Chunk.Y},
+					Cell:     other.view.Cell,
+					FlagId:   other.flagID,
+				})
+			}
+		}
+
+		// Always send (even if empty) so clients can clear stale positions
+		msg := &pb.Msg{Payload: &pb.Msg_PlayerPositions{PlayerPositions: &pb.PlayerPositions{
+			Players: nearby,
+		}}}
+		s.sendToPlayer(pid, mustProto(msg))
 	}
 }
