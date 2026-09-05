@@ -2032,7 +2032,10 @@ export const useGameState = () => {
         if (lod <= 4 && !request.subscribe) {
           overviewDiagnosticsRef.current.prefetchStartedAt = performance.now();
         }
-        const bytes = encodeMsg({ overviewRequest: request });
+        const cached = overviewCacheRef.current.findExact(request);
+        const bytes = encodeMsg({
+          overviewRequest: { ...request, knownRevision: cached?.revision || 0 },
+        });
         socket.send(bytes);
         overviewDiagnosticsRef.current.requests++;
         overviewDiagnosticsRef.current.requestBytes += bytes.byteLength;

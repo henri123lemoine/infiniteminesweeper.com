@@ -161,7 +161,6 @@ export default function OverviewMinimap({
             heightChunks: record.heightChunks,
           }
         : desiredRegion;
-      const knownRevision = record?.revision || 0;
       const previous = requestedRef.current;
       if (
         record &&
@@ -181,7 +180,6 @@ export default function OverviewMinimap({
           lod: requestedLOD,
           ...region,
           global,
-          knownRevision,
           subscribe: true,
           replaceSubscription: true,
         })
@@ -210,7 +208,15 @@ export default function OverviewMinimap({
       size.width,
       size.height
     );
-    if (!overviewCacheRef.current.findExact({ ...preview, global: false })) {
+    if (
+      !overviewCacheRef.current.findForView(
+        preview.lod,
+        preview.originX * CHUNK,
+        preview.originY * CHUNK,
+        (preview.originX + preview.widthChunks) * CHUNK,
+        (preview.originY + preview.heightChunks) * CHUNK
+      )
+    ) {
       requestOverview({ ...preview, global: false, subscribe: false });
     }
   }, [
@@ -255,11 +261,13 @@ export default function OverviewMinimap({
 
   useEffect(() => {
     if (!size.width || !size.height) return;
-    const delay = !hasZoomedRef.current
-      ? 100
-      : zoomSpeedRef.current > 0.004
-        ? 180
-        : 50;
+    const settleDelay = () =>
+      viewRef.current.zoom === MIN_ZOOM && zoomSpeedRef.current > 0
+        ? 0
+        : zoomSpeedRef.current > 0.004
+          ? 180
+          : 50;
+    const delay = hasZoomedRef.current ? settleDelay() : 100;
     logBenchmarkEvent({
       type: "schedule",
       lod,
@@ -269,17 +277,17 @@ export default function OverviewMinimap({
     });
     let timer;
     const requestWhenSettled = () => {
-      const settleDelay = zoomSpeedRef.current > 0.004 ? 180 : 50;
+      const wait = settleDelay();
       const sinceZoom = performance.now() - zoomAtRef.current;
       logBenchmarkEvent({
         type: "timer",
         lod: targetOverviewLOD(viewRef.current.zoom, size.width, size.height),
-        settleDelay,
+        settleDelay: wait,
         sinceZoom,
         speed: zoomSpeedRef.current,
       });
-      if (hasZoomedRef.current && sinceZoom < settleDelay) {
-        timer = setTimeout(requestWhenSettled, settleDelay - sinceZoom + 1);
+      if (hasZoomedRef.current && sinceZoom < wait) {
+        timer = setTimeout(requestWhenSettled, wait - sinceZoom + 1);
         return;
       }
       requestLOD(
@@ -369,6 +377,37 @@ export default function OverviewMinimap({
       drawRecord(record);
     }
 
+    if (benchmarkEnabled) {
+      const coversView = (source) =>
+        overviewCacheRef.current.recordContainsView(
+          source,
+          current.x,
+          current.y,
+          current.x + width / current.zoom,
+          current.y + height / current.zoom
+        );
+      const target = targetOverviewLOD(current.zoom, width, height);
+      const ready = record?.lod === target && coversView(record);
+      window.__minimapPaint = {
+        at: performance.now(),
+        zoom: current.zoom,
+        covered:
+          coversView(record) ||
+          Boolean(
+            record &&
+            overviewCacheRef.current.findClosestForView(
+              target,
+              current.x,
+              current.y,
+              current.x + width / current.zoom,
+              current.y + height / current.zoom
+            )
+          ),
+        ready,
+        settled: ready && !previousRecordRef.current,
+      };
+    }
+
     const game = containerRef?.current;
     const gameWidth = game?.clientWidth || 0;
     const gameHeight = game?.clientHeight || 0;
@@ -438,6 +477,7 @@ export default function OverviewMinimap({
     getPointToWorld: () => ({ ...viewRef.current, mode: "overlay" }),
     onPan: (deltaX, deltaY) => {
       const current = viewRef.current;
+      zoomSpeedRef.current = 0;
       interactionAtRef.current = performance.now();
       setCurrentView({
         ...current,
@@ -451,6 +491,7 @@ export default function OverviewMinimap({
         MAX_ZOOM,
         Math.max(MIN_ZOOM, current.zoom * factor)
       );
+      if (nextZoom === current.zoom) return;
       const worldX = current.x + point.x / current.zoom;
       const worldY = current.y + point.y / current.zoom;
       const now = performance.now();

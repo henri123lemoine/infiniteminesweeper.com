@@ -87,10 +87,12 @@ requesting missing coverage after zooming out.
 The reproducible case is: join, open the minimap, wait 750 ms, then immediately
 zoom all the way out. At both 1920x1080 and 3840x2160, the previous PR head
 `3dac22a` remained incomplete at the 8-second timeout. The revised client
-finished with verified viewport coverage in about 255 ms at 1080p; at 4K the
-coarse preview already covered the target view. These are local measurements,
-not network latency guarantees. The previous benchmark's LOD-only readiness
-check missed this failure; the new test also verifies snapshot bounds.
+reported matching-resolution data with verified viewport coverage in about
+255 ms at 1080p; at 4K the coarse preview already covered the target view. That
+255 ms sample measured React readiness, not completed canvas drawing or the
+280 ms refinement fade. The repeated paint measurements below supersede it.
+The previous benchmark's LOD-only readiness check missed the original stall;
+the new test also verifies snapshot bounds.
 
 The revised minimap:
 
@@ -147,9 +149,60 @@ The gradual zoom continuity tests at 1080p and 4K passed their visual limits: ze
 fallback frames, maximum luminance drift below 5, p95 drift below 1, and minimum
 scale-normalized SSIM above 0.65 (0.89 minimum in the final 4K run).
 Dropping the first snapshot deliberately also recovered at both screen sizes,
-about 10.2–10.4 seconds after the zoom gesture, without reloading the page. The final delayed 4K run recorded one 53 ms browser long task across page startup
+about 10.2–10.4 seconds after the zoom gesture, without reloading the page. An
+earlier delayed 4K run recorded one 53 ms browser long task across page startup
 and interaction, and some frames around 50 ms. This does not promise
 perfect frame pacing on every device or unlimited capacity on a 512 MB machine.
+
+## Zoom-limit latency refinement
+
+When a zoom gesture reaches minimum zoom, request detail immediately instead of
+waiting for the 180 ms gesture debounce. Panning remains debounced. Further
+wheel input at a zoom limit leaves the view unchanged. Reuse a cached or in-flight preview that covers the opening view;
+background requests cannot displace queued visible detail. Read cached revisions
+when a queued request is actually sent, so a preceding response can satisfy it
+with an unchanged acknowledgement instead of another image.
+
+The cold benchmark now records three points from the last zoom gesture: the
+first canvas draw with complete viewport coverage (possibly a coarse preview),
+the first draw with target-resolution data, and the completed refinement fade.
+These are canvas command timings in headless Chromium, not physical display
+presentation or production network measurements. A complete viewport at the UI's
+minimum zoom does not mean downloading the entire world.
+
+Five fresh browser contexts per display used the same 19,529-chunk snapshot and
+waited 750 ms after opening the overlay before zooming directly to the limit.
+The baseline is `9717a32` with the same paint instrumentation; the server, memory
+limit, and 280 ms fade were unchanged. Median timings on the local M5 Max:
+
+| 1080p measurement | Previous PR head | Zoom-limit refinement |
+| --- | ---: | ---: |
+| First canvas draw covering the viewport | 3.9 ms | 6.2 ms |
+| First draw with target detail | 314 ms | 137 ms |
+| Refinement fade complete | 594 ms | 417 ms |
+| Overview requests from joining through zoom-out | 3–4 | 3 |
+
+The refined target-detail range was 109–157 ms. At 4K the memory budget selects
+LOD 4, matching the prefetched preview; both versions therefore drew the final
+zoomed-out view on the next frame (2–17 ms across these runs). This is cache
+reuse, not a faster cold download at higher resolution.
+
+Another three contexts per display zoomed immediately on overlay opening, with
+100 ms artificial delay on every overview response. The connection-time preview
+could still arrive before the gesture; this is not an empty-cache measurement
+from navigation. At 1080p, median target-detail drawing improved from 405 to
+269 ms and fade completion from 685 to 533 ms. Requests fell from three to two;
+indexed image data received fell from about 5.45 to 4.73 MiB. At 4K the refined
+runs received one 2.89 MiB preview plus an unchanged subscription acknowledgement.
+
+Final regression checks preserved the same continuity limits at both sizes.
+Panning away and back used two requests / 249 KiB of response data, with no long
+tasks in that measured interaction; reopening used a 48-byte acknowledgement.
+The harsher 250 ms delay / repeated reversal test still completed with one
+request in flight and caches below 48 MiB. It recorded browser long tasks of
+50–80 ms across startup and interaction. Cached return views used unchanged
+acknowledgements, but neither the request bounds nor local measurements promise
+zero long frames on all devices.
 
 ## Reproduction and validation
 
@@ -178,7 +231,8 @@ local server. Both launch headless Chromium. For the production stall and
 bounded request regression, use:
 
 ```sh
-BASE_URL=http://localhost:18096 ASSERT_READY=1 node frontend/tests/benchmark-minimap-cold.mjs
+BASE_URL=http://localhost:18096 RUNS=5 ASSERT_READY=1 node frontend/tests/benchmark-minimap-cold.mjs
+BASE_URL=http://localhost:18096 OPEN_DELAY=0 RESPONSE_DELAY=100 RUNS=3 ASSERT_READY=1 node frontend/tests/benchmark-minimap-cold.mjs
 BASE_URL=http://localhost:18096 RESPONSE_DELAY=250 CHURN=1 PATCH_TRAFFIC=1 ASSERT_READY=1 node frontend/tests/benchmark-minimap-cold.mjs
 BASE_URL=http://localhost:18096 DROP_FIRST=1 ASSERT_READY=1 node frontend/tests/benchmark-minimap-cold.mjs
 WSURL=ws://localhost:18096/ws METRICS_URL=http://localhost:19097/metrics node frontend/tests/benchmark-overview-load.mjs

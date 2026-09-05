@@ -1,3 +1,5 @@
+import { overviewRegionKey } from "./overviewCache.js";
+
 export class OverviewRequests {
   constructor(send, onTimeout, timeoutMs = 10000) {
     this.send = send;
@@ -11,9 +13,33 @@ export class OverviewRequests {
 
   request(request) {
     if (this.pending) {
-      const { requestId, ...pending } = this.pending;
-      this.queued =
-        JSON.stringify(pending) === JSON.stringify(request) ? null : request;
+      if (
+        !request.subscribe &&
+        (this.pending.subscribe || this.queued?.subscribe)
+      )
+        return true;
+      const pending = this.pending;
+      if (
+        !request.subscribe &&
+        pending.lod === request.lod &&
+        (pending.global ||
+          (!request.global &&
+            pending.originX <= request.originX &&
+            pending.originY <= request.originY &&
+            pending.originX + pending.widthChunks >=
+              request.originX + request.widthChunks &&
+            pending.originY + pending.heightChunks >=
+              request.originY + request.heightChunks))
+      ) {
+        this.queued = null;
+        return true;
+      }
+      const same =
+        overviewRegionKey(this.pending) === overviewRegionKey(request) &&
+        Boolean(this.pending.subscribe) === Boolean(request.subscribe) &&
+        Boolean(this.pending.replaceSubscription) ===
+          Boolean(request.replaceSubscription);
+      this.queued = same ? null : request;
       return true;
     }
     const next = { ...request, requestId: ++this.nextId };
