@@ -1,6 +1,7 @@
 package main
 
 import (
+	"runtime"
 	"slices"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 var overviewGlobalLODs = [...]uint32{1, 2, 4, 8}
 
 const maxOverviewRegionPixels = 8 << 20
+const maxOverviewImageSide = 8192
 const overviewGlobalPadding = 8
 const overviewDetailCacheMaxEntries = 1024
 
@@ -181,15 +183,14 @@ func (s *Server) rebuildOverviewImagesLocked() {
 	heightChunks := int(maxY-minY) + 1
 	images := make(map[uint32]*overviewImage, len(overviewGlobalLODs))
 	for _, lod := range overviewGlobalLODs {
-		pixelCount := widthChunks * heightChunks * int(lod*lod)
-		if pixelCount > maxOverviewRegionPixels {
+		if !validOverviewRegion(lod, widthChunks, heightChunks) {
 			continue
 		}
 		images[lod] = &overviewImage{
 			OriginX: minX, OriginY: minY,
 			WidthChunks: widthChunks, HeightChunks: heightChunks,
 			Revision: s.overviewRevision,
-			Pixels:   make([]byte, pixelCount),
+			Pixels:   make([]byte, widthChunks*heightChunks*int(lod*lod)),
 		}
 	}
 	for cid, tile := range s.overviewTiles {
@@ -412,16 +413,50 @@ func (s *Server) assembleOverviewRegionLocked(lod uint32, originX, originY int64
 	return pixels
 }
 
+func validOverviewRegion(lod uint32, width, height int) bool {
+	return validOverviewLOD(lod) && width > 0 && height > 0 &&
+		width <= maxOverviewImageSide/int(lod) && height <= maxOverviewImageSide/int(lod) &&
+		width <= maxOverviewRegionPixels/height/int(lod*lod)
+}
+
+// A snapshot yields the world lock between small batches so gameplay can progress.
+func (s *Server) assembleOverviewRegion(player *Player, lod uint32, sub overviewSubscription) []byte {
+	widthPixels := sub.WidthChunks * int(lod)
+	pixels := make([]byte, widthPixels*sub.HeightChunks*int(lod))
+	for start := 0; start < sub.WidthChunks*sub.HeightChunks; start += 32 {
+		select {
+		case <-player.done:
+			return nil
+		default:
+		}
+		end := min(start+32, sub.WidthChunks*sub.HeightChunks)
+		var tiles [32][]byte
+		s.stateMu.Lock()
+		for i := start; i < end; i++ {
+			cid := ChunkID{X: sub.OriginX + int64(i%sub.WidthChunks), Y: sub.OriginY + int64(i/sub.WidthChunks)}
+			tiles[i-start] = s.overviewPixelsLocked(cid, lod)
+		}
+		s.stateMu.Unlock()
+		for i := start; i < end; i++ {
+			blitOverviewTile(pixels, widthPixels, i%sub.WidthChunks, i/sub.WidthChunks, tiles[i-start], int(lod))
+		}
+		runtime.Gosched()
+	}
+	return pixels
+}
+
 func (s *Server) handleOverviewRequest(player *Player, request *pb.OverviewRequest) {
 	if request == nil || !validOverviewLOD(request.Lod) {
 		return
 	}
+	select {
+	case s.overviewSlots <- struct{}{}:
+		defer func() { <-s.overviewSlots }()
+	case <-player.done:
+		return
+	}
 	lod := request.Lod
 	s.stateMu.Lock()
-	if request.Subscribe && s.overviewSubs[player] == nil {
-		s.overviewSubs[player] = make(map[uint32]overviewSubscription)
-	}
-
 	global := request.Global
 	originX, originY := int64(request.OriginX), int64(request.OriginY)
 	widthChunks, heightChunks := int(request.WidthChunks), int(request.HeightChunks)
@@ -435,8 +470,8 @@ func (s *Server) handleOverviewRequest(player *Player, request *pb.OverviewReque
 			originX, originY = image.OriginX, image.OriginY
 			widthChunks, heightChunks = image.WidthChunks, image.HeightChunks
 			revision = image.Revision
-			if request.KnownRevision != revision {
-				if image.Encoded != nil {
+			if request.KnownRevision == 0 || request.KnownRevision != revision {
+				if image.Encoded != nil && request.RequestId == 0 {
 					encoded = image.Encoded
 				} else {
 					pixels = slices.Clone(image.Pixels)
@@ -447,13 +482,9 @@ func (s *Server) handleOverviewRequest(player *Player, request *pb.OverviewReque
 		}
 	}
 	if !global {
-		if widthChunks <= 0 || heightChunks <= 0 ||
-			widthChunks*heightChunks*int(lod*lod) > maxOverviewRegionPixels {
+		if !validOverviewRegion(lod, widthChunks, heightChunks) {
 			s.stateMu.Unlock()
 			return
-		}
-		if request.KnownRevision != revision {
-			pixels = s.assembleOverviewRegionLocked(lod, originX, originY, widthChunks, heightChunks)
 		}
 	}
 	sub := overviewSubscription{
@@ -462,10 +493,18 @@ func (s *Server) handleOverviewRequest(player *Player, request *pb.OverviewReque
 		Token: s.overviewRequests + 1,
 	}
 	if request.Subscribe {
+		if request.ReplaceSubscription || s.overviewSubs[player] == nil {
+			s.overviewSubs[player] = make(map[uint32]overviewSubscription)
+		}
 		s.overviewSubs[player][lod] = sub
 	}
 	s.overviewRequests++
-	if globalImage != nil && request.KnownRevision != revision {
+	if !global && (request.KnownRevision == 0 || request.KnownRevision != revision) {
+		s.stateMu.Unlock()
+		pixels = s.assembleOverviewRegion(player, lod, sub)
+		s.stateMu.Lock()
+	}
+	if globalImage != nil && (request.KnownRevision == 0 || request.KnownRevision != revision) {
 		s.overviewSnapBytes += uint64(len(globalImage.Pixels))
 	} else {
 		s.overviewSnapBytes += uint64(len(pixels))
@@ -474,13 +513,13 @@ func (s *Server) handleOverviewRequest(player *Player, request *pb.OverviewReque
 		Lod: lod, OriginX: int32(originX), OriginY: int32(originY),
 		WidthChunks: uint32(widthChunks), HeightChunks: uint32(heightChunks),
 		Revision: revision, Pixels: pixels, Global: global,
-		Unchanged: request.KnownRevision == revision,
+		Unchanged: request.KnownRevision != 0 && request.KnownRevision == revision, RequestId: request.RequestId,
 	}}}
 	s.stateMu.Unlock()
 
 	if encoded == nil {
 		encoded = mustProto(msg)
-		if globalImage != nil && len(pixels) != 0 {
+		if globalImage != nil && len(pixels) != 0 && request.RequestId == 0 {
 			s.stateMu.Lock()
 			if current := s.overviewImages[lod]; current != nil && current.Revision == revision && current.Encoded == nil {
 				current.Encoded = encoded
@@ -500,20 +539,18 @@ func (s *Server) handleOverviewRequest(player *Player, request *pb.OverviewReque
 			for cid := range current.Pending {
 				pending = append(pending, cid)
 			}
+			catchup = s.overviewPatchLocked(lod, current, pending, s.overviewRevision)
+			if catchup != nil {
+				data := mustProto(catchup)
+				s.overviewWireBytes += uint64(len(data))
+				s.sendOverview(player, data)
+			}
 			current.Ready = true
 			current.Pending = nil
 			byLOD[lod] = current
-			catchup = s.overviewPatchLocked(lod, current, pending, s.overviewRevision)
 		}
 	}
 	s.stateMu.Unlock()
-	if catchup != nil {
-		data := mustProto(catchup)
-		s.stateMu.Lock()
-		s.overviewWireBytes += uint64(len(data))
-		s.stateMu.Unlock()
-		s.sendOverview(player, data)
-	}
 }
 
 func (s *Server) sendOverview(player *Player, data []byte) {
@@ -524,10 +561,9 @@ func (s *Server) sendOverview(player *Player, data []byte) {
 	}
 	select {
 	case player.Send <- data:
-		player.dropMisses = 0
 	default:
-		player.dropMisses++
-		if player.dropMisses > 32 && player.Conn != nil {
+		// Missing a snapshot or patch requires a fresh connection and resubscription.
+		if player.Conn != nil {
 			player.Conn.Close()
 		}
 	}

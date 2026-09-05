@@ -73,3 +73,17 @@ assert.equal(
 );
 
 console.log("OK  : overview image cache retention and coherent lookup");
+
+const hardBudget = new OverviewCache(16);
+for (let i = 0; i < 100; i++) {
+  hardBudget.put({ ...record(4, i, 2), pinned: true });
+  assert.ok(
+    hardBudget.stats().bytes <= 16,
+    "pinned records still obey the hard budget"
+  );
+}
+assert.equal(
+  hardBudget.put(record(8, 100, 5)),
+  null,
+  "oversized images cannot enter the cache"
+);
