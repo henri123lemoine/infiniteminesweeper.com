@@ -6,7 +6,8 @@ import React, {
   useMemo,
 } from "react";
 import Minimap from "./Minimap.jsx";
-import OverviewMinimap, { overviewRegionForView } from "./OverviewMinimap.jsx";
+import OverviewMinimap from "./OverviewMinimap.jsx";
+import { overviewPreviewForView } from "./overviewGeometry.js";
 import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
@@ -122,10 +123,7 @@ function VirtualLeaderboard({ rows, myName, formatFullScore, findMeToken }) {
   }, []);
   const setScroll = useCallback(
     (v) => {
-      const next = Math.max(
-        0,
-        Math.min(rows.length * LB_ROW_H - viewH, v)
-      );
+      const next = Math.max(0, Math.min(rows.length * LB_ROW_H - viewH, v));
       if (next !== scrollRef.current) {
         scrollRef.current = next;
         repaint();
@@ -229,10 +227,7 @@ function VirtualLeaderboard({ rows, myName, formatFullScore, findMeToken }) {
     if (!findMeToken || myIndex < 0) return;
     stopAnim();
     const from = scrollRef.current;
-    const to = Math.max(
-      0,
-      Math.min(maxScroll, myIndex * LB_ROW_H - viewH / 2)
-    );
+    const to = Math.max(0, Math.min(maxScroll, myIndex * LB_ROW_H - viewH / 2));
     const t0 = performance.now();
     const DUR = 350;
     const ease = (t) => 1 - (1 - t) ** 3;
@@ -248,9 +243,7 @@ function VirtualLeaderboard({ rows, myName, formatFullScore, findMeToken }) {
 
   // Scrollbar thumb geometry
   const thumbH =
-    maxScroll > 0
-      ? Math.max(LB_THUMB_MIN, (viewH / contentH) * viewH)
-      : 0;
+    maxScroll > 0 ? Math.max(LB_THUMB_MIN, (viewH / contentH) * viewH) : 0;
   const thumbTop =
     maxScroll > 0 ? (scrollRef.current / maxScroll) * (viewH - thumbH) : 0;
 
@@ -454,7 +447,6 @@ function App() {
     clearMinimapSubscriptionsFor,
     minimapTilesRef,
     overviewCacheRef,
-    overviewServerRevisionRef,
     overviewDiagnosticsRef,
     requestOverview,
     releaseOverview,
@@ -608,37 +600,21 @@ function App() {
     const gameZoom = zoomRef.current;
     const centerX = (viewRef.current.x + gameWidth / 2 / gameZoom) / CELL_SIZE;
     const centerY = (viewRef.current.y + gameHeight / 2 / gameZoom) / CELL_SIZE;
-    const timers = [64, 32, 16, 12].map((lod, index) =>
-      setTimeout(() => {
-        const overviewZoom = lod / 64;
-        const overviewView = {
-          x: centerX - width / (2 * overviewZoom),
-          y: centerY - height / (2 * overviewZoom),
-          zoom: overviewZoom,
-        };
-        const region = overviewRegionForView(
-          overviewView,
-          width,
-          height,
-          lod,
-          0.05
-        );
-        const cached = overviewCacheRef.current.findExact({
-          lod,
-          global: false,
-          ...region,
-        });
-        requestOverview({
-          lod,
-          ...region,
-          global: false,
-          knownRevision: cached?.revision || 0,
-          subscribe: false,
-          prewarm: true,
-        });
-      }, [0, 75, 200, 350][index])
+    const preview = overviewPreviewForView(
+      { x: centerX - width / 4, y: centerY - height / 4, zoom: 2 },
+      width,
+      height
     );
-    return () => timers.forEach(clearTimeout);
+    const cached = overviewCacheRef.current.findExact({
+      ...preview,
+      global: false,
+    });
+    requestOverview({
+      ...preview,
+      global: false,
+      knownRevision: cached?.revision || 0,
+      subscribe: false,
+    });
   }, [
     CELL_SIZE,
     overviewCacheRef,
@@ -1300,7 +1276,6 @@ function App() {
             containerRef={containerRef}
             mainViewMoveToken={mainViewMoveToken}
             overviewCacheRef={overviewCacheRef}
-            overviewServerRevisionRef={overviewServerRevisionRef}
             overviewDiagnosticsRef={overviewDiagnosticsRef}
             overviewTick={overviewTick}
             overviewConnectionGeneration={overviewConnectionGeneration}
@@ -1375,9 +1350,7 @@ function App() {
                       fetchHomeLeaderboard();
                     }
                   }}
-                  className={
-                    activeTab === t.k ? "home-tab active" : "home-tab"
-                  }
+                  className={activeTab === t.k ? "home-tab active" : "home-tab"}
                 >
                   {t.label}
                 </button>
@@ -1501,7 +1474,6 @@ function App() {
                   containerRef={containerRef}
                   mainViewMoveToken={mainViewMoveToken}
                   overviewCacheRef={overviewCacheRef}
-                  overviewServerRevisionRef={overviewServerRevisionRef}
                   overviewDiagnosticsRef={overviewDiagnosticsRef}
                   overviewTick={overviewTick}
                   overviewConnectionGeneration={overviewConnectionGeneration}
@@ -1820,9 +1792,7 @@ function App() {
               !topPlayers.some((p) => p.name === username);
             // Rank gutter sized to the widest rank actually shown
             const rankWidth = `${
-              String(
-                Math.max(topPlayers.length, showMe ? userRank : 0)
-              ).length
+              String(Math.max(topPlayers.length, showMe ? userRank : 0)).length
             }ch`;
             return (
               <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>

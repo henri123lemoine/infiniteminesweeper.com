@@ -136,6 +136,7 @@ type Server struct {
 	minimapSubCount    map[uint32]int                  // per-player minimap subscription count (for cap enforcement)
 	minimapDirtyTiles  map[ChunkID]struct{}            // tiles with pending dirties
 	minimapCache16     map[ChunkID][]byte              // precomputed 16×16 overview tiles
+	overviewSlots      chan struct{}
 	overviewTiles      map[ChunkID]*overviewTile
 	overviewDetails    map[ChunkID]*list.Element
 	overviewDetailLRU  list.List
@@ -212,6 +213,7 @@ func NewServer() *Server {
 		minimapSubCount:   make(map[uint32]int),
 		minimapDirtyTiles: make(map[ChunkID]struct{}),
 		minimapCache16:    make(map[ChunkID][]byte),
+		overviewSlots:     make(chan struct{}, 2),
 		overviewTiles:     make(map[ChunkID]*overviewTile),
 		overviewDetails:   make(map[ChunkID]*list.Element),
 		overviewImages:    make(map[uint32]*overviewImage),

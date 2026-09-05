@@ -28,7 +28,10 @@ const percentile = (values, fraction) => {
 
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({
-  viewport: { width: 1920, height: 1080 },
+  viewport: {
+    width: Number(args.width || 1920),
+    height: Number(args.height || 1080),
+  },
   deviceScaleFactor: 1,
 });
 const page = await context.newPage();
@@ -292,7 +295,7 @@ try {
         (frame) => frame.state.targetLOD > 8 && frame.state.activeLOD === 8
       ).length,
       nonAdjacentFallbackFrames: frames.filter((frame) => {
-        const order = [64, 32, 16, 12, 8];
+        const order = [64, 32, 16, 12, 8, 4, 2, 1];
         return (
           Math.abs(
             order.indexOf(frame.state.targetLOD) -

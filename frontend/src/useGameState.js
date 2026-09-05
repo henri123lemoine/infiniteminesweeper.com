@@ -13,7 +13,9 @@ import {
   ADJ_UNKNOWN,
   evictFarKeys,
 } from "./cellStore.js";
-import { OverviewCache } from "./overviewCache.js";
+import { OverviewRequests } from "./overviewRequests.js";
+import { OVERVIEW_MAX_PIXELS, OVERVIEW_MAX_SIDE } from "./overviewGeometry.js";
+import { OverviewCache, overviewRegionKey } from "./overviewCache.js";
 
 const log = __DEV__ ? console.log.bind(console) : () => {};
 
@@ -111,8 +113,8 @@ function encodeMsg(msg) {
   return pako.gzip(buf);
 }
 
-function decodeMsg(data) {
-  const bytes = pako.ungzip(new Uint8Array(data));
+function decodeMsg(data, inflated = false) {
+  const bytes = inflated ? data : pako.ungzip(new Uint8Array(data));
   const msg = PB.Msg.decode(bytes);
 
   if (__DEV__) {
@@ -236,10 +238,13 @@ export const useGameState = () => {
   const minimapFullQueueRAFRef = useRef(null);
   const overviewCacheRef = useRef(null);
   if (!overviewCacheRef.current) overviewCacheRef.current = new OverviewCache();
-  const overviewPendingRef = useRef(new Map());
-  const overviewPinnedRegionsRef = useRef(new Set());
-  const overviewRequestSenderRef = useRef(null);
-  const overviewServerRevisionRef = useRef(new Map());
+  const overviewRequestsRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+  const reconnectAttemptRef = useRef(0);
+  const connectionEnabledRef = useRef(false);
+  const connectWebSocketRef = useRef(null);
+  const decoderDisabledRef = useRef(false);
+  const overviewSubscriptionRef = useRef(null);
   const overviewDiagnosticsRef = useRef({
     requests: 0,
     requestBytes: 0,
@@ -258,7 +263,7 @@ export const useGameState = () => {
   // Track current resolution preference to detect changes
   const currentResolutionRef = useRef(64);
 
-  const makeOverviewCanvas = useCallback((pixels, width, height) => {
+  const makeOverviewCanvas = useCallback((pixels, width, height, bitmap) => {
     const canvas =
       typeof OffscreenCanvas !== "undefined"
         ? new OffscreenCanvas(width, height)
@@ -266,6 +271,14 @@ export const useGameState = () => {
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d", { alpha: false });
+    if (bitmap) {
+      try {
+        ctx.drawImage(bitmap, 0, 0);
+      } finally {
+        bitmap.close();
+      }
+      return canvas;
+    }
     const image = ctx.createImageData(width, height);
     const rgba = new Uint32Array(image.data.buffer);
     for (let i = 0; i < pixels.length; i++) {
@@ -287,44 +300,49 @@ export const useGameState = () => {
         widthChunks: Number(data.widthChunks) || 0,
         heightChunks: Number(data.heightChunks) || 0,
       };
-      overviewPendingRef.current.delete(lod);
-      overviewServerRevisionRef.current.set(lod, revision);
       overviewDiagnosticsRef.current.snapshots++;
-      if (
-        lod === 8 &&
-        query.global &&
-        !overviewDiagnosticsRef.current.prefetchReadyAt
-      ) {
+      const pending = overviewRequestsRef.current?.pending;
+      if (pending?.requestId === Number(data.requestId) && pending.subscribe) {
+        overviewSubscriptionRef.current = overviewRegionKey(query);
+      }
+      if (lod <= 4 && !overviewDiagnosticsRef.current.prefetchReadyAt) {
         overviewDiagnosticsRef.current.prefetchReadyAt = performance.now();
       }
 
       if (data.unchanged) {
         const cached = overviewCacheRef.current.findExact(query);
         if (cached) cached.revision = revision;
+        overviewRequestsRef.current?.complete(Number(data.requestId));
         setOverviewTick((value) => value + 1);
         return;
       }
 
-      const pixels = new Uint8Array(b64ToU8(data.pixels));
+      const pixels = b64ToU8(data.pixels);
+      const pixelBytes = data.pixelByteLength ?? pixels.byteLength;
       const width = query.widthChunks * lod;
       const height = query.heightChunks * lod;
-      if (!lod || !width || !height || pixels.length !== width * height) return;
-      overviewDiagnosticsRef.current.rawPixelBytes += pixels.byteLength;
+      if (
+        !lod ||
+        !width ||
+        !height ||
+        pixelBytes !== width * height ||
+        pixelBytes > OVERVIEW_MAX_PIXELS ||
+        width > OVERVIEW_MAX_SIDE ||
+        height > OVERVIEW_MAX_SIDE
+      ) {
+        data.bitmap?.close();
+        overviewRequestsRef.current?.complete(Number(data.requestId));
+        return;
+      }
+      overviewDiagnosticsRef.current.rawPixelBytes += pixelBytes;
       overviewCacheRef.current.put({
         ...query,
         revision,
-        pinned: overviewPinnedRegionsRef.current.has(
-          [
-            lod,
-            query.originX,
-            query.originY,
-            query.widthChunks,
-            query.heightChunks,
-          ].join(":")
-        ),
-        canvasByteLength: pixels.byteLength * 4,
-        canvas: makeOverviewCanvas(pixels, width, height),
+        pinned: lod <= 4,
+        canvasByteLength: pixelBytes * 4,
+        canvas: makeOverviewCanvas(pixels, width, height, data.bitmap),
       });
+      overviewRequestsRef.current?.complete(Number(data.requestId));
       setOverviewTick((value) => value + 1);
     },
     [makeOverviewCanvas]
@@ -334,14 +352,17 @@ export const useGameState = () => {
     const lod = Number(data.lod) || 0;
     const revision = Number(data.revision) || 0;
     const tiles = data.tiles || [];
-    overviewServerRevisionRef.current.set(lod, revision);
     overviewDiagnosticsRef.current.patches++;
     overviewDiagnosticsRef.current.rawPixelBytes += tiles.reduce(
       (sum, tile) => sum + b64ToU8(tile.data).byteLength,
       0
     );
 
-    for (const record of overviewCacheRef.current.recordsAtLOD(lod)) {
+    const subscribed = overviewCacheRef.current.records.get(
+      overviewSubscriptionRef.current
+    );
+    for (const record of subscribed?.lod === lod ? [subscribed] : []) {
+      if (revision <= record.revision) continue;
       let complete = true;
       let changed = false;
       const ctx = record.canvas.getContext("2d", { alpha: false });
@@ -1308,17 +1329,31 @@ export const useGameState = () => {
 
   const connectWebSocket = useCallback(() => {
     // Prevent multiple concurrent connection attempts
-    if (isReconnectingRef.current) {
+    if (
+      isReconnectingRef.current ||
+      wsRef.current?.readyState === WebSocket.OPEN
+    ) {
       return () => {};
     }
 
+    connectionEnabledRef.current = true;
+    clearTimeout(reconnectTimerRef.current);
     isReconnectingRef.current = true;
     const wsUrl = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
     const websocket = new WebSocket(wsUrl);
+    wsRef.current = websocket;
+    const decoder =
+      typeof Worker !== "undefined" && !decoderDisabledRef.current
+        ? new Worker(new URL("./websocketWorker.js", import.meta.url), {
+            type: "module",
+          })
+        : null;
+    decoder?.postMessage({ palette: minimapPaletteRGBA });
     websocket.binaryType = "arraybuffer";
     let didJoinAck = false;
 
     websocket.onopen = () => {
+      reconnectAttemptRef.current = 0;
       // Start in spectator mode - no initial message needed
       // Connection starts as spectator automatically
       setWs(websocket);
@@ -1336,27 +1371,9 @@ export const useGameState = () => {
         minimapFullQueueRAFRef.current = null;
       }
       minimapFullQueueRef.current = { batches: [], index: 0, changed: false };
-      overviewPendingRef.current.clear();
+      overviewRequestsRef.current?.reset();
+      overviewSubscriptionRef.current = null;
       setOverviewConnectionGeneration((value) => value + 1);
-      requestAnimationFrame(() => {
-        const global = overviewCacheRef.current
-          .recordsAtLOD(8)
-          .find((record) => record.global);
-        const sent = overviewRequestSenderRef.current?.({
-          lod: 8,
-          originX: 0,
-          originY: 0,
-          widthChunks: 1,
-          heightChunks: 1,
-          global: true,
-          knownRevision: global?.revision || 0,
-          subscribe: false,
-        });
-        if (sent) {
-          overviewDiagnosticsRef.current.prefetchStartedAt = performance.now();
-          overviewDiagnosticsRef.current.prefetchReadyAt = 0;
-        }
-      });
       // Reconcile any desired minimap subscriptions accumulated before open
       const resubscribeAll = () => {
         try {
@@ -1411,6 +1428,8 @@ export const useGameState = () => {
     };
 
     websocket.onclose = (event) => {
+      decoder?.terminate();
+      if (wsRef.current && wsRef.current !== websocket) return;
       setConnected(false);
       setWs(null);
       wsRef.current = null;
@@ -1419,7 +1438,8 @@ export const useGameState = () => {
       try {
         minimapActiveSubsRef.current.clear();
       } catch {}
-      overviewPendingRef.current.clear();
+      overviewRequestsRef.current?.reset();
+      overviewSubscriptionRef.current = null;
       optimisticActions.current.clear();
       revealedCellsRef.current.clear();
       flaggedCellsRef.current.clear();
@@ -1430,15 +1450,28 @@ export const useGameState = () => {
       if (!didJoinAck) {
         setUsername("");
       }
+      if (connectionEnabledRef.current) {
+        const retryDelay = Math.min(
+          10000,
+          1000 * 2 ** reconnectAttemptRef.current++
+        );
+        reconnectTimerRef.current = setTimeout(
+          () => connectWebSocketRef.current?.(),
+          retryDelay
+        );
+      }
     };
 
-    websocket.onmessage = (event) => {
-      const msg = decodeMsg(event.data);
+    const handleMessage = (event) => {
+      const msg = event.data.snapshot
+        ? { overviewSnapshot: event.data.snapshot }
+        : decodeMsg(event.data.bytes || event.data, Boolean(event.data.bytes));
       const type = activeKey(msg);
       const data = msg[type];
 
       if (type === "overviewSnapshot" || type === "overviewPatch") {
-        overviewDiagnosticsRef.current.responseBytes += event.data.byteLength;
+        overviewDiagnosticsRef.current.responseBytes +=
+          event.data.wireBytes ?? event.data.byteLength;
       }
 
       if (type === "joinAck") {
@@ -1887,7 +1920,29 @@ export const useGameState = () => {
       }
     };
 
-    return () => websocket.close();
+    if (decoder) {
+      decoder.onmessage = (event) => {
+        if (wsRef.current !== websocket) {
+          event.data.snapshot?.bitmap?.close();
+          return;
+        }
+        handleMessage(event);
+      };
+      decoder.onerror = (event) => {
+        console.error("WebSocket decoder failed", event.message);
+        decoderDisabledRef.current = true;
+        websocket.close();
+      };
+      websocket.onmessage = (event) =>
+        decoder.postMessage(event.data, [event.data]);
+    } else websocket.onmessage = handleMessage;
+
+    return () => {
+      connectionEnabledRef.current = false;
+      clearTimeout(reconnectTimerRef.current);
+      decoder?.terminate();
+      (wsRef.current || websocket).close();
+    };
   }, [
     countAdjacentMines,
     registerPendingAdjacency,
@@ -1900,6 +1955,8 @@ export const useGameState = () => {
     applyOverviewSnapshot,
     applyOverviewPatch,
   ]);
+
+  connectWebSocketRef.current = connectWebSocket;
 
   // Join the game by sending a Join message (transitions from SPECTATOR to PLAYER)
   const joinGame = useCallback(
@@ -1946,6 +2003,8 @@ export const useGameState = () => {
   );
 
   const disconnect = useCallback(() => {
+    connectionEnabledRef.current = false;
+    clearTimeout(reconnectTimerRef.current);
     try {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.close();
@@ -1955,57 +2014,56 @@ export const useGameState = () => {
     }
   }, [ws]);
 
-  const requestOverview = useCallback((request) => {
-    const socket = wsRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
-    const lod = Number(request.lod) || 0;
-    const fingerprint = [
-      lod,
-      request.global ? 1 : 0,
-      request.originX || 0,
-      request.originY || 0,
-      request.widthChunks || 0,
-      request.heightChunks || 0,
-      request.knownRevision || 0,
-    ].join(":");
-    if (overviewPendingRef.current.get(lod) === fingerprint) return false;
-    overviewPendingRef.current.set(lod, fingerprint);
-    if (request.prewarm) {
-      overviewPinnedRegionsRef.current.add(
-        [
+  if (!overviewRequestsRef.current)
+    overviewRequestsRef.current = new OverviewRequests(
+      (request) => {
+        const socket = wsRef.current;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+        const lod = Number(request.lod) || 0;
+        const pixels = request.widthChunks * request.heightChunks * lod * lod;
+        if (
+          !Number.isSafeInteger(pixels) ||
+          pixels <= 0 ||
+          pixels > OVERVIEW_MAX_PIXELS ||
+          request.widthChunks * lod > OVERVIEW_MAX_SIDE ||
+          request.heightChunks * lod > OVERVIEW_MAX_SIDE
+        )
+          return false;
+        if (lod <= 4 && !request.subscribe) {
+          overviewDiagnosticsRef.current.prefetchStartedAt = performance.now();
+        }
+        const bytes = encodeMsg({ overviewRequest: request });
+        socket.send(bytes);
+        overviewDiagnosticsRef.current.requests++;
+        overviewDiagnosticsRef.current.requestBytes += bytes.byteLength;
+        overviewDiagnosticsRef.current.requestLog.push({
+          at: performance.now(),
           lod,
-          request.originX || 0,
-          request.originY || 0,
-          request.widthChunks || 0,
-          request.heightChunks || 0,
-        ].join(":")
-      );
-    }
-    const bytes = encodeMsg({ overviewRequest: request });
-    socket.send(bytes);
-    overviewDiagnosticsRef.current.requests++;
-    overviewDiagnosticsRef.current.requestBytes += bytes.byteLength;
-    overviewDiagnosticsRef.current.requestLog.push({
-      at: performance.now(),
-      lod,
-      global: Boolean(request.global),
-      subscribe: Boolean(request.subscribe),
-      widthChunks: request.widthChunks || 0,
-      heightChunks: request.heightChunks || 0,
-    });
-    if (overviewDiagnosticsRef.current.requestLog.length > 50) {
-      overviewDiagnosticsRef.current.requestLog.shift();
-    }
-    return true;
-  }, []);
+          global: Boolean(request.global),
+          subscribe: Boolean(request.subscribe),
+          widthChunks: request.widthChunks || 0,
+          heightChunks: request.heightChunks || 0,
+        });
+        if (overviewDiagnosticsRef.current.requestLog.length > 50) {
+          overviewDiagnosticsRef.current.requestLog.shift();
+        }
+        return true;
+      },
+      () => wsRef.current?.close()
+    );
+
+  const requestOverview = useCallback(
+    (request) => overviewRequestsRef.current.request(request),
+    []
+  );
 
   const releaseOverview = useCallback(() => {
-    overviewPendingRef.current.clear();
+    overviewRequestsRef.current?.release();
+    overviewSubscriptionRef.current = null;
     const socket = wsRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(encodeMsg({ overviewRelease: {} }));
   }, []);
-  overviewRequestSenderRef.current = requestOverview;
   if (
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).has("benchmark")
@@ -2081,7 +2139,6 @@ export const useGameState = () => {
     // Minimap streaming
     minimapTilesRef,
     overviewCacheRef,
-    overviewServerRevisionRef,
     overviewDiagnosticsRef,
     requestOverview,
     releaseOverview,

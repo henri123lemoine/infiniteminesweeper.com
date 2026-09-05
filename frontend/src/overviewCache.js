@@ -1,4 +1,4 @@
-const DEFAULT_BUDGET = 96 * 1024 * 1024;
+const DEFAULT_BUDGET = 48 * 1024 * 1024;
 
 const regionKey = ({
   lod,
@@ -24,6 +24,11 @@ export class OverviewCache {
     record.lastUsed = performance.now();
     record.byteCost = record.canvasByteLength;
     record.pinned = record.global || Boolean(record.pinned);
+    if (record.byteCost > this.budgetBytes) return null;
+    if (record.pinned && !record.global) {
+      for (const cached of this.records.values())
+        if (!cached.global) cached.pinned = false;
+    }
     const previous = this.records.get(record.key);
     if (previous) this.bytes -= previous.byteCost;
     this.records.set(record.key, record);
@@ -92,9 +97,9 @@ export class OverviewCache {
 
   evict() {
     if (this.bytes <= this.budgetBytes) return;
-    const candidates = Array.from(this.records.values())
-      .filter((record) => !record.pinned)
-      .sort((a, b) => a.lastUsed - b.lastUsed);
+    const candidates = Array.from(this.records.values()).sort(
+      (a, b) => Number(a.pinned) - Number(b.pinned) || a.lastUsed - b.lastUsed
+    );
     for (const record of candidates) {
       if (this.bytes <= this.budgetBytes) break;
       this.records.delete(record.key);

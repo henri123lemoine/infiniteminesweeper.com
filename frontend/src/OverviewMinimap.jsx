@@ -2,10 +2,19 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { usePinchPanZoom } from "./hooks/usePinchPanZoom.js";
 import { getHexForFlag } from "./sprites/index.js";
 
+import {
+  OVERVIEW_MIN_ZOOM as MIN_ZOOM,
+  targetOverviewLOD,
+  overviewRegionForView,
+  overviewPreviewForView,
+  overviewRunwayZoom,
+} from "./overviewGeometry.js";
+export {
+  targetOverviewLOD,
+  overviewRegionForView,
+} from "./overviewGeometry.js";
 const CHUNK = 64;
-const MIN_ZOOM = 0.125;
 const MAX_ZOOM = 8;
-const MAX_REGION_PIXELS = 4 << 20;
 const LOD_FADE_MS = 280;
 const benchmarkEnabled = new URLSearchParams(window.location.search).has(
   "benchmark"
@@ -18,53 +27,6 @@ function logBenchmarkEvent(event) {
   if (window.__overviewEventLog.length > 100) window.__overviewEventLog.shift();
 }
 
-export function targetOverviewLOD(zoom) {
-  const pixelsPerChunk = CHUNK * zoom;
-  for (const lod of [64, 32, 16, 12, 8, 4, 2, 1]) {
-    if (pixelsPerChunk >= lod) return lod;
-  }
-  return 1;
-}
-
-export function overviewRegionForView(
-  view,
-  width,
-  height,
-  lod,
-  marginRatio = 0.25
-) {
-  const visibleWidth = Math.max(1, Math.ceil(width / view.zoom / CHUNK) + 1);
-  const visibleHeight = Math.max(1, Math.ceil(height / view.zoom / CHUNK) + 1);
-  let marginX = marginRatio
-    ? Math.max(2, Math.ceil(visibleWidth * marginRatio))
-    : 0;
-  let marginY = marginRatio
-    ? Math.max(2, Math.ceil(visibleHeight * marginRatio))
-    : 0;
-  let widthChunks = visibleWidth + marginX * 2;
-  let heightChunks = visibleHeight + marginY * 2;
-  while (
-    widthChunks * heightChunks * lod * lod > MAX_REGION_PIXELS &&
-    (marginX > 0 || marginY > 0)
-  ) {
-    if (marginX * visibleHeight >= marginY * visibleWidth && marginX > 0) {
-      marginX--;
-    } else if (marginY > 0) {
-      marginY--;
-    }
-    widthChunks = visibleWidth + marginX * 2;
-    heightChunks = visibleHeight + marginY * 2;
-  }
-  const centerChunkX = Math.floor((view.x + width / view.zoom / 2) / CHUNK);
-  const centerChunkY = Math.floor((view.y + height / view.zoom / 2) / CHUNK);
-  return {
-    originX: centerChunkX - Math.floor(widthChunks / 2),
-    originY: centerChunkY - Math.floor(heightChunks / 2),
-    widthChunks,
-    heightChunks,
-  };
-}
-
 export default function OverviewMinimap({
   CELL_SIZE,
   zoom,
@@ -73,7 +35,6 @@ export default function OverviewMinimap({
   containerRef,
   mainViewMoveToken,
   overviewCacheRef,
-  overviewServerRevisionRef,
   overviewDiagnosticsRef,
   overviewTick,
   overviewConnectionGeneration,
@@ -91,13 +52,13 @@ export default function OverviewMinimap({
   const activeRecordRef = useRef(null);
   const previousRecordRef = useRef(null);
   const transitionStartedRef = useRef(0);
-  const requestedRef = useRef(new Map());
+  const requestedRef = useRef(null);
   const interactionAtRef = useRef(0);
   const zoomSpeedRef = useRef(0);
   const zoomAtRef = useRef(0);
   const hasZoomedRef = useRef(false);
   const rafRef = useRef(null);
-  const lod = targetOverviewLOD(view.zoom);
+  const lod = targetOverviewLOD(view.zoom, size.width, size.height);
 
   const setCurrentView = useCallback((next) => {
     viewRef.current = next;
@@ -151,7 +112,7 @@ export default function OverviewMinimap({
   }, [mainViewMoveToken, centerOnMainView]);
 
   const requestLOD = useCallback(
-    (requestedLOD, force = false) => {
+    (requestedLOD) => {
       if (!size.width || !size.height) return;
       const current = viewRef.current;
       const bounds = {
@@ -160,65 +121,61 @@ export default function OverviewMinimap({
         right: current.x + size.width / current.zoom,
         bottom: current.y + size.height / current.zoom,
       };
-      const leadX = (bounds.right - bounds.left) * 0.1;
-      const leadY = (bounds.bottom - bounds.top) * 0.1;
-      const demand = {
-        left: bounds.left - leadX,
-        top: bounds.top - leadY,
-        right: bounds.right + leadX,
-        bottom: bounds.bottom + leadY,
-      };
       const cache = overviewCacheRef.current;
       const record = cache.findForView(
         requestedLOD,
-        demand.left,
-        demand.top,
-        demand.right,
-        demand.bottom
+        bounds.left,
+        bounds.top,
+        bounds.right,
+        bounds.bottom
       );
+      const regionZoom = overviewRunwayZoom(
+        requestedLOD,
+        size.width,
+        size.height,
+        current.zoom
+      );
+      const regionView = {
+        x:
+          current.x +
+          size.width / current.zoom / 2 -
+          size.width / regionZoom / 2,
+        y:
+          current.y +
+          size.height / current.zoom / 2 -
+          size.height / regionZoom / 2,
+        zoom: regionZoom,
+      };
       const desiredRegion = overviewRegionForView(
-        current,
+        regionView,
         size.width,
         size.height,
         requestedLOD
       );
-      const global = requestedLOD <= 8;
-      const region =
-        record && !global
-          ? {
-              originX: record.originX,
-              originY: record.originY,
-              widthChunks: record.widthChunks,
-              heightChunks: record.heightChunks,
-            }
-          : desiredRegion;
+      const global = false;
+      const region = record
+        ? {
+            originX: record.originX,
+            originY: record.originY,
+            widthChunks: record.widthChunks,
+            heightChunks: record.heightChunks,
+          }
+        : desiredRegion;
       const knownRevision = record?.revision || 0;
-      const serverRevision =
-        overviewServerRevisionRef.current.get(requestedLOD) ?? knownRevision;
-      const fingerprint = global
-        ? `global:${overviewConnectionGeneration}`
-        : [
-            "region",
-            region.originX,
-            region.originY,
-            region.widthChunks,
-            region.heightChunks,
-            overviewConnectionGeneration,
-          ].join(":");
-      const previous = requestedRef.current.get(requestedLOD);
-      const stale = record && knownRevision < serverRevision;
-      const previousCoversDemand =
-        previous?.generation === overviewConnectionGeneration &&
-        previous.global === global &&
-        (global ||
-          cache.recordContainsView(
-            previous.region,
-            demand.left,
-            demand.top,
-            demand.right,
-            demand.bottom
-          ));
-      if (!force && !stale && previousCoversDemand) return;
+      const previous = requestedRef.current;
+      if (
+        record &&
+        previous?.lod === requestedLOD &&
+        previous.generation === overviewConnectionGeneration &&
+        cache.recordContainsView(
+          previous.region,
+          bounds.left,
+          bounds.top,
+          bounds.right,
+          bounds.bottom
+        )
+      )
+        return;
       if (
         requestOverview({
           lod: requestedLOD,
@@ -226,20 +183,20 @@ export default function OverviewMinimap({
           global,
           knownRevision,
           subscribe: true,
+          replaceSubscription: true,
         })
       ) {
-        requestedRef.current.set(requestedLOD, {
-          fingerprint,
+        requestedRef.current = {
+          lod: requestedLOD,
           generation: overviewConnectionGeneration,
           global,
           region: { lod: requestedLOD, global, ...region },
-        });
+        };
       }
     },
     [
       overviewCacheRef,
       overviewConnectionGeneration,
-      overviewServerRevisionRef,
       requestOverview,
       size.height,
       size.width,
@@ -248,9 +205,21 @@ export default function OverviewMinimap({
 
   useEffect(() => {
     if (!size.width || !size.height) return;
-    requestLOD(8, true);
-    requestLOD(targetOverviewLOD(viewRef.current.zoom));
-  }, [requestLOD, size.height, size.width]);
+    const preview = overviewPreviewForView(
+      viewRef.current,
+      size.width,
+      size.height
+    );
+    if (!overviewCacheRef.current.findExact({ ...preview, global: false })) {
+      requestOverview({ ...preview, global: false, subscribe: false });
+    }
+  }, [
+    overviewConnectionGeneration,
+    overviewCacheRef,
+    requestOverview,
+    size.height,
+    size.width,
+  ]);
 
   useEffect(() => {
     if (!size.width || !size.height) return;
@@ -263,6 +232,9 @@ export default function OverviewMinimap({
       current.x + size.width / current.zoom,
       current.y + size.height / current.zoom
     );
+    const active = activeRecordRef.current;
+    if (candidate?.lod < lod && active?.lod >= lod && active.lod <= lod * 2)
+      return;
     if (candidate && candidate !== activeRecordRef.current) {
       previousRecordRef.current = cache.recordContainsView(
         activeRecordRef.current,
@@ -273,12 +245,18 @@ export default function OverviewMinimap({
       )
         ? activeRecordRef.current
         : null;
+      if (candidate.lod <= (activeRecordRef.current?.lod || 0))
+        previousRecordRef.current = null;
       transitionStartedRef.current = performance.now();
       activeRecordRef.current = candidate;
       setActiveRecord(candidate);
     }
+  }, [lod, overviewCacheRef, overviewTick, size.height, size.width, view]);
+
+  useEffect(() => {
+    if (!size.width || !size.height) return;
     const delay = !hasZoomedRef.current
-      ? 300
+      ? 100
       : zoomSpeedRef.current > 0.004
         ? 180
         : 50;
@@ -295,7 +273,7 @@ export default function OverviewMinimap({
       const sinceZoom = performance.now() - zoomAtRef.current;
       logBenchmarkEvent({
         type: "timer",
-        lod: targetOverviewLOD(viewRef.current.zoom),
+        lod: targetOverviewLOD(viewRef.current.zoom, size.width, size.height),
         settleDelay,
         sinceZoom,
         speed: zoomSpeedRef.current,
@@ -304,19 +282,14 @@ export default function OverviewMinimap({
         timer = setTimeout(requestWhenSettled, settleDelay - sinceZoom + 1);
         return;
       }
-      requestLOD(targetOverviewLOD(viewRef.current.zoom));
+      requestLOD(
+        targetOverviewLOD(viewRef.current.zoom, size.width, size.height)
+      );
+      timer = setTimeout(requestWhenSettled, 1000);
     };
     timer = setTimeout(requestWhenSettled, delay);
     return () => clearTimeout(timer);
-  }, [
-    lod,
-    overviewCacheRef,
-    overviewTick,
-    requestLOD,
-    size.height,
-    size.width,
-    view,
-  ]);
+  }, [lod, overviewCacheRef, requestLOD, size.height, size.width, view]);
 
   const paint = useCallback(() => {
     rafRef.current = null;
@@ -325,7 +298,11 @@ export default function OverviewMinimap({
     if (!canvas || !root) return;
     const width = root.clientWidth;
     const height = root.clientHeight;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(
+      window.devicePixelRatio || 1,
+      2,
+      Math.sqrt((8 << 20) / (width * height))
+    );
     const pixelWidth = Math.max(1, Math.floor(width * dpr));
     const pixelHeight = Math.max(1, Math.floor(height * dpr));
     if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
@@ -354,6 +331,25 @@ export default function OverviewMinimap({
         source.heightChunks * CHUNK * current.zoom
       );
     };
+    if (
+      record &&
+      !overviewCacheRef.current.recordContainsView(
+        record,
+        current.x,
+        current.y,
+        current.x + width / current.zoom,
+        current.y + height / current.zoom
+      )
+    ) {
+      const preview = overviewCacheRef.current.findClosestForView(
+        targetOverviewLOD(current.zoom, width, height),
+        current.x,
+        current.y,
+        current.x + width / current.zoom,
+        current.y + height / current.zoom
+      );
+      if (preview && preview !== record) drawRecord(preview);
+    }
     const previous = previousRecordRef.current;
     if (record && previous) {
       const elapsed = performance.now() - transitionStartedRef.current;
@@ -405,7 +401,15 @@ export default function OverviewMinimap({
         ctx.globalAlpha = 1;
       }
     }
-  }, [CELL_SIZE, activePlayersRef, containerRef, viewX, viewY, zoom]);
+  }, [
+    CELL_SIZE,
+    activePlayersRef,
+    containerRef,
+    overviewCacheRef,
+    viewX,
+    viewY,
+    zoom,
+  ]);
 
   const schedulePaint = useCallback(() => {
     if (rafRef.current == null) rafRef.current = requestAnimationFrame(paint);
@@ -493,13 +497,30 @@ export default function OverviewMinimap({
     [onNavigate]
   );
 
-  const targetReady = activeRecord?.lod === lod;
+  const targetReady =
+    activeRecord?.lod === lod &&
+    overviewCacheRef.current.recordContainsView(
+      activeRecord,
+      view.x,
+      view.y,
+      view.x + size.width / view.zoom,
+      view.y + size.height / view.zoom
+    );
   const cacheStats = overviewCacheRef.current.stats();
   if ((__DEV__ || benchmarkEnabled) && typeof window !== "undefined") {
     window.__minimapBenchmark = {
       targetLOD: lod,
       activeLOD: activeRecord?.lod || 0,
       targetReady,
+      activeRegion: activeRecord
+        ? {
+            originX: activeRecord.originX,
+            originY: activeRecord.originY,
+            widthChunks: activeRecord.widthChunks,
+            heightChunks: activeRecord.heightChunks,
+            global: activeRecord.global,
+          }
+        : null,
       view,
       cache: cacheStats,
       network: { ...overviewDiagnosticsRef.current },

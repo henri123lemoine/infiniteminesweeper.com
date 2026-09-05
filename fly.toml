@@ -19,7 +19,7 @@ PORT = '8080'
 MODE = 'production'
 METRICS_PORT = '9091'
 # Leave headroom for memory outside the Go runtime on the 512 MB machine.
-GOMEMLIMIT = '400MiB'
+GOMEMLIMIT = '350MiB'
 
 # Prometheus scrape target — fly's internal collector hits this and surfaces
 # the metrics in fly-metrics.net Grafana. Set up alerts there with:

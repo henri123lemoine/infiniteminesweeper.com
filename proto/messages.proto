@@ -363,6 +363,8 @@ message OverviewRequest {
   bool global = 6;
   uint64 known_revision = 7;
   bool subscribe = 8;
+  uint32 request_id = 9;
+  bool replace_subscription = 10;
 }
 
 message OverviewRelease {}
@@ -377,6 +379,7 @@ message OverviewSnapshot {
   bytes pixels = 7; // dense row-major indexed-color image
   bool global = 8;
   bool unchanged = 9;
+  uint32 request_id = 10;
 }
 
 message OverviewTileUpdate {
