@@ -20,7 +20,8 @@ const requests = new OverviewRequests(
   30
 );
 requests.request({ lod: 4 });
-for (let i = 0; i < 1000; i++) requests.request({ lod: 64, originX: i });
+for (let i = 0; i < 1000; i++)
+  requests.request({ lod: 64, originX: i, subscribe: true });
 assert.equal(
   sent.length,
   1,
@@ -51,6 +52,88 @@ requests.request({ lod: 8 });
 requests.reset();
 await delay(45);
 assert.equal(timeouts, 1, "disconnect cancels the response timer");
+
+requests.request({ lod: 4, originX: 0, subscribe: false, global: false });
+requests.request({
+  global: false,
+  subscribe: false,
+  originX: 0,
+  lod: 4,
+  knownRevision: 99,
+});
+assert.equal(
+  requests.queued,
+  null,
+  "equivalent requests do not depend on property order or stale revisions"
+);
+requests.request({ lod: 8, subscribe: true });
+requests.request({ lod: 2, subscribe: false });
+assert.equal(
+  requests.queued.lod,
+  8,
+  "background previews cannot displace visible detail"
+);
+requests.complete(requests.pending.requestId);
+requests.request({ lod: 4, subscribe: false });
+assert.equal(
+  requests.queued,
+  null,
+  "background previews wait for foreground loading to finish"
+);
+requests.request({ lod: 64, subscribe: true });
+requests.request({ subscribe: true, lod: 8 });
+assert.equal(
+  requests.queued,
+  null,
+  "returning to the in-flight view cancels obsolete queued detail"
+);
+requests.reset();
+
+requests.request({
+  lod: 4,
+  originX: -145,
+  originY: -82,
+  widthChunks: 291,
+  heightChunks: 164,
+});
+requests.request({
+  lod: 4,
+  originX: -145,
+  originY: -81,
+  widthChunks: 291,
+  heightChunks: 163,
+});
+assert.equal(
+  requests.queued,
+  null,
+  "the opening preview reuses an in-flight image that covers it"
+);
+requests.request({ lod: 2, originX: 1000 });
+requests.request({
+  lod: 4,
+  originX: -145,
+  originY: -81,
+  widthChunks: 291,
+  heightChunks: 163,
+});
+assert.equal(
+  requests.queued,
+  null,
+  "returning to a covered preview cancels obsolete background work"
+);
+requests.request({
+  lod: 4,
+  originX: -145,
+  originY: -81,
+  widthChunks: 291,
+  heightChunks: 163,
+  subscribe: true,
+});
+assert.ok(
+  requests.queued?.subscribe,
+  "a covered foreground request still establishes its subscription"
+);
+requests.reset();
 
 for (const [width, height] of [
   [1920, 1080],

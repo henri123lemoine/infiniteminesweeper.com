@@ -605,14 +605,9 @@ function App() {
       width,
       height
     );
-    const cached = overviewCacheRef.current.findExact({
-      ...preview,
-      global: false,
-    });
     requestOverview({
       ...preview,
       global: false,
-      knownRevision: cached?.revision || 0,
       subscribe: false,
     });
   }, [

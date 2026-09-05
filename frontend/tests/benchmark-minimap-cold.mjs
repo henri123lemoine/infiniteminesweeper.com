@@ -13,11 +13,15 @@ if (!["localhost", "127.0.0.1"].includes(new URL(url).hostname))
 const label = process.env.LABEL || "cold";
 const browser = await chromium.launch({ headless: true });
 const results = [];
-try {
-  for (const [width, height] of [
+await fs.mkdir("output/playwright/minimap", { recursive: true });
+const cases = Array.from({ length: Number(process.env.RUNS || 1) }, (_, run) =>
+  [
     [1920, 1080],
     [3840, 2160],
-  ]) {
+  ].map(([width, height]) => ({ run, width, height }))
+).flat();
+try {
+  for (const { run, width, height } of cases) {
     const context = await browser.newContext({ viewport: { width, height } });
     await context.addInitScript(() => {
       window.coldProbe = { frames: [], longTasks: [], errors: [] };
@@ -25,6 +29,18 @@ try {
       const frame = (now) => {
         window.coldProbe.frames.push(now - last);
         last = now;
+        const probe = window.coldProbe;
+        const paint = window.__minimapPaint;
+        if (
+          probe.gestureAt &&
+          paint?.at >= probe.gestureAt &&
+          paint.zoom === 0.125
+        ) {
+          for (const key of ["covered", "ready", "settled"]) {
+            if (paint[key] && probe.timings[key] == null)
+              probe.timings[key] = paint.at - probe.gestureAt;
+          }
+        }
         requestAnimationFrame(frame);
       };
       requestAnimationFrame(frame);
@@ -67,6 +83,8 @@ try {
             outstanding--;
             snapshots.push({
               lod: snapshot.lod,
+              unchanged: Boolean(snapshot.unchanged),
+              pixelBytes: snapshot.pixels?.length || 0,
               global: snapshot.global,
               originX: snapshot.originX,
               originY: snapshot.originY,
@@ -111,6 +129,8 @@ try {
     const started = Date.now();
     await root.locator("canvas").evaluate((canvas) => {
       const rect = canvas.getBoundingClientRect();
+      window.coldProbe.gestureAt = performance.now();
+      window.coldProbe.timings = {};
       canvas.dispatchEvent(
         new WheelEvent("wheel", {
           deltaY: 8000,
@@ -125,6 +145,8 @@ try {
       for (let i = 0; i < 12; i++) {
         await root.locator("canvas").evaluate((canvas, i) => {
           const rect = canvas.getBoundingClientRect();
+          window.coldProbe.gestureAt = performance.now();
+          window.coldProbe.timings = {};
           canvas.dispatchEvent(
             new WheelEvent("wheel", {
               deltaY: i % 2 ? 8000 : -8000,
@@ -153,6 +175,7 @@ try {
     await page.waitForTimeout(500);
     const result = await page.evaluate(() => ({
       ...window.__minimapBenchmark,
+      paintTimings: window.coldProbe.timings,
       probe: {
         maxFrameMs: Math.max(...window.coldProbe.frames),
         longTasks: window.coldProbe.longTasks,
@@ -172,6 +195,7 @@ try {
               view.y + box.height / view.zoom))
     );
     results.push({
+      run,
       width,
       height,
       ready,
@@ -183,7 +207,7 @@ try {
       ...result,
     });
     await page.screenshot({
-      path: `output/playwright/minimap/${label}-${width}.png`,
+      path: `output/playwright/minimap/${label}-${run}-${width}.png`,
     });
     for (const timer of timers) {
       clearTimeout(timer);
@@ -194,7 +218,6 @@ try {
 } finally {
   await browser.close();
 }
-await fs.mkdir("output/playwright/minimap", { recursive: true });
 await fs.writeFile(
   `output/playwright/minimap/${label}.json`,
   JSON.stringify(results, null, 2)
@@ -208,6 +231,7 @@ console.log(
         covered,
         maxOutstanding,
         elapsed,
+        paintTimings,
         errors,
         targetLOD,
         activeLOD,
@@ -220,6 +244,7 @@ console.log(
         covered,
         maxOutstanding,
         elapsed,
+        paintTimings,
         errors,
         targetLOD,
         activeLOD,
@@ -237,6 +262,10 @@ if (process.env.ASSERT_READY) {
   for (const result of results) {
     assert.ok(result.ready, `${result.width}px cold zoom never finished`);
     assert.ok(result.covered, "ready image must cover the full viewport");
+    assert.ok(
+      Number.isFinite(result.paintTimings.settled),
+      "target detail must finish painting"
+    );
     assert.equal(result.maxOutstanding, 1, "one overview request in flight");
     assert.deepEqual(result.errors, []);
     assert.ok(result.cache.bytes <= result.cache.budgetBytes);
