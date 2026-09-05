@@ -11,6 +11,7 @@ var overviewGlobalLODs = [...]uint32{1, 2, 4, 8}
 
 const maxOverviewRegionPixels = 8 << 20
 const overviewGlobalPadding = 8
+const overviewDetailCacheMaxEntries = 1024
 
 type overviewTile struct {
 	LOD1  [1]byte
@@ -19,7 +20,6 @@ type overviewTile struct {
 	LOD8  [64]byte
 	LOD12 [144]byte
 	LOD16 [256]byte
-	LOD32 [1024]byte
 }
 
 func (t *overviewTile) pixels(lod uint32) []byte {
@@ -39,10 +39,55 @@ func (t *overviewTile) pixels(lod uint32) []byte {
 		return t.LOD12[:]
 	case 16:
 		return t.LOD16[:]
-	case 32:
-		return t.LOD32[:]
 	default:
 		return nil
+	}
+}
+
+type overviewDetail struct {
+	cid         ChunkID
+	full, lod32 []byte
+}
+
+// Keep the zoom-out runway warm; bound the two largest, closest zoom levels.
+// Caller must hold stateMu for writing.
+func (s *Server) overviewPixelsLocked(cid ChunkID, lod uint32) []byte {
+	if lod <= 16 {
+		return s.overviewTiles[cid].pixels(lod)
+	}
+	element := s.overviewDetails[cid]
+	if element == nil {
+		full := s.computeFullTileData(cid)
+		if full == nil {
+			return nil
+		}
+		if len(s.overviewDetails) >= overviewDetailCacheMaxEntries {
+			oldest := s.overviewDetailLRU.Back()
+			delete(s.overviewDetails, oldest.Value.(*overviewDetail).cid)
+			s.overviewDetailLRU.Remove(oldest)
+		}
+		element = s.overviewDetailLRU.PushFront(&overviewDetail{cid: cid, full: full})
+		s.overviewDetails[cid] = element
+	} else {
+		s.overviewDetailLRU.MoveToFront(element)
+	}
+	detail := element.Value.(*overviewDetail)
+	if lod == 64 {
+		return detail.full
+	}
+	if lod != 32 {
+		return nil
+	}
+	if detail.lod32 == nil {
+		detail.lod32 = downsampleOverviewColor(detail.full, 32)
+	}
+	return detail.lod32
+}
+
+func (s *Server) invalidateOverviewDetailLocked(cid ChunkID) {
+	if element := s.overviewDetails[cid]; element != nil {
+		s.overviewDetailLRU.Remove(element)
+		delete(s.overviewDetails, cid)
 	}
 }
 
@@ -64,8 +109,8 @@ type overviewSubscription struct {
 }
 
 type overviewPendingSend struct {
-	player *Player
-	msg    *pb.Msg
+	players []*Player
+	msg     *pb.Msg
 }
 
 func validOverviewLOD(lod uint32) bool {
@@ -88,7 +133,6 @@ func computeOverviewTileFromFull(full []byte) *overviewTile {
 	copy(tile.LOD8[:], downsampleOverviewColor(full, 8))
 	copy(tile.LOD12[:], downsampleOverviewColor(full, 12))
 	copy(tile.LOD16[:], downsampleOverviewColor(full, 16))
-	copy(tile.LOD32[:], downsampleOverviewColor(full, 32))
 	return tile
 }
 
@@ -164,6 +208,8 @@ func (s *Server) rebuildOverviewImagesLocked() {
 }
 
 func (s *Server) rebuildOverviewLocked() {
+	clear(s.overviewDetails)
+	s.overviewDetailLRU.Init()
 	tiles := make(map[ChunkID]*overviewTile, len(s.chunks)+len(s.flags))
 	minimapCache16 := make(map[ChunkID][]byte, len(s.chunks)+len(s.flags))
 	for cid := range s.chunks {
@@ -214,6 +260,7 @@ func (s *Server) refreshOverviewDirtyLocked() ([]ChunkID, uint64) {
 	s.overviewRevision++
 	rebuildImages := false
 	for _, cid := range dirty {
+		s.invalidateOverviewDetailLocked(cid)
 		tile := s.computeOverviewTile(cid)
 		if tile == nil {
 			delete(s.overviewTiles, cid)
@@ -254,12 +301,7 @@ func (s *Server) overviewPatchLocked(lod uint32, sub overviewSubscription, dirty
 		if !overviewSubContains(sub, cid) {
 			continue
 		}
-		var pixels []byte
-		if lod == 64 {
-			pixels = s.computeFullTileData(cid)
-		} else {
-			pixels = s.overviewTiles[cid].pixels(lod)
-		}
+		pixels := s.overviewPixelsLocked(cid, lod)
 		if pixels == nil {
 			pixels = make([]byte, int(lod*lod))
 		}
@@ -279,44 +321,79 @@ func (s *Server) overviewPatchLocked(lod uint32, sub overviewSubscription, dirty
 	}}}
 }
 
+type overviewPatchKey struct {
+	lod           uint32
+	global        bool
+	x, y          int64
+	width, height int
+}
+
+func (s *Server) broadcastOverview() {
+	s.stateMu.Lock()
+	dirty, revision := s.refreshOverviewDirtyLocked()
+	if len(dirty) == 0 {
+		s.stateMu.Unlock()
+		return
+	}
+	patches := make(map[overviewPatchKey]*overviewPendingSend)
+	for player, byLOD := range s.overviewSubs {
+		for lod, sub := range byLOD {
+			if !sub.Ready {
+				if sub.Pending == nil {
+					sub.Pending = make(map[ChunkID]struct{})
+				}
+				for _, cid := range dirty {
+					if overviewSubContains(sub, cid) {
+						sub.Pending[cid] = struct{}{}
+					}
+				}
+				byLOD[lod] = sub
+				continue
+			}
+			key := overviewPatchKey{lod: lod, global: sub.Global}
+			if !sub.Global {
+				key.x, key.y = sub.OriginX, sub.OriginY
+				key.width, key.height = sub.WidthChunks, sub.HeightChunks
+			}
+			patch, exists := patches[key]
+			if !exists {
+				patch = &overviewPendingSend{msg: s.overviewPatchLocked(lod, sub, dirty, revision)}
+				patches[key] = patch
+			}
+			if patch.msg != nil {
+				patch.players = append(patch.players, player)
+			}
+		}
+	}
+	for _, patch := range patches {
+		if patch.msg != nil {
+			for _, tile := range patch.msg.GetOverviewPatch().Tiles {
+				s.overviewPatchBytes += uint64(len(tile.Data) * (len(patch.players) - 1))
+			}
+		}
+	}
+	s.stateMu.Unlock()
+	var wireBytes uint64
+	for _, patch := range patches {
+		if patch.msg == nil {
+			continue
+		}
+		data := mustProto(patch.msg)
+		wireBytes += uint64(len(data) * len(patch.players))
+		for _, player := range patch.players {
+			s.sendOverview(player, data)
+		}
+	}
+	s.stateMu.Lock()
+	s.overviewWireBytes += wireBytes
+	s.stateMu.Unlock()
+}
+
 func (s *Server) runOverviewBroadcaster() {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
-		s.stateMu.Lock()
-		dirty, revision := s.refreshOverviewDirtyLocked()
-		if len(dirty) == 0 {
-			s.stateMu.Unlock()
-			continue
-		}
-		pending := make([]overviewPendingSend, 0)
-		for player, byLOD := range s.overviewSubs {
-			for lod, sub := range byLOD {
-				if !sub.Ready {
-					if sub.Pending == nil {
-						sub.Pending = make(map[ChunkID]struct{})
-					}
-					for _, cid := range dirty {
-						if overviewSubContains(sub, cid) {
-							sub.Pending[cid] = struct{}{}
-						}
-					}
-					byLOD[lod] = sub
-					continue
-				}
-				if msg := s.overviewPatchLocked(lod, sub, dirty, revision); msg != nil {
-					pending = append(pending, overviewPendingSend{player: player, msg: msg})
-				}
-			}
-		}
-		s.stateMu.Unlock()
-		for _, send := range pending {
-			data := mustProto(send.msg)
-			s.stateMu.Lock()
-			s.overviewWireBytes += uint64(len(data))
-			s.stateMu.Unlock()
-			s.sendOverview(send.player, data)
-		}
+		s.broadcastOverview()
 	}
 }
 
@@ -326,12 +403,7 @@ func (s *Server) assembleOverviewRegionLocked(lod uint32, originX, originY int64
 	for y := 0; y < heightChunks; y++ {
 		for x := 0; x < widthChunks; x++ {
 			cid := ChunkID{X: originX + int64(x), Y: originY + int64(y)}
-			var tilePixels []byte
-			if lod == 64 {
-				tilePixels = s.computeFullTileData(cid)
-			} else {
-				tilePixels = s.overviewTiles[cid].pixels(lod)
-			}
+			tilePixels := s.overviewPixelsLocked(cid, lod)
 			if tilePixels != nil {
 				blitOverviewTile(pixels, widthPixels, x, y, tilePixels, int(lod))
 			}

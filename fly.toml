@@ -18,11 +18,13 @@ DATA_DIR = '/data'
 PORT = '8080'
 MODE = 'production'
 METRICS_PORT = '9091'
+# Leave headroom for memory outside the Go runtime on the 512 MB machine.
+GOMEMLIMIT = '400MiB'
 
 # Prometheus scrape target — fly's internal collector hits this and surfaces
 # the metrics in fly-metrics.net Grafana. Set up alerts there with:
 #   go_goroutines > 500
-#   go_memstats_sys_bytes > 200 * 1024 * 1024     (or fly_instance_memory_mem_used)
+#   fly_instance_memory_mem_used > 450 * 1024 * 1024
 [[metrics]]
 port = 9091
 path = '/metrics'
@@ -44,6 +46,5 @@ processes = ['app']
 
 [[vm]]
 size = 'shared-cpu-1x'
-# The merged world idles at ~95MB heap and the periodic snapshot deep-copies
-# all state; 256MB left no headroom and GC-death-spiraled the machine.
+# GOMEMLIMIT above must leave headroom when changing this allocation.
 memory = '512mb'

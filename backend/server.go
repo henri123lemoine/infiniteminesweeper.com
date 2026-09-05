@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/list"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
@@ -33,8 +34,9 @@ type Server struct {
 	stateMu sync.RWMutex
 
 	// World state - just what cells are revealed and by whom
-	chunks map[ChunkID]*ChunkBits // Which cells are revealed (bitset)
-	flags  map[ChunkID]chunkFlags // cell-sorted compact flag entries
+	chunks              map[ChunkID]*ChunkBits // Which cells are revealed (bitset)
+	flags               map[ChunkID]chunkFlags // cell-sorted compact flag entries
+	snapshotSharedFlags map[ChunkID]struct{}
 	// Dominant revealer per 8x8 block, for territory attribution
 	territory map[ChunkID]*chunkTerritory
 	// Who revealed each mine, for the "who stepped on it" tooltip
@@ -135,6 +137,8 @@ type Server struct {
 	minimapDirtyTiles  map[ChunkID]struct{}            // tiles with pending dirties
 	minimapCache16     map[ChunkID][]byte              // precomputed 16×16 overview tiles
 	overviewTiles      map[ChunkID]*overviewTile
+	overviewDetails    map[ChunkID]*list.Element
+	overviewDetailLRU  list.List
 	overviewImages     map[uint32]*overviewImage
 	overviewDirty      map[ChunkID]struct{}
 	overviewSubs       map[*Player]map[uint32]overviewSubscription
@@ -147,19 +151,20 @@ type Server struct {
 
 func NewServer() *Server {
 	return &Server{
-		secret:            []byte("minesweeper-secret-key"),
-		chunks:            make(map[ChunkID]*ChunkBits),
-		flags:             make(map[ChunkID]chunkFlags),
-		territory:         make(map[ChunkID]*chunkTerritory),
-		explosions:        make(map[ChunkID]chunkExplosions),
-		scores:            make(map[uint32]int32),
-		streaks:           make(map[uint32]uint32),
-		subs:              make(map[ChunkID]map[uint32]struct{}),
-		playerSubs:        make(map[uint32]map[ChunkID]struct{}),
-		playerSubLastSeen: make(map[uint32]map[ChunkID]uint64),
-		subTick:           0,
+		secret:              []byte("minesweeper-secret-key"),
+		chunks:              make(map[ChunkID]*ChunkBits),
+		flags:               make(map[ChunkID]chunkFlags),
+		snapshotSharedFlags: make(map[ChunkID]struct{}),
+		territory:           make(map[ChunkID]*chunkTerritory),
+		explosions:          make(map[ChunkID]chunkExplosions),
+		scores:              make(map[uint32]int32),
+		streaks:             make(map[uint32]uint32),
+		subs:                make(map[ChunkID]map[uint32]struct{}),
+		playerSubs:          make(map[uint32]map[ChunkID]struct{}),
+		playerSubLastSeen:   make(map[uint32]map[ChunkID]uint64),
+		subTick:             0,
 		// largest view rect + prefetch margin plus retention slack.
-		maxPlayerSubs:        1536,
+		maxPlayerSubs:        4096,
 		players:              make(map[uint32]map[*Player]struct{}),
 		playerNames:          make(map[uint32]string),
 		nameToPlayerID:       make(map[string]uint32),
@@ -208,6 +213,7 @@ func NewServer() *Server {
 		minimapDirtyTiles: make(map[ChunkID]struct{}),
 		minimapCache16:    make(map[ChunkID][]byte),
 		overviewTiles:     make(map[ChunkID]*overviewTile),
+		overviewDetails:   make(map[ChunkID]*list.Element),
 		overviewImages:    make(map[uint32]*overviewImage),
 		overviewDirty:     make(map[ChunkID]struct{}),
 		overviewSubs:      make(map[*Player]map[uint32]overviewSubscription),

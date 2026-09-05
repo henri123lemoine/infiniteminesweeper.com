@@ -18,8 +18,7 @@ var processStartTime = time.Now()
 // Set up alerts in fly-metrics.net Grafana with:
 //
 //	go_goroutines > 500
-//	go_memstats_sys_bytes > 200 * 1024 * 1024     # 200 MB
-//	(or equivalently fly_instance_memory_mem_used > 200 * 1024 * 1024)
+//	fly_instance_memory_mem_used > 450 * 1024 * 1024
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
@@ -45,7 +44,11 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		overviewImageBytes += len(image.Pixels)
 		overviewEncodedBytes += len(image.Encoded)
 	}
-	overviewTileBytes := len(s.overviewTiles) * (1 + 4 + 16 + 64 + 144 + 256 + 1024)
+	overviewTileBytes := len(s.overviewTiles) * (1 + 4 + 16 + 64 + 144 + 256)
+	for _, element := range s.overviewDetails {
+		detail := element.Value.(*overviewDetail)
+		overviewTileBytes += len(detail.full) + len(detail.lod32)
+	}
 	overviewRequests := s.overviewRequests
 	overviewSnapBytes := s.overviewSnapBytes
 	overviewPatchBytes := s.overviewPatchBytes

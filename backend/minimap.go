@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"math/bits"
 	"time"
 
 	pb "github.com/henri123lemoine/infiniteminesweeper.com/backend/gen/proto"
@@ -274,26 +275,31 @@ func (s *Server) computeFullTileData(cid ChunkID) []byte {
 	flags := s.flags[cid]
 	mines := s.getMineBitmap(cid)
 	data := make([]byte, ChunkSize*ChunkSize)
-	fi := 0 // flags are cell-sorted; walk them in step with the cell loop
-	for i := uint32(0); i < ChunkSize*ChunkSize; i++ {
-		if fi < len(flags) && uint32(flags[fi].Cell) == i {
-			data[i] = byte(mmFlagBase + minimapFlagBucket(uint32(flags[fi].FlagID)))
-			fi++
-			continue
-		}
-		if reveals == nil || reveals[i>>6]&(1<<(i&63)) == 0 {
-			data[i] = mmUnseen
-			continue
-		}
-		if mines[i>>3]&(1<<(i&7)) != 0 {
-			data[i] = mmMine
-			continue
-		}
-		n := s.countAdjacentMines(cid, i)
-		if n >= 7 {
-			data[i] = mmNum7Plus
-		} else {
-			data[i] = byte(mmEmpty0 + n)
+	var visible ChunkBits
+	if reveals != nil {
+		visible = *reveals
+	}
+	for _, flag := range flags {
+		cell := uint32(flag.Cell)
+		data[cell] = byte(mmFlagBase + minimapFlagBucket(uint32(flag.FlagID)))
+		visible[cell>>6] &^= 1 << (cell & 63)
+	}
+	for row, word := range visible {
+		for word != 0 {
+			x := bits.TrailingZeros64(word)
+			cell := uint32(row*ChunkSize + x)
+			word &= word - 1
+			if mines[cell>>3]&(1<<(cell&7)) != 0 {
+				data[cell] = mmMine
+				continue
+			}
+			var n int
+			if row > 0 && row < ChunkSize-1 && x > 0 && x < ChunkSize-1 {
+				n = countInteriorMines(mines, cell)
+			} else {
+				n = s.countAdjacentMines(cid, cell)
+			}
+			data[cell] = byte(mmEmpty0 + min(n, 7))
 		}
 	}
 	return data
@@ -330,12 +336,14 @@ func (s *Server) computeTileDataAtResolution(cid ChunkID, res uint32) []byte {
 // minimapOnReveal / minimapOnFlag are called from the reveal/flag logic under
 // stateMu write-lock.
 func (s *Server) minimapOnReveal(cid ChunkID, cell uint32) {
+	s.invalidateOverviewDetailLocked(cid)
 	s.updateMinimapCache16Cell(cid, cell)
 	s.overviewDirty[cid] = struct{}{}
 	s.minimapMarkDirty(cid, cell)
 }
 
 func (s *Server) minimapOnFlag(cid ChunkID, cell uint32) {
+	s.invalidateOverviewDetailLocked(cid)
 	s.updateMinimapCache16Cell(cid, cell)
 	s.overviewDirty[cid] = struct{}{}
 	s.minimapMarkDirty(cid, cell)

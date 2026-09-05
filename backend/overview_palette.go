@@ -75,10 +75,18 @@ func nearestOverviewLevel(value uint8) int {
 	return best
 }
 
+var overviewNearestLevel = func() [256]int {
+	var levels [256]int
+	for value := range levels {
+		levels[value] = nearestOverviewLevel(uint8(value))
+	}
+	return levels
+}()
+
 func quantizeOverviewColor(red, green, blue uint8) byte {
-	r := nearestOverviewLevel(red)
-	g := nearestOverviewLevel(green)
-	b := nearestOverviewLevel(blue)
+	r := overviewNearestLevel[red]
+	g := overviewNearestLevel[green]
+	b := overviewNearestLevel[blue]
 	return byte(overviewColorBase + r*36 + g*6 + b)
 }
 

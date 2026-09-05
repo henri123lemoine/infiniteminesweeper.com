@@ -121,20 +121,7 @@ func (s *Server) countAdjacentMines(chunkID ChunkID, cell uint32) int {
 	// Fast path: when the 3×3 neighborhood stays inside the same chunk,
 	// one bitmap lookup services all 8 neighbors.
 	if x >= 1 && x <= ChunkSize-2 && y >= 1 && y <= ChunkSize-2 {
-		bm := s.getMineBitmap(chunkID)
-		count := 0
-		for dy := -1; dy <= 1; dy++ {
-			for dx := -1; dx <= 1; dx++ {
-				if dx == 0 && dy == 0 {
-					continue
-				}
-				nc := uint32((y+dy)*ChunkSize + (x + dx))
-				if bm[nc>>3]&(1<<(nc&7)) != 0 {
-					count++
-				}
-			}
-		}
-		return count
+		return countInteriorMines(s.getMineBitmap(chunkID), cell)
 	}
 	worldX := int(chunkID.X)*ChunkSize + x
 	worldY := int(chunkID.Y)*ChunkSize + y
@@ -149,6 +136,17 @@ func (s *Server) countAdjacentMines(chunkID ChunkID, cell uint32) int {
 				count++
 			}
 		}
+	}
+	return count
+}
+
+func countInteriorMines(bitmap *[512]byte, cell uint32) int {
+	count := 0
+	for _, neighbor := range [...]uint32{
+		cell - 65, cell - 64, cell - 63, cell - 1,
+		cell + 1, cell + 63, cell + 64, cell + 65,
+	} {
+		count += int((bitmap[neighbor>>3] >> (neighbor & 7)) & 1)
 	}
 	return count
 }
@@ -615,7 +613,7 @@ func (s *Server) recordExplosionLocked(chunkID ChunkID, cell uint32, playerID ui
 }
 
 func (s *Server) setCellFlagged(chunkID ChunkID, cell uint32, playerID uint32, flagID uint32, collector *map[ChunkID][]*pb.FlagPlacement) {
-	s.flags[chunkID] = s.flags[chunkID].set(cell, Flag{FlagID: flagID, Owner: playerID})
+	s.setFlagLocked(chunkID, cell, Flag{FlagID: flagID, Owner: playerID})
 
 	if (*collector)[chunkID] == nil {
 		(*collector)[chunkID] = make([]*pb.FlagPlacement, 0)

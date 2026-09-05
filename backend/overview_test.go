@@ -23,7 +23,7 @@ func TestOverviewPyramidAveragesColorWithoutSamplingPatterns(t *testing.T) {
 		}
 	}
 	tile := computeOverviewTileFromFull(full)
-	for _, pixels := range [][]byte{tile.LOD1[:], tile.LOD2[:], tile.LOD4[:], tile.LOD8[:], tile.LOD12[:], tile.LOD16[:], tile.LOD32[:]} {
+	for _, pixels := range [][]byte{tile.LOD1[:], tile.LOD2[:], tile.LOD4[:], tile.LOD8[:], tile.LOD12[:], tile.LOD16[:], downsampleOverviewColor(full, 32)} {
 		for _, index := range pixels {
 			if index != pixels[0] {
 				t.Fatal("equal color mixtures produced a positional pattern")
