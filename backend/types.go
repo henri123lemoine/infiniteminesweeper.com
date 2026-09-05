@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -37,6 +38,17 @@ type FlagEntry struct {
 }
 
 type chunkFlags []FlagEntry
+
+// Snapshots share immutable flag slices; copy only chunks changed after capture.
+// Caller must hold stateMu for writing.
+func (s *Server) setFlagLocked(cid ChunkID, cell uint32, flag Flag) {
+	flags := s.flags[cid]
+	if _, shared := s.snapshotSharedFlags[cid]; shared {
+		flags = slices.Clone(flags)
+		delete(s.snapshotSharedFlags, cid)
+	}
+	s.flags[cid] = flags.set(cell, flag)
+}
 
 func (cf chunkFlags) search(cell uint32) (int, bool) {
 	lo, hi := 0, len(cf)

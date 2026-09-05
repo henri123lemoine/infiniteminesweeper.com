@@ -915,7 +915,7 @@ func (s *Server) getChunkSyncEntry(chunkID ChunkID) *chunkSyncEntry {
 		bits[cell/ChunkSize] |= 1 << (cell % ChunkSize)
 		g := groups[uint32(fe.FlagID)]
 		if g == nil {
-			g = &pb.RevealedCells{Cells: make([]uint32, 0, len(flagsMap))}
+			g = &pb.RevealedCells{}
 			groups[uint32(fe.FlagID)] = g
 		}
 		g.Cells = append(g.Cells, cell)

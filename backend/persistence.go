@@ -526,7 +526,7 @@ func (s *Server) replayFlag(chunkID ChunkID, cell uint32, flagID uint32, owner u
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 
-	s.flags[chunkID] = s.flags[chunkID].set(cell, Flag{FlagID: flagID, Owner: owner})
+	s.setFlagLocked(chunkID, cell, Flag{FlagID: flagID, Owner: owner})
 }
 
 func (s *Server) replayScoreUpdate(playerID uint32, score int32, streak uint32) {
@@ -657,12 +657,11 @@ func (s *Server) initPersistence() {
 	go s.periodicWALFlush()     // flush WAL every 30 seconds
 }
 
-// captureSnapshotData deep-copies all state under the lock: gob encoding
-// happens after release, and encoding live maps races concurrent reveals
-// (fatal concurrent map read/write panic).
+// Capture stable state before encoding outside the lock. Flag slices use
+// copy-on-write; other mutable state is copied here.
 func (s *Server) captureSnapshotData() snapshotData {
-	s.stateMu.RLock()
-	defer s.stateMu.RUnlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 
 	chunks := make(map[ChunkID]*ChunkBits, len(s.chunks))
 	for cid, cb := range s.chunks {
@@ -674,7 +673,8 @@ func (s *Server) captureSnapshotData() snapshotData {
 	}
 	flags := make(map[ChunkID][]FlagEntry, len(s.flags))
 	for cid, fm := range s.flags {
-		flags[cid] = slices.Clone(fm)
+		flags[cid] = fm
+		s.snapshotSharedFlags[cid] = struct{}{}
 	}
 	territory := make(map[ChunkID]*chunkTerritory, len(s.territory))
 	for cid, ct := range s.territory {
@@ -817,6 +817,7 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 		flagChunks = len(data.Flags)
 	}
 	s.flags = make(map[ChunkID]chunkFlags, flagChunks)
+	clear(s.snapshotSharedFlags)
 	if data.FlagsV2 != nil {
 		for cid, entries := range data.FlagsV2 {
 			cf := chunkFlags(entries)
