@@ -130,6 +130,38 @@ func TestSetCellRevealedChunkFoundedAndCleared(t *testing.T) {
 	}
 }
 
+func TestChunkClearedCountsFlagsAndExplodedMines(t *testing.T) {
+	s := NewServer()
+	const pid = uint32(1)
+	chunkID := ChunkID{X: 7, Y: 2}
+	revealed := make(map[ChunkID]*pb.RevealedCells)
+	flagged := make(map[ChunkID][]*pb.FlagPlacement)
+
+	var mines []uint32
+	for cell := uint32(0); cell < ChunkSize*ChunkSize; cell++ {
+		if s.isMine(chunkID, cell) {
+			mines = append(mines, cell)
+		} else {
+			s.setCellRevealed(chunkID, cell, pid, &revealed)
+		}
+	}
+	if len(mines) < 2 {
+		t.Fatalf("test chunk needs at least 2 mines, got %d", len(mines))
+	}
+
+	// One mine blown up, the rest flagged, with a flag as the final move.
+	s.setCellRevealed(chunkID, mines[0], pid, &revealed)
+	for _, cell := range mines[1:] {
+		if s.playerStats[pid].ChunksCleared != 0 {
+			t.Fatalf("chunk credited before every cell was resolved")
+		}
+		s.setCellFlagged(chunkID, cell, pid, 0, &flagged)
+	}
+	if got := s.playerStats[pid].ChunksCleared; got != 1 {
+		t.Fatalf("expected ChunksCleared=1 once every cell is revealed or flagged, got %d", got)
+	}
+}
+
 func TestSetCellRevealedFurthestChunkDistance(t *testing.T) {
 	s := NewServer()
 	const pid = uint32(1)

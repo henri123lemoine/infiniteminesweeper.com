@@ -542,15 +542,7 @@ func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, 
 		s.totalRevealed++
 		stats.CellsRevealed++
 		s.recordTerritoryLocked(chunkID, cell, playerID)
-
-		// Detect the reveal that completes the chunk (all 4096 cells set).
-		var revealedCount int
-		for _, word := range s.chunks[chunkID] {
-			revealedCount += bits.OnesCount64(word)
-		}
-		if revealedCount == ChunkSize*ChunkSize {
-			stats.ChunksCleared++
-		}
+		s.creditChunkClearLocked(chunkID, stats)
 
 		if s.getChunkDensity(chunkID) >= 0.32 {
 			stats.HighDensityReveals++
@@ -569,6 +561,21 @@ func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, 
 	// Update minimap tile (under the same lock)
 	s.minimapOnReveal(chunkID, cell)
 	s.invalidateChunkSync(chunkID)
+}
+
+// creditChunkClearLocked credits stats when the move that just resolved a
+// cell leaves every cell in the chunk revealed (mines included) or flagged.
+// Reveals and flags are disjoint, so the sum is the resolved-cell count.
+func (s *Server) creditChunkClearLocked(chunkID ChunkID, stats *PlayerStats) {
+	resolved := len(s.flags[chunkID])
+	if chunk := s.chunks[chunkID]; chunk != nil {
+		for _, word := range chunk {
+			resolved += bits.OnesCount64(word)
+		}
+	}
+	if resolved == ChunkSize*ChunkSize {
+		stats.ChunksCleared++
+	}
 }
 
 // statsForLocked returns (creating if necessary) the PlayerStats for pid.
@@ -613,7 +620,11 @@ func (s *Server) recordExplosionLocked(chunkID ChunkID, cell uint32, playerID ui
 }
 
 func (s *Server) setCellFlagged(chunkID ChunkID, cell uint32, playerID uint32, flagID uint32, collector *map[ChunkID][]*pb.FlagPlacement) {
+	wasFlagged := s.isCellFlagged(chunkID, cell)
 	s.setFlagLocked(chunkID, cell, Flag{FlagID: flagID, Owner: playerID})
+	if !wasFlagged {
+		s.creditChunkClearLocked(chunkID, s.statsForLocked(playerID))
+	}
 
 	if (*collector)[chunkID] == nil {
 		(*collector)[chunkID] = make([]*pb.FlagPlacement, 0)
