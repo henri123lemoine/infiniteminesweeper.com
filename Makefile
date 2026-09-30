@@ -46,7 +46,7 @@ backend/gen/proto/messages.pb.go: proto/messages.proto
 frontend/src/gen/messages_pb.js: proto/messages.proto
 	@echo "Generating JS protobuf stubs…"
 	mkdir -p frontend/src/gen
-	npx pbjs -t static-module -w es6 -o $@ $<
+	frontend/node_modules/.bin/pbjs -t static-module -w es6 -o $@ $<
 
 deps:
 	cd frontend && npm ci
