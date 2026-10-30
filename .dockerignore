@@ -10,3 +10,5 @@ fly.toml
 .git/
 .gitignore
 .gitignore
+.env*
+!.env.example
