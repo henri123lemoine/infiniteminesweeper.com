@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/gob"
 	"encoding/json"
@@ -241,51 +242,56 @@ func (s *Server) flushWAL() error {
 	return nil
 }
 
-// readWALFromS3 returns all WAL entries for replay. Segments are sorted
+// readWALFromS3 streams every WAL entry to visit. Segments are sorted
 // lexicographically (which equals sequence order because keys are zero-padded),
 // so replay order matches write order.
-func (s *Server) readWALFromS3() ([]WALEntry, error) {
-	var allEntries []WALEntry
-
+func (s *Server) readWALFromS3(visit func(WALEntry)) error {
 	segments, err := s.listWALSegments()
 	if err != nil {
-		return nil, fmt.Errorf("failed to list WAL segments: %v", err)
+		return fmt.Errorf("failed to list WAL segments: %v", err)
 	}
 	for _, key := range segments {
-		entries, err := s.readWALObjectFromS3(key)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read WAL segment %s: %v", key, err)
+		if err := s.readWALObjectFromS3(key, visit); err != nil {
+			return fmt.Errorf("failed to read WAL segment %s: %v", key, err)
 		}
-		allEntries = append(allEntries, entries...)
 	}
-	return allEntries, nil
+	return nil
 }
 
-func (s *Server) readWALObjectFromS3(key string) ([]WALEntry, error) {
+func (s *Server) readWALObjectFromS3(key string, visit func(WALEntry)) error {
 	result, err := s.s3Client.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer result.Body.Close()
 
-	var entries []WALEntry
-	decoder := json.NewDecoder(result.Body)
+	n, err := decodeWAL(result.Body, visit)
+	if err != nil {
+		// Best-effort: keep everything decoded so far rather than
+		// discarding the whole segment over one corrupt record.
+		log.Printf("[wal] segment %s corrupt after %d entries, replaying prefix: %v", key, n, err)
+	}
+	return nil
+}
+
+// decodeWAL streams entries rather than collecting them: a WAL left behind by
+// a failed snapshot can be far larger than the world it rebuilds.
+func decodeWAL(r io.Reader, visit func(WALEntry)) (int, error) {
+	decoder := json.NewDecoder(r)
+	n := 0
 	for {
 		var entry WALEntry
 		if err := decoder.Decode(&entry); err == io.EOF {
-			break
+			return n, nil
 		} else if err != nil {
-			// Best-effort: keep everything decoded so far rather than
-			// discarding the whole segment over one corrupt record.
-			log.Printf("[wal] segment %s corrupt after %d entries, replaying prefix: %v", key, len(entries), err)
-			break
+			return n, err
 		}
-		entries = append(entries, entry)
+		visit(entry)
+		n++
 	}
-	return entries, nil
 }
 
 // listWALSegments returns all WAL segment keys under walPrefix, sorted
@@ -316,29 +322,21 @@ func (s *Server) listWALSegments() ([]string, error) {
 	return keys, nil
 }
 
-func (s *Server) readWALFromDisk() ([]WALEntry, error) {
+func (s *Server) readWALFromDisk(visit func(WALEntry)) error {
 	path := filepath.Join(s.dataDir, walFileName)
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer f.Close()
 
-	var entries []WALEntry
-	decoder := json.NewDecoder(f)
-	for {
-		var entry WALEntry
-		if err := decoder.Decode(&entry); err == io.EOF {
-			break
-		} else if err != nil {
-			// A crash mid-append leaves a truncated trailing record; replay
-			// the intact prefix instead of dropping the whole log.
-			log.Printf("[wal] log corrupt after %d entries, replaying prefix: %v", len(entries), err)
-			break
-		}
-		entries = append(entries, entry)
+	n, err := decodeWAL(bufio.NewReaderSize(f, 1<<20), visit)
+	if err != nil {
+		// A crash mid-append leaves a truncated trailing record; replay
+		// the intact prefix instead of dropping the whole log.
+		log.Printf("[wal] log corrupt after %d entries, replaying prefix: %v", n, err)
 	}
-	return entries, nil
+	return nil
 }
 
 func (s *Server) truncateWAL() error {
@@ -405,21 +403,20 @@ func (s *Server) periodicWALFlush() {
 }
 
 func (s *Server) replayWAL() error {
-	var (
-		entries []WALEntry
-		err     error
-	)
+	replayed := 0
+	visit := func(entry WALEntry) {
+		s.applyWALEntry(entry)
+		replayed++
+	}
 	if s.useS3 {
-		entries, err = s.readWALFromS3()
-		if err != nil {
+		if err := s.readWALFromS3(visit); err != nil {
 			if isS3NotFound(err) {
 				return nil // No WAL to replay
 			}
 			return err
 		}
 	} else {
-		entries, err = s.readWALFromDisk()
-		if err != nil {
+		if err := s.readWALFromDisk(visit); err != nil {
 			if os.IsNotExist(err) {
 				return nil
 			}
@@ -427,75 +424,73 @@ func (s *Server) replayWAL() error {
 		}
 	}
 
-	log.Printf("[wal] replaying %d WAL entries", len(entries))
+	log.Printf("[wal] replayed %d WAL entries", replayed)
+	return nil
+}
 
-	for _, entry := range entries {
-		switch entry.Type {
-		case "reveal":
-			var revealData struct {
-				ChunkID ChunkID  `json:"chunk_id"`
-				Cells   []uint32 `json:"cells"`
-				Owner   uint32   `json:"owner"`
-			}
-			if err := json.Unmarshal(entry.Data, &revealData); err != nil {
-				log.Printf("[wal] failed to unmarshal reveal: %v", err)
-				continue
-			}
-			s.replayReveal(revealData.ChunkID, revealData.Cells, revealData.Owner)
-
-		case "flag":
-			var flagData struct {
-				ChunkID ChunkID `json:"chunk_id"`
-				Cell    uint32  `json:"cell"`
-				FlagID  uint32  `json:"flag_id"`
-				Owner   uint32  `json:"owner"`
-			}
-			if err := json.Unmarshal(entry.Data, &flagData); err != nil {
-				log.Printf("[wal] failed to unmarshal flag: %v", err)
-				continue
-			}
-			s.replayFlag(flagData.ChunkID, flagData.Cell, flagData.FlagID, flagData.Owner)
-
-		case "score_update":
-			var scoreData struct {
-				PlayerID uint32 `json:"player_id"`
-				Score    int32  `json:"score"`
-				Streak   uint32 `json:"streak"`
-			}
-			if err := json.Unmarshal(entry.Data, &scoreData); err != nil {
-				log.Printf("[wal] failed to unmarshal score update: %v", err)
-				continue
-			}
-			s.replayScoreUpdate(scoreData.PlayerID, scoreData.Score, scoreData.Streak)
-
-		case "player":
-			var playerData walPlayerData
-			if err := json.Unmarshal(entry.Data, &playerData); err != nil {
-				log.Printf("[wal] failed to unmarshal player: %v", err)
-				continue
-			}
-			s.replayPlayer(playerData)
-
-		case "stats_update":
-			var statsData struct {
-				PlayerID   uint32      `json:"player_id"`
-				Stats      PlayerStats `json:"stats"`
-				NewUnlocks []string    `json:"new_unlocks,omitempty"`
-			}
-			if err := json.Unmarshal(entry.Data, &statsData); err != nil {
-				log.Printf("[wal] failed to unmarshal stats update: %v", err)
-				continue
-			}
-			s.replayStatsUpdate(statsData.PlayerID, statsData.Stats, statsData.NewUnlocks)
+func (s *Server) applyWALEntry(entry WALEntry) {
+	switch entry.Type {
+	case "reveal":
+		var revealData struct {
+			ChunkID ChunkID  `json:"chunk_id"`
+			Cells   []uint32 `json:"cells"`
+			Owner   uint32   `json:"owner"`
 		}
-
-		// Update WAL sequence number
-		if entry.Sequence > s.walSeq {
-			s.walSeq = entry.Sequence
+		if err := json.Unmarshal(entry.Data, &revealData); err != nil {
+			log.Printf("[wal] failed to unmarshal reveal: %v", err)
+			return
 		}
+		s.replayReveal(revealData.ChunkID, revealData.Cells, revealData.Owner)
+
+	case "flag":
+		var flagData struct {
+			ChunkID ChunkID `json:"chunk_id"`
+			Cell    uint32  `json:"cell"`
+			FlagID  uint32  `json:"flag_id"`
+			Owner   uint32  `json:"owner"`
+		}
+		if err := json.Unmarshal(entry.Data, &flagData); err != nil {
+			log.Printf("[wal] failed to unmarshal flag: %v", err)
+			return
+		}
+		s.replayFlag(flagData.ChunkID, flagData.Cell, flagData.FlagID, flagData.Owner)
+
+	case "score_update":
+		var scoreData struct {
+			PlayerID uint32 `json:"player_id"`
+			Score    int32  `json:"score"`
+			Streak   uint32 `json:"streak"`
+		}
+		if err := json.Unmarshal(entry.Data, &scoreData); err != nil {
+			log.Printf("[wal] failed to unmarshal score update: %v", err)
+			return
+		}
+		s.replayScoreUpdate(scoreData.PlayerID, scoreData.Score, scoreData.Streak)
+
+	case "player":
+		var playerData walPlayerData
+		if err := json.Unmarshal(entry.Data, &playerData); err != nil {
+			log.Printf("[wal] failed to unmarshal player: %v", err)
+			return
+		}
+		s.replayPlayer(playerData)
+
+	case "stats_update":
+		var statsData struct {
+			PlayerID   uint32      `json:"player_id"`
+			Stats      PlayerStats `json:"stats"`
+			NewUnlocks []string    `json:"new_unlocks,omitempty"`
+		}
+		if err := json.Unmarshal(entry.Data, &statsData); err != nil {
+			log.Printf("[wal] failed to unmarshal stats update: %v", err)
+			return
+		}
+		s.replayStatsUpdate(statsData.PlayerID, statsData.Stats, statsData.NewUnlocks)
 	}
 
-	return nil
+	if entry.Sequence > s.walSeq {
+		s.walSeq = entry.Sequence
+	}
 }
 
 func (s *Server) replayReveal(chunkID ChunkID, cells []uint32, owner uint32) {
