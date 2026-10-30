@@ -1,0 +1,55 @@
+# Opens an "outage" issue (emailing the repo owner) while the site is down and
+# closes it on recovery. GitHub pauses schedules after 60 days without repo
+# activity; re-enable from the Actions tab if that happens.
+
+name: Uptime
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency: uptime
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check site
+        id: check
+        run: |
+          for attempt in 1 2 3; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://infiniteminesweeper.com/ || true)
+            if [ "$code" = "200" ]; then
+              echo "up=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "up=false" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Open outage issue
+        if: steps.check.outputs.up == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODE: ${{ steps.check.outputs.code }}
+        run: |
+          open=$(gh issue list -R "$GITHUB_REPOSITORY" --label outage --state open --json number --jq 'length')
+          if [ "$open" = "0" ]; then
+            gh label create outage -R "$GITHUB_REPOSITORY" --color B60205 --description "Site is down" --force
+            gh issue create -R "$GITHUB_REPOSITORY" --label outage \
+              --title "infiniteminesweeper.com is down" \
+              --body "The uptime check got HTTP \`$CODE\` three times in a row at $(date -u '+%Y-%m-%d %H:%M UTC'). Start with \`fly status -a infiniteminesweeper\` and \`fly logs -a infiniteminesweeper\`."
+          fi
+
+      - name: Close outage issue
+        if: steps.check.outputs.up == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for n in $(gh issue list -R "$GITHUB_REPOSITORY" --label outage --state open --json number --jq '.[].number'); do
+            gh issue close "$n" -R "$GITHUB_REPOSITORY" --comment "Back up as of $(date -u '+%Y-%m-%d %H:%M UTC')."
+          done

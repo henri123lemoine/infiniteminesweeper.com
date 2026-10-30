@@ -18,3 +18,11 @@ jobs:
       - run: flyctl deploy --remote-only --ha=false
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      # IndexNow lets Bing and other participating engines recrawl right
+      # away instead of on their own schedule.
+      - name: Ping IndexNow
+        continue-on-error: true
+        run: |
+          curl -sS --fail-with-body -X POST https://api.indexnow.org/indexnow \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            -d '{"host":"infiniteminesweeper.com","key":"5ecd2023b7cb3cff2e226fb8926a5fa8","keyLocation":"https://infiniteminesweeper.com/5ecd2023b7cb3cff2e226fb8926a5fa8.txt","urlList":["https://infiniteminesweeper.com/","https://infiniteminesweeper.com/how-to-play/"]}'
