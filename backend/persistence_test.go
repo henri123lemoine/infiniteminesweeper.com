@@ -47,3 +47,40 @@ func TestWALFlushToDisk(t *testing.T) {
 		t.Fatalf("no WAL entries found")
 	}
 }
+
+func TestReplayWALFromDiskWithTruncatedTail(t *testing.T) {
+	src := NewServer()
+	src.useS3 = false
+	dir := t.TempDir()
+	src.dataDir = dir
+	src.proximityRadius = -1
+
+	cid := ChunkID{X: 0, Y: 0}
+	for cell := uint32(0); cell < 64; cell += 9 {
+		src.handleReveal(1, uint64(cell)+1, cid, cell, false, false)
+	}
+	if err := src.flushWAL(); err != nil {
+		t.Fatalf("flushWAL: %v", err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, walFileName), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open wal: %v", err)
+	}
+	if _, err := f.WriteString(`{"timestamp":"2026-01-01T00:00:00Z","type":"rev`); err != nil {
+		t.Fatalf("append partial record: %v", err)
+	}
+	f.Close()
+
+	dst := NewServer()
+	dst.useS3 = false
+	dst.dataDir = dir
+	if err := dst.replayWAL(); err != nil {
+		t.Fatalf("replayWAL: %v", err)
+	}
+	if dst.walSeq != src.walSeq {
+		t.Fatalf("walSeq = %d, want %d", dst.walSeq, src.walSeq)
+	}
+	if src.chunks[cid] == nil || dst.chunks[cid] == nil || *dst.chunks[cid] != *src.chunks[cid] {
+		t.Fatalf("replayed chunk bits differ from source")
+	}
+}
