@@ -96,7 +96,11 @@ func main() {
 	http.HandleFunc("/leaderboard", server.handleLeaderboardHTTP)
 	http.HandleFunc("/profile/update", server.handleProfileUpdate)
 	distFS, _ := fs.Sub(content, "dist")
-	http.Handle("/", http.FileServer(http.FS(distFS)))
+	staticFiles, err := loadStaticFiles(distFS)
+	if err != nil {
+		log.Fatalf("failed to load embedded frontend: %v", err)
+	}
+	http.Handle("/", newStaticHandler(staticFiles, http.FileServer(http.FS(distFS))))
 
 	go server.runLeaderboardBroadcaster()
 	go server.runMinimapBroadcaster()
@@ -151,5 +155,5 @@ func main() {
 	}
 
 	fmt.Printf("Server running at: http://%s/\n", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	log.Fatal(http.ListenAndServe(addr, canonicalHost(http.DefaultServeMux)))
 }
