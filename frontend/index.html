@@ -3,11 +3,100 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>Infinite Minesweeper</title>
-    <link rel="icon" type="image/png" href="/favicon.ico" />
+    <title>Infinite Minesweeper – Endless Multiplayer Minesweeper Online</title>
+    <meta name="description" content="Play minesweeper on one endless board shared live with players worldwide. Free in your browser, no download or sign-up. Reveal, flag, and climb the leaderboard." />
+    <link rel="canonical" href="https://infiniteminesweeper.com/" />
+    <meta name="theme-color" content="#c0c0c0" />
+
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" type="image/png" href="/favicon-96.png" sizes="96x96" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Infinite Minesweeper" />
+    <meta property="og:url" content="https://infiniteminesweeper.com/" />
+    <meta property="og:title" content="Infinite Minesweeper – Endless Multiplayer Minesweeper" />
+    <meta property="og:description" content="One endless minesweeper board, shared live by players around the world. Free in your browser, no sign-up." />
+    <meta property="og:image" content="https://infiniteminesweeper.com/og-image.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="The Infinite Minesweeper title over a live section of the shared board, covered in numbers and players' flags" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://infiniteminesweeper.com/#website",
+            "url": "https://infiniteminesweeper.com/",
+            "name": "Infinite Minesweeper",
+            "alternateName": ["infiniteminesweeper.com", "Infinite Multiplayer Minesweeper"],
+            "inLanguage": "en"
+          },
+          {
+            "@type": ["VideoGame", "WebApplication"],
+            "@id": "https://infiniteminesweeper.com/#game",
+            "name": "Infinite Minesweeper",
+            "url": "https://infiniteminesweeper.com/",
+            "description": "A massively multiplayer minesweeper game on a single endless board. Everyone online explores the same world in real time, competing for points on a global leaderboard and unlocking flags through advancements.",
+            "image": "https://infiniteminesweeper.com/og-image.jpg",
+            "screenshot": "https://infiniteminesweeper.com/how-to-play/board.webp",
+            "genre": ["Puzzle", "Logic"],
+            "playMode": "MultiPlayer",
+            "gamePlatform": "Web browser",
+            "applicationCategory": "GameApplication",
+            "operatingSystem": "Any",
+            "isAccessibleForFree": true,
+            "inLanguage": "en",
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+            "author": { "@type": "Person", "name": "Henri Lemoine", "url": "https://github.com/henri123lemoine" },
+            "sameAs": ["https://github.com/henri123lemoine/infiniteminesweeper.com"],
+            "isPartOf": { "@id": "https://infiniteminesweeper.com/#website" }
+          }
+        ]
+      }
+    </script>
+
+    <style>
+      .prerender {
+        max-width: 560px;
+        margin: 15vh auto 0;
+        padding: 20px 24px;
+        background: #c0c0c0;
+        border: 3px solid;
+        border-color: #fff #808080 #808080 #fff;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        text-align: center;
+        color: #202020;
+      }
+      .prerender h1 {
+        margin: 0 0 8px;
+        font-family: "Courier New", Courier, monospace;
+        font-size: 30px;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main class="prerender">
+        <h1>Infinite Minesweeper</h1>
+        <p>
+          Minesweeper on one endless board, shared live by everyone online.
+          Reveal cells, flag mines, earn advancements and climb the global
+          leaderboard. Free in your browser, no download or sign-up.
+        </p>
+        <p><a href="/how-to-play/">How to play, scoring and FAQ</a></p>
+      </main>
+    </div>
+    <noscript>
+      <p style="text-align: center">
+        Infinite Minesweeper needs JavaScript to run.
+        <a href="/how-to-play/">Read how to play</a>.
+      </p>
+    </noscript>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
