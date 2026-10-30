@@ -1350,6 +1350,9 @@ function App() {
                   {t.label}
                 </button>
               ))}
+              <a className="home-tab" href="/how-to-play/">
+                How to play
+              </a>
             </div>
 
             {activeTab === "play" && (
@@ -1643,6 +1646,11 @@ function App() {
             >
               Watch on YouTube
             </a>
+            <div style={{ marginTop: 8 }}>
+              <a href="/how-to-play/" style={{ fontWeight: 600 }}>
+                Full guide: rules, scoring and FAQ
+              </a>
+            </div>
             <div
               style={{
                 marginTop: 16,

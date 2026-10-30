@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /ws
+Disallow: /hotspot
+Disallow: /leaderboard
+Disallow: /profile/
+
+Sitemap: https://infiniteminesweeper.com/sitemap.xml
