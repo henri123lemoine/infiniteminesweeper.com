@@ -93,7 +93,8 @@ Note that non-git-tracked files are not included in this tree. Some examples are
 │       ├── claude_code.yml
 │       ├── claude_code_login.yml
 │       ├── fly-deploy.yml
-│       └── fly-validate.yml
+│       ├── fly-validate.yml
+│       └── uptime.yml
 ├── .gitignore
 ├── .nvmrc
 ├── AGENTS.md
@@ -124,10 +125,10 @@ Note that non-git-tracked files are not included in this tree. Some examples are
 │   │   │   ├── flag0.png
 │   │   │   ├── ... [other raw assets]
 │   │   └── sprites.yaml
-│   ├── favicon.ico
 │   ├── index.html
 │   ├── package-lock.json
 │   ├── package.json
+│   ├── public  # copied as-is to the site root: icons, robots.txt, sitemap.xml, how-to-play/
 │   ├── src
 │   │   ├── App.jsx
 │   │   ├── CanvasRenderer.js
