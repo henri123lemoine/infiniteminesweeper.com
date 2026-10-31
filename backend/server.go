@@ -148,6 +148,8 @@ type Server struct {
 	overviewSnapBytes  uint64
 	overviewPatchBytes uint64
 	overviewWireBytes  uint64
+
+	statsPage statsPageCache
 }
 
 func NewServer() *Server {
@@ -290,35 +292,43 @@ func (s *Server) handleHotspot(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// handleLeaderboardHTTP serves a deduplicated, full leaderboard (best score per name), sorted desc.
-func (s *Server) handleLeaderboardHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+type leaderboardEntry struct {
+	Name   string `json:"name"`
+	Score  int32  `json:"score"`
+	FlagID uint32 `json:"flagID"`
+}
 
-	type entry struct {
-		Name   string `json:"name"`
-		Score  int32  `json:"score"`
-		FlagID uint32 `json:"flagID"`
-	}
-
-	s.stateMu.RLock()
-	bestByName := make(map[string]entry)
+// collectLeaderboardLocked returns the best score per name, unsorted so the
+// caller can sort after releasing the lock. Caller must hold s.stateMu.
+func (s *Server) collectLeaderboardLocked() []leaderboardEntry {
+	bestByName := make(map[string]leaderboardEntry)
 	for pid, sc := range s.scores {
 		name := s.playerNames[pid]
-		e := entry{Name: name, Score: sc, FlagID: s.playerFlags[pid]}
+		e := leaderboardEntry{Name: name, Score: sc, FlagID: s.playerFlags[pid]}
 		if prev, ok := bestByName[name]; !ok || e.Score > prev.Score {
 			bestByName[name] = e
 		}
 	}
-	// Move to slice and sort
-	out := make([]entry, 0, len(bestByName))
+	out := make([]leaderboardEntry, 0, len(bestByName))
 	for _, e := range bestByName {
 		out = append(out, e)
 	}
+	return out
+}
+
+func sortLeaderboard(entries []leaderboardEntry) {
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Score > entries[j].Score })
+}
+
+// handleLeaderboardHTTP serves a deduplicated, full leaderboard (best score per name), sorted desc.
+func (s *Server) handleLeaderboardHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	s.stateMu.RLock()
+	out := s.collectLeaderboardLocked()
 	s.stateMu.RUnlock()
 
-	// Sort descending by score
-	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
-
+	sortLeaderboard(out)
 	_ = json.NewEncoder(w).Encode(out)
 }
 

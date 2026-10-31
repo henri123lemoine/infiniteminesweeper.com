@@ -34,6 +34,33 @@ var compressibleExts = map[string]bool{
 	".txt": true, ".webmanifest": true, ".xml": true,
 }
 
+func newStaticFile(name string, data []byte) (*staticFile, error) {
+	ext := path.Ext(name)
+	ctype := mime.TypeByExtension(ext)
+	if t, ok := extraMimeTypes[ext]; ok {
+		ctype = t
+	}
+	sum := sha256.Sum256(data)
+	f := &staticFile{data: data, etag: hex.EncodeToString(sum[:8]), ctype: ctype}
+	if compressibleExts[ext] {
+		var buf bytes.Buffer
+		zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := zw.Write(data); err != nil {
+			return nil, err
+		}
+		if err := zw.Close(); err != nil {
+			return nil, err
+		}
+		if buf.Len() < len(data) {
+			f.gz = buf.Bytes()
+		}
+	}
+	return f, nil
+}
+
 func loadStaticFiles(fsys fs.FS) (map[string]*staticFile, error) {
 	files := make(map[string]*staticFile)
 	err := fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
@@ -44,28 +71,9 @@ func loadStaticFiles(fsys fs.FS) (map[string]*staticFile, error) {
 		if err != nil {
 			return err
 		}
-		ext := path.Ext(name)
-		ctype := mime.TypeByExtension(ext)
-		if t, ok := extraMimeTypes[ext]; ok {
-			ctype = t
-		}
-		sum := sha256.Sum256(data)
-		f := &staticFile{data: data, etag: hex.EncodeToString(sum[:8]), ctype: ctype}
-		if compressibleExts[ext] {
-			var buf bytes.Buffer
-			zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-			if err != nil {
-				return err
-			}
-			if _, err := zw.Write(data); err != nil {
-				return err
-			}
-			if err := zw.Close(); err != nil {
-				return err
-			}
-			if buf.Len() < len(data) {
-				f.gz = buf.Bytes()
-			}
+		f, err := newStaticFile(name, data)
+		if err != nil {
+			return err
 		}
 		files[name] = f
 		return nil
@@ -89,7 +97,10 @@ func cacheControlFor(name string) string {
 func newStaticHandler(files map[string]*staticFile, fallback http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")
-		if name == "" || strings.HasSuffix(name, "/") {
+		switch {
+		case strings.HasPrefix(name, "@"):
+			name = "index.html" // /@x,y location links open the game there
+		case name == "" || strings.HasSuffix(name, "/"):
 			name += "index.html"
 		}
 		f, ok := files[name]
@@ -97,23 +108,26 @@ func newStaticHandler(files map[string]*staticFile, fallback http.Handler) http.
 			fallback.ServeHTTP(w, r)
 			return
 		}
-
-		h := w.Header()
-		h.Set("Cache-Control", cacheControlFor(name))
-		if f.ctype != "" {
-			h.Set("Content-Type", f.ctype)
-		}
-		body, etag := f.data, f.etag
-		if f.gz != nil {
-			h.Add("Vary", "Accept-Encoding")
-			if acceptsGzip(r) {
-				body, etag = f.gz, f.etag+"-gz"
-				h.Set("Content-Encoding", "gzip")
-			}
-		}
-		h.Set("ETag", `"`+etag+`"`)
-		http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(body))
+		serveStaticFile(w, r, name, f, cacheControlFor(name))
 	})
+}
+
+func serveStaticFile(w http.ResponseWriter, r *http.Request, name string, f *staticFile, cacheControl string) {
+	h := w.Header()
+	h.Set("Cache-Control", cacheControl)
+	if f.ctype != "" {
+		h.Set("Content-Type", f.ctype)
+	}
+	body, etag := f.data, f.etag
+	if f.gz != nil {
+		h.Add("Vary", "Accept-Encoding")
+		if acceptsGzip(r) {
+			body, etag = f.gz, f.etag+"-gz"
+			h.Set("Content-Encoding", "gzip")
+		}
+	}
+	h.Set("ETag", `"`+etag+`"`)
+	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(body))
 }
 
 func acceptsGzip(r *http.Request) bool {

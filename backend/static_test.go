@@ -95,6 +95,9 @@ func TestStaticNestedIndexAndContentTypes(t *testing.T) {
 	if rec := serve(h, httptest.NewRequest("GET", "/missing", nil)); rec.Code != http.StatusNotFound {
 		t.Fatalf("missing: code=%d", rec.Code)
 	}
+	if rec := serve(h, httptest.NewRequest("GET", "/@120,-45", nil)); rec.Code != 200 || !strings.Contains(rec.Body.String(), "<title>home</title>") {
+		t.Fatalf("location link: code=%d body=%q", rec.Code, rec.Body.String())
+	}
 }
 
 func TestAcceptsGzip(t *testing.T) {
