@@ -42,7 +42,8 @@ func TestMinimapCache16MatchesFullRender(t *testing.T) {
 		reveals[cell>>6] |= 1 << (cell & 63)
 	}
 	s.chunks[cid] = reveals
-	s.flags[cid] = chunkFlags{}.set(400, Flag{FlagID: 4, Owner: 1})
+	s.flags[cid] = &chunkFlags{}
+	s.flags[cid].set(400, Flag{FlagID: 4, Owner: 1})
 
 	s.rebuildMinimapCache16Locked()
 	want := downsampleTo(cid, s.computeFullTileData(cid), 16)

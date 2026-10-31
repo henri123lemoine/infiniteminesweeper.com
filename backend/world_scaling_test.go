@@ -17,11 +17,11 @@ func TestSnapshotFlagsStayImmutableAcrossWrites(t *testing.T) {
 		s.setFlagLocked(cid, cell, Flag{FlagID: 3, Owner: 7})
 	}
 	first := s.captureSnapshotData()
-	wantFirst := append([]FlagEntry(nil), first.FlagsV2[cid]...)
+	wantFirst := first.flagSets[cid].entries()
 	s.replayFlag(cid, 9, 6, 8)
 	s.replayFlag(cid, 4, 2, 9)
 	second := s.captureSnapshotData()
-	wantSecond := append([]FlagEntry(nil), second.FlagsV2[cid]...)
+	wantSecond := second.flagSets[cid].entries()
 
 	done := make(chan struct{})
 	go func() {
@@ -41,16 +41,16 @@ func TestSnapshotFlagsStayImmutableAcrossWrites(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(decoded.FlagsV2, snapshot.FlagsV2) {
+		if !reflect.DeepEqual(snapshotFlagEntries(decoded), snapshotFlagEntries(snapshot)) {
 			t.Fatal("concurrent writes changed flags during snapshot encoding")
 		}
 	}
 	<-done
-	if !reflect.DeepEqual(first.FlagsV2[cid], wantFirst) || !reflect.DeepEqual(second.FlagsV2[cid], wantSecond) {
+	if !reflect.DeepEqual(first.flagSets[cid].entries(), wantFirst) || !reflect.DeepEqual(second.flagSets[cid].entries(), wantSecond) {
 		t.Fatal("a later flag insertion or replacement mutated an earlier snapshot")
 	}
-	if len(s.flags[cid]) != 100 {
-		t.Fatalf("live world has %d flags, want 100", len(s.flags[cid]))
+	if s.flags[cid].len() != 100 {
+		t.Fatalf("live world has %d flags, want 100", s.flags[cid].len())
 	}
 }
 
@@ -170,8 +170,8 @@ func TestChunkRegionFlagAllocationAndInvalidation(t *testing.T) {
 		for _, group := range entry.cs.FlagGroups {
 			capacity += cap(group.Cells.Cells)
 		}
-		if capacity > 2*len(s.flags[cid]) {
-			t.Fatalf("flag groups reserved %d cells for %d flags", capacity, len(s.flags[cid]))
+		if capacity > 2*s.flags[cid].len() {
+			t.Fatalf("flag groups reserved %d cells for %d flags", capacity, s.flags[cid].len())
 		}
 	}
 	for attempt := 0; attempt < 3; attempt++ {

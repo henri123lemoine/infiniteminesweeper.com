@@ -1,7 +1,6 @@
 package main
 
 import (
-	"slices"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -28,63 +27,16 @@ type Flag struct {
 	Owner uint32
 }
 
-// FlagEntry packs one placed flag into 8 bytes. A chunk's flags live in a
-// cell-sorted slice (~9B/flag resident vs ~22B as a map entry) with
-// binary-search lookups and cache-friendly in-order iteration.
+// FlagEntry is one placed flag in the snapshot encoding (8 bytes on disk).
+// In memory a chunk's flags are a chunkFlags; see flags.go.
 type FlagEntry struct {
 	Cell   uint16
 	FlagID uint16
 	Owner  uint32
 }
 
-type chunkFlags []FlagEntry
-
-// Snapshots share immutable flag slices; copy only chunks changed after capture.
-// Caller must hold stateMu for writing.
-func (s *Server) setFlagLocked(cid ChunkID, cell uint32, flag Flag) {
-	flags := s.flags[cid]
-	if _, shared := s.snapshotSharedFlags[cid]; shared {
-		flags = slices.Clone(flags)
-		delete(s.snapshotSharedFlags, cid)
-	}
-	s.flags[cid] = flags.set(cell, flag)
-}
-
-func (cf chunkFlags) search(cell uint32) (int, bool) {
-	lo, hi := 0, len(cf)
-	for lo < hi {
-		mid := (lo + hi) / 2
-		if uint32(cf[mid].Cell) < cell {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	return lo, lo < len(cf) && uint32(cf[lo].Cell) == cell
-}
-
-func (cf chunkFlags) get(cell uint32) (Flag, bool) {
-	if i, ok := cf.search(cell); ok {
-		return Flag{FlagID: uint32(cf[i].FlagID), Owner: cf[i].Owner}, true
-	}
-	return Flag{}, false
-}
-
-func (cf chunkFlags) set(cell uint32, f Flag) chunkFlags {
-	e := FlagEntry{Cell: uint16(cell), FlagID: uint16(f.FlagID), Owner: f.Owner}
-	i, ok := cf.search(cell)
-	if ok {
-		cf[i] = e
-		return cf
-	}
-	cf = append(cf, FlagEntry{})
-	copy(cf[i+1:], cf[i:])
-	cf[i] = e
-	return cf
-}
-
-// ExplosionEntry records who revealed the mine at a cell. Same cell-sorted
-// per-chunk layout as chunkFlags; revealed mines are rare so these stay tiny.
+// ExplosionEntry records who revealed the mine at a cell. A chunk's entries
+// are a cell-sorted slice; revealed mines are rare so these stay tiny.
 type ExplosionEntry struct {
 	Cell  uint16
 	Owner uint32

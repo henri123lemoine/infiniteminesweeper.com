@@ -19,7 +19,7 @@ func newStatsTestServer() *Server {
 	s.playerNames[1], s.scores[1] = "alice", 500
 	s.playerNames[2], s.scores[2] = "<script>alert(1)</script>", 900
 	s.playerNames[3], s.scores[3] = "", 10_000
-	s.flags[ChunkID{X: 0, Y: 0}] = chunkFlags{{Cell: 1}, {Cell: 2}}
+	s.flags[ChunkID{X: 0, Y: 0}] = newChunkFlags([]FlagEntry{{Cell: 1}, {Cell: 2}})
 	s.rebuildOverviewLocked()
 	return s
 }

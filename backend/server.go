@@ -35,7 +35,7 @@ type Server struct {
 
 	// World state - just what cells are revealed and by whom
 	chunks              map[ChunkID]*ChunkBits // Which cells are revealed (bitset)
-	flags               map[ChunkID]chunkFlags // cell-sorted compact flag entries
+	flags               map[ChunkID]*chunkFlags
 	snapshotSharedFlags map[ChunkID]struct{}
 	// Dominant revealer per 8x8 block, for territory attribution
 	territory map[ChunkID]*chunkTerritory
@@ -156,7 +156,7 @@ func NewServer() *Server {
 	return &Server{
 		secret:              []byte("minesweeper-secret-key"),
 		chunks:              make(map[ChunkID]*ChunkBits),
-		flags:               make(map[ChunkID]chunkFlags),
+		flags:               make(map[ChunkID]*chunkFlags),
 		snapshotSharedFlags: make(map[ChunkID]struct{}),
 		territory:           make(map[ChunkID]*chunkTerritory),
 		explosions:          make(map[ChunkID]chunkExplosions),

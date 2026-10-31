@@ -91,11 +91,11 @@ func BenchmarkOverviewFanout(b *testing.B) {
 func BenchmarkFlagSnapshot(b *testing.B) {
 	s := NewServer()
 	for x := int64(0); x < 1000; x++ {
-		flags := make(chunkFlags, 2048)
-		for i := range flags {
-			flags[i] = FlagEntry{Cell: uint16(i), FlagID: 3, Owner: 1}
+		entries := make([]FlagEntry, 2048)
+		for i := range entries {
+			entries[i] = FlagEntry{Cell: uint16(i), FlagID: 3, Owner: 1}
 		}
-		s.flags[ChunkID{X: x}] = flags
+		s.flags[ChunkID{X: x}] = newChunkFlags(entries)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -114,11 +114,11 @@ func BenchmarkChunkRegionPan(b *testing.B) {
 	for i := range ids {
 		ids[i] = ChunkID{X: int64(i % 7), Y: int64(i / 7)}
 		s.chunks[ids[i]] = overviewTestChunk(uint32(i))
-		flags := make(chunkFlags, 1024)
-		for j := range flags {
-			flags[j] = FlagEntry{Cell: uint16(j * 4), FlagID: uint16(j % 16)}
+		entries := make([]FlagEntry, 1024)
+		for j := range entries {
+			entries[j] = FlagEntry{Cell: uint16(j * 4), FlagID: uint16(j % 16)}
 		}
-		s.flags[ids[i]] = flags
+		s.flags[ids[i]] = newChunkFlags(entries)
 	}
 	s.sendChunkRegionSync(1, ids)
 	wireBytes := len(<-player.Send)

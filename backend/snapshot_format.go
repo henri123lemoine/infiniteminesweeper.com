@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/klauspost/compress/gzip"
 	"github.com/pierrec/lz4/v4"
@@ -70,23 +71,46 @@ func encodeSnapshot(w io.Writer, data *snapshotData) error {
 	}
 
 	// Section 2: flags
-	if err := putU32(uint32(len(data.FlagsV2))); err != nil {
+	var fe [snapFlagEntryBytes]byte
+	putFlag := func(cell uint32, f Flag) error {
+		binary.LittleEndian.PutUint16(fe[0:2], uint16(cell))
+		binary.LittleEndian.PutUint16(fe[2:4], uint16(f.FlagID))
+		binary.LittleEndian.PutUint32(fe[4:8], f.Owner)
+		_, err := bw.Write(fe[:])
 		return err
 	}
-	var fe [snapFlagEntryBytes]byte
-	for cid, entries := range data.FlagsV2 {
-		if err := putChunkID(cid); err != nil {
+	if data.flagSets != nil {
+		if err := putU32(uint32(len(data.flagSets))); err != nil {
 			return err
 		}
-		if err := putU32(uint32(len(entries))); err != nil {
-			return err
-		}
-		for _, e := range entries {
-			binary.LittleEndian.PutUint16(fe[0:2], e.Cell)
-			binary.LittleEndian.PutUint16(fe[2:4], e.FlagID)
-			binary.LittleEndian.PutUint32(fe[4:8], e.Owner)
-			if _, err := bw.Write(fe[:]); err != nil {
+		for cid, cf := range data.flagSets {
+			if err := putChunkID(cid); err != nil {
 				return err
+			}
+			if err := putU32(uint32(cf.len())); err != nil {
+				return err
+			}
+			for cell, f := range cf.all() {
+				if err := putFlag(cell, f); err != nil {
+					return err
+				}
+			}
+		}
+	} else {
+		if err := putU32(uint32(len(data.FlagsV2))); err != nil {
+			return err
+		}
+		for cid, entries := range data.FlagsV2 {
+			if err := putChunkID(cid); err != nil {
+				return err
+			}
+			if err := putU32(uint32(len(entries))); err != nil {
+				return err
+			}
+			for _, e := range entries {
+				if err := putFlag(uint32(e.Cell), Flag{FlagID: uint32(e.FlagID), Owner: e.Owner}); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -182,8 +206,9 @@ func decodeSnapshot(r io.Reader) (snapshotData, error) {
 	if err != nil || n > snapMaxChunks {
 		return data, fmt.Errorf("snapshot flags section: n=%d err=%w", n, errOr(err))
 	}
-	data.FlagsV2 = make(map[ChunkID][]FlagEntry, n)
+	data.flagSets = make(map[ChunkID]*chunkFlags, n)
 	var fe [snapFlagEntryBytes]byte
+	var entries []FlagEntry
 	for i := uint32(0); i < n; i++ {
 		cid, err := getChunkID()
 		if err != nil {
@@ -193,7 +218,7 @@ func decodeSnapshot(r io.Reader) (snapshotData, error) {
 		if err != nil || cnt > ChunkSize*ChunkSize {
 			return data, fmt.Errorf("snapshot flag count: n=%d err=%w", cnt, errOr(err))
 		}
-		entries := make([]FlagEntry, cnt)
+		entries = slices.Grow(entries[:0], int(cnt))[:cnt]
 		for j := range entries {
 			if _, err := io.ReadFull(br, fe[:]); err != nil {
 				return data, err
@@ -204,7 +229,7 @@ func decodeSnapshot(r io.Reader) (snapshotData, error) {
 				Owner:  binary.LittleEndian.Uint32(fe[4:8]),
 			}
 		}
-		data.FlagsV2[cid] = entries
+		data.flagSets[cid] = newChunkFlags(entries)
 	}
 
 	n, err = getU32()
@@ -237,7 +262,7 @@ func decodeSnapshot(r io.Reader) (snapshotData, error) {
 		return data, errors.New("snapshot tail: implausible player count")
 	}
 	tail.Chunks = data.Chunks
-	tail.FlagsV2 = data.FlagsV2
+	tail.flagSets = data.flagSets
 	tail.Territory = data.Territory
 	return tail, nil
 }
