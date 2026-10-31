@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Infinite Minesweeper Leaderboard &amp; World Stats</title>
+    <meta name="description" content="Live leaderboard and world stats for Infinite Minesweeper: {{commas .Players}} players have revealed {{commas .CellsRevealed}} cells of one shared, endless board. See the top {{len .Top}} players and a map of the explored world." />
+    <link rel="canonical" href="https://infiniteminesweeper.com/stats/" />
+    <meta name="theme-color" content="#c0c0c0" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" type="image/png" href="/favicon-96.png" sizes="96x96" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Infinite Minesweeper" />
+    <meta property="og:url" content="https://infiniteminesweeper.com/stats/" />
+    <meta property="og:title" content="Infinite Minesweeper Leaderboard &amp; World Stats" />
+    <meta property="og:description" content="{{commas .Players}} players, {{commas .CellsRevealed}} cells revealed, one endless shared board." />
+    <meta property="og:image" content="https://infiniteminesweeper.com/og-image.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebPage",
+            "@id": "https://infiniteminesweeper.com/stats/#page",
+            "url": "https://infiniteminesweeper.com/stats/",
+            "name": "Infinite Minesweeper Leaderboard & World Stats",
+            "inLanguage": "en",
+            "isPartOf": { "@id": "https://infiniteminesweeper.com/#website" },
+            "about": { "@id": "https://infiniteminesweeper.com/#game" }
+          },
+          {
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "Infinite Minesweeper", "item": "https://infiniteminesweeper.com/" },
+              { "@type": "ListItem", "position": 2, "name": "Leaderboard & world stats", "item": "https://infiniteminesweeper.com/stats/" }
+            ]
+          }
+        ]
+      }
+    </script>
+
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #9a9a9a;
+        color: #202020;
+        font: 16px/1.6 "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      }
+      .page {
+        max-width: 860px;
+        margin: 24px auto;
+        padding: 24px 32px 32px;
+        background: #c0c0c0;
+        border: 3px solid;
+        border-color: #fff #808080 #808080 #fff;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+      }
+      nav { font-size: 14px; margin-bottom: 8px; }
+      h1, h2 { font-family: "Courier New", Courier, monospace; line-height: 1.2; }
+      h1 { font-size: 32px; margin: 8px 0 12px; }
+      h2 { font-size: 24px; margin: 32px 0 10px; border-bottom: 2px solid #808080; padding-bottom: 4px; }
+      a { color: #0b4ea2; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 16px 0 0; }
+      .stat {
+        background: #d4d4d4;
+        border: 2px solid;
+        border-color: #808080 #fff #fff #808080;
+        padding: 10px 12px;
+      }
+      .stat dt { font-size: 13px; color: #404040; }
+      .stat dd { margin: 2px 0 0; font: 700 22px "Courier New", Courier, monospace; }
+      .map {
+        display: block;
+        width: 100%;
+        height: auto;
+        image-rendering: pixelated;
+        border: 2px solid;
+        border-color: #808080 #fff #fff #808080;
+        background: #c0c0c0;
+      }
+      figure { margin: 0; }
+      figcaption { font-size: 13px; color: #404040; margin-top: 4px; }
+      table { width: 100%; border-collapse: collapse; background: #d4d4d4; }
+      th, td { text-align: left; padding: 5px 10px; border: 1px solid #808080; }
+      th { background: #b4b4b4; }
+      td.num, th.num { text-align: right; font-family: "Courier New", Courier, monospace; white-space: nowrap; }
+      td.name { overflow-wrap: anywhere; }
+      .play {
+        display: inline-block;
+        margin: 8px 0;
+        padding: 8px 22px;
+        background: #2e7d32;
+        color: #fff;
+        font-weight: 700;
+        text-decoration: none;
+        border: 3px solid;
+        border-color: #4caf50 #1b5e20 #1b5e20 #4caf50;
+      }
+      footer { margin-top: 32px; font-size: 13px; color: #404040; border-top: 1px solid #808080; padding-top: 12px; }
+      @media (max-width: 600px) {
+        .page { margin: 0; padding: 16px; border: 0; }
+        h1 { font-size: 26px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <nav><a href="/">Infinite Minesweeper</a> › Leaderboard &amp; world stats</nav>
+      <h1>Leaderboard &amp; World Stats</h1>
+      <p>
+        Everyone in Infinite Minesweeper plays on the same endless board.
+        These numbers cover the whole shared world and update every few
+        minutes.
+      </p>
+      <a class="play" href="/">Play now</a>
+
+      <dl class="grid">
+        <div class="stat"><dt>Players</dt><dd>{{commas .Players}}</dd></div>
+        <div class="stat"><dt>Connected right now</dt><dd>{{commas .Online}}</dd></div>
+        <div class="stat"><dt>Cells revealed</dt><dd>{{commas .CellsRevealed}}</dd></div>
+        <div class="stat"><dt>Mines flagged</dt><dd>{{commas .Flags}}</dd></div>
+        <div class="stat"><dt>Mines exploded</dt><dd>{{commas .Explosions}}</dd></div>
+        <div class="stat"><dt>Chunks explored</dt><dd>{{commas .Chunks}}</dd></div>
+        {{- if .FarthestCells}}
+        <div class="stat"><dt>Farthest from the center</dt><dd>{{commas .FarthestCells}} cells</dd></div>
+        <div class="stat"><dt>World span</dt><dd>{{commas .SpanX}} × {{commas .SpanY}}</dd></div>
+        {{- end}}
+      </dl>
+
+      {{- if .MapWidth}}
+      <h2>Map of the explored world</h2>
+      <figure>
+        <img class="map" src="/stats/world.png" width="{{.MapWidth}}" height="{{.MapHeight}}" loading="lazy" alt="Map of every explored part of the Infinite Minesweeper world, drawn from revealed cells and players' flags" />
+        <figcaption>Every part of the board players have explored so far. Open the minimap in the game to zoom in and jump anywhere.</figcaption>
+      </figure>
+      {{- end}}
+
+      <h2>Top {{len .Top}} players</h2>
+      <table>
+        <tr><th class="num">#</th><th>Player</th><th class="num">Score</th></tr>
+        {{- range $i, $p := .Top}}
+        <tr><td class="num">{{inc $i}}</td><td class="name">{{$p.Name}}</td><td class="num">{{commas $p.Score}}</td></tr>
+        {{- end}}
+      </table>
+
+      <p><a href="/how-to-play/">How scoring works</a></p>
+
+      <footer>
+        Updated {{.UpdatedAt.Format "2006-01-02 15:04"}} UTC.
+        <a href="/">Play Infinite Minesweeper</a> ·
+        <a href="/how-to-play/">How to play</a>
+      </footer>
+    </main>
+  </body>
+</html>
