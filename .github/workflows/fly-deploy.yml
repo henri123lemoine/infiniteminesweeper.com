@@ -25,4 +25,4 @@ jobs:
         run: |
           curl -sS --fail-with-body -X POST https://api.indexnow.org/indexnow \
             -H 'Content-Type: application/json; charset=utf-8' \
-            -d '{"host":"infiniteminesweeper.com","key":"5ecd2023b7cb3cff2e226fb8926a5fa8","keyLocation":"https://infiniteminesweeper.com/5ecd2023b7cb3cff2e226fb8926a5fa8.txt","urlList":["https://infiniteminesweeper.com/","https://infiniteminesweeper.com/how-to-play/"]}'
+            -d '{"host":"infiniteminesweeper.com","key":"5ecd2023b7cb3cff2e226fb8926a5fa8","keyLocation":"https://infiniteminesweeper.com/5ecd2023b7cb3cff2e226fb8926a5fa8.txt","urlList":["https://infiniteminesweeper.com/","https://infiniteminesweeper.com/how-to-play/","https://infiniteminesweeper.com/stats/"]}'

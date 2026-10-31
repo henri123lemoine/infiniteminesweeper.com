@@ -18,6 +18,12 @@ import { CHAINS, achievementById } from "./achievements.js";
 
 const isEmbed = new URLSearchParams(window.location.search).has("embed");
 
+// /@x,y links (from the Share button) open the board centered on that cell.
+const sharedLocation = (() => {
+  const m = window.location.pathname.match(/^\/@(-?\d{1,15}),(-?\d{1,15})\/?$/);
+  return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+})();
+
 // Hand-drawn pixel house in the same style as the flag sprites.
 const HOUSE_PIXELS = [
   ".....##.....",
@@ -1008,10 +1014,57 @@ function App() {
     [centerCameraOnWorld, bumpMainViewMove]
   );
 
-  // On server-suggested spawn, center the camera once
+  // The path is dropped once applied so a reload restores the session's own
+  // position, like any other visit.
+  const sharedLocationAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!sharedLocation || sharedLocationAppliedRef.current) return;
+    sharedLocationAppliedRef.current = true;
+    navigateToWorld(sharedLocation.x, sharedLocation.y);
+    window.history.replaceState(
+      null,
+      "",
+      "/" + window.location.search + window.location.hash
+    );
+  }, [navigateToWorld]);
+
+  const [shareStatus, setShareStatus] = useState("");
+  const shareLocation = useCallback(async () => {
+    const container = containerRef.current;
+    if (!container) return;
+    const z = zoomRef.current;
+    const x = Math.floor(
+      (viewRef.current.x + container.clientWidth / 2 / z) / CELL_SIZE
+    );
+    const y = Math.floor(
+      (viewRef.current.y + container.clientHeight / 2 / z) / CELL_SIZE
+    );
+    const url = `${window.location.origin}/@${x},${y}`;
+    const touch = window.matchMedia?.("(pointer: coarse)").matches;
+    if (touch && navigator.share) {
+      try {
+        await navigator.share({ title: "Infinite Minesweeper", url });
+      } catch {
+        // Dismissing the share sheet rejects; nothing to do.
+      }
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setShareStatus("Link copied");
+    } catch {
+      window.prompt("Copy this link:", url);
+      return;
+    }
+    setTimeout(() => setShareStatus(""), 2000);
+  }, [CELL_SIZE]);
+
+  // On server-suggested spawn, center the camera once. Visitors who arrived
+  // through a location link keep the spot they were sent to.
   const lastAppliedSpawnRef = useRef(0);
   useEffect(() => {
     const maybeApply = () => {
+      if (sharedLocation) return;
       const rec = serverSpawnRef?.current;
       if (!rec) return;
       if (rec.at && rec.at === lastAppliedSpawnRef.current) return;
@@ -1459,6 +1512,9 @@ function App() {
                       findMeToken={lbFindMeToken}
                     />
                   )}
+                <div style={{ marginTop: 10, fontSize: 13 }}>
+                  <a href="/stats/">World stats and map</a>
+                </div>
               </div>
             )}
 
@@ -1617,6 +1673,13 @@ function App() {
             onClick={() => setHelpOpen((v) => !v)}
           >
             {helpOpen ? "Close" : "Help & Scoring"}
+          </button>
+          <button
+            className="help-button"
+            onClick={shareLocation}
+            title="Share a link to this spot on the board"
+          >
+            {shareStatus || "Share"}
           </button>
         </div>
         {helpOpen && (
