@@ -78,9 +78,12 @@ type walPlayerData struct {
 type snapshotData struct {
 	Chunks map[ChunkID]*ChunkBits
 	// Flags is the legacy map encoding, read from pre-2026-07 snapshots and
-	// never written anymore; FlagsV2 is the compact cell-sorted encoding.
+	// never written anymore. FlagsV2 is an entry-list form for callers that
+	// build snapshots by hand; capture and decode use flagSets, which gob
+	// skips (unexported) and the binary format writes as FlagsV2 entries.
 	Flags        map[ChunkID]map[uint32]Flag
 	FlagsV2      map[ChunkID][]FlagEntry
+	flagSets     map[ChunkID]*chunkFlags
 	Territory    map[ChunkID]*chunkTerritory
 	Explosions   map[ChunkID][]ExplosionEntry
 	Scores       map[uint32]int32
@@ -666,9 +669,9 @@ func (s *Server) captureSnapshotData() snapshotData {
 		copied := *cb
 		chunks[cid] = &copied
 	}
-	flags := make(map[ChunkID][]FlagEntry, len(s.flags))
-	for cid, fm := range s.flags {
-		flags[cid] = fm
+	flags := make(map[ChunkID]*chunkFlags, len(s.flags))
+	for cid, cf := range s.flags {
+		flags[cid] = cf
 		s.snapshotSharedFlags[cid] = struct{}{}
 	}
 	territory := make(map[ChunkID]*chunkTerritory, len(s.territory))
@@ -710,7 +713,7 @@ func (s *Server) captureSnapshotData() snapshotData {
 
 	return snapshotData{
 		Chunks:               chunks,
-		FlagsV2:              flags,
+		flagSets:             flags,
 		Territory:            territory,
 		Explosions:           explosions,
 		Scores:               scores,
@@ -807,25 +810,23 @@ func (s *Server) restoreSnapshotData(data snapshotData) {
 	defer s.stateMu.Unlock()
 
 	s.chunks = data.Chunks
-	flagChunks := len(data.FlagsV2)
-	if len(data.Flags) > flagChunks {
-		flagChunks = len(data.Flags)
-	}
-	s.flags = make(map[ChunkID]chunkFlags, flagChunks)
 	clear(s.snapshotSharedFlags)
-	if data.FlagsV2 != nil {
+	switch {
+	case data.flagSets != nil:
+		s.flags = data.flagSets
+	case data.FlagsV2 != nil:
+		s.flags = make(map[ChunkID]*chunkFlags, len(data.FlagsV2))
 		for cid, entries := range data.FlagsV2 {
-			cf := chunkFlags(entries)
-			slices.SortFunc(cf, func(a, b FlagEntry) int { return int(a.Cell) - int(b.Cell) })
-			s.flags[cid] = cf
+			s.flags[cid] = newChunkFlags(entries)
 		}
-	} else {
+	default:
+		s.flags = make(map[ChunkID]*chunkFlags, len(data.Flags))
 		for cid, fm := range data.Flags {
-			cf := make(chunkFlags, 0, len(fm))
+			entries := make([]FlagEntry, 0, len(fm))
 			for cell, f := range fm {
-				cf = cf.set(cell, f)
+				entries = append(entries, FlagEntry{Cell: uint16(cell), FlagID: uint16(f.FlagID), Owner: f.Owner})
 			}
-			s.flags[cid] = cf
+			s.flags[cid] = newChunkFlags(entries)
 		}
 	}
 	if data.Territory != nil {
@@ -1012,7 +1013,7 @@ func (s *Server) logStartupSummary(context string) {
 	// Count flags across all chunks
 	var flagsTotal int
 	for _, fm := range s.flags {
-		flagsTotal += len(fm)
+		flagsTotal += fm.len()
 	}
 	players := len(s.scores)
 	walSeq := s.walSeq

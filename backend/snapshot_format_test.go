@@ -47,13 +47,26 @@ func sampleSnapshotData() snapshotData {
 	}
 }
 
+// snapshotFlagEntries returns a snapshot's flags as entry lists, whichever
+// form it carries.
+func snapshotFlagEntries(d snapshotData) map[ChunkID][]FlagEntry {
+	if d.flagSets == nil {
+		return d.FlagsV2
+	}
+	out := make(map[ChunkID][]FlagEntry, len(d.flagSets))
+	for cid, cf := range d.flagSets {
+		out[cid] = cf.entries()
+	}
+	return out
+}
+
 func assertSnapshotEqual(t *testing.T, want, got snapshotData) {
 	t.Helper()
 	if !reflect.DeepEqual(want.Chunks, got.Chunks) {
 		t.Errorf("Chunks mismatch")
 	}
-	if !reflect.DeepEqual(want.FlagsV2, got.FlagsV2) {
-		t.Errorf("FlagsV2 mismatch: want %v got %v", want.FlagsV2, got.FlagsV2)
+	if w, g := snapshotFlagEntries(want), snapshotFlagEntries(got); !reflect.DeepEqual(w, g) {
+		t.Errorf("flags mismatch: want %v got %v", w, g)
 	}
 	if !reflect.DeepEqual(want.Territory, got.Territory) {
 		t.Errorf("Territory mismatch")

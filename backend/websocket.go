@@ -910,13 +910,12 @@ func (s *Server) getChunkSyncEntry(chunkID ChunkID) *chunkSyncEntry {
 	// revealed on the wire for compression) + group by flag ID. Cells are
 	// always in [0, 4096) so the old bounds check was dead.
 	groups := make(map[uint32]*pb.RevealedCells)
-	for _, fe := range flagsMap {
-		cell := uint32(fe.Cell)
+	for cell, flag := range flagsMap.all() {
 		bits[cell/ChunkSize] |= 1 << (cell % ChunkSize)
-		g := groups[uint32(fe.FlagID)]
+		g := groups[flag.FlagID]
 		if g == nil {
 			g = &pb.RevealedCells{}
-			groups[uint32(fe.FlagID)] = g
+			groups[flag.FlagID] = g
 		}
 		g.Cells = append(g.Cells, cell)
 	}
