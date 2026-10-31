@@ -1233,14 +1233,6 @@ func findAnotherNonMineCell(server *Server, chunkX, chunkY int64, excludeCell ui
 	return ^uint32(0) // Not found
 }
 
-// Helper max function for int32
-func max(a, b int32) int32 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 // TestServerClientMineCountMismatch reproduces the bug where frontend shows wrong adjacent mine counts
 // This happens when adjacent chunks aren't cached, causing countAdjacentMines to undercount
 func TestServerClientMineCountMismatch(t *testing.T) {
