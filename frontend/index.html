@@ -61,9 +61,14 @@
     </script>
 
     <style>
+      /* Fixed so #root keeps its position when React swaps this out; an
+         in-flow margin moved #root and counted as layout shift (CLS). */
       .prerender {
-        max-width: 560px;
-        margin: 15vh auto 0;
+        position: fixed;
+        top: 15vh;
+        left: 50%;
+        transform: translateX(-50%);
+        width: min(560px, calc(100% - 32px));
         padding: 20px 24px;
         background: #c0c0c0;
         border: 3px solid;
@@ -88,7 +93,10 @@
           Reveal cells, flag mines, earn advancements and climb the global
           leaderboard. Free in your browser, no download or sign-up.
         </p>
-        <p><a href="/how-to-play/">How to play, scoring and FAQ</a></p>
+        <p>
+          <a href="/how-to-play/">How to play, scoring and FAQ</a> ·
+          <a href="/stats/">Leaderboard and world stats</a>
+        </p>
       </main>
     </div>
     <noscript>
