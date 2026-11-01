@@ -1272,10 +1272,14 @@ func (s *Server) removePlayer(p *Player) {
 	s.stateMu.Lock()
 	delete(s.overviewSubs, p)
 	// Per-ID state belongs to the newer connection once this one is displaced.
-	if inSet && !hasRemainingConnections {
+	lastConnection := inSet && !hasRemainingConnections
+	if lastConnection {
 		s.clearSubscriptionsLocked(p.ID)
 	}
 	s.stateMu.Unlock()
+	if lastConnection {
+		s.releaseActionBudget(p.ID, time.Now())
+	}
 
 	log.Printf("Player %d disconnected", p.ID)
 }
@@ -1359,6 +1363,45 @@ func (s *Server) takeAction(playerID uint32, now time.Time) (ok bool, until time
 	b.suspendedUntil = now.Add(s.suspension.duration)
 	log.Printf("Player %d suspended for botting until %s", playerID, b.suspendedUntil.Format(time.RFC3339))
 	return false, b.suspendedUntil
+}
+
+// releaseActionBudget drops a disconnected player's budget once it is fresh,
+// or schedules a retry for when it will be.
+func (s *Server) releaseActionBudget(playerID uint32, now time.Time) {
+	s.actionBucketsMu.Lock()
+	defer s.actionBucketsMu.Unlock()
+	b := s.actionBuckets[playerID]
+	if b == nil {
+		return
+	}
+	ready := b.freshAt(s.suspension.resetAfter)
+	if now.After(ready) {
+		delete(s.actionBuckets, playerID)
+		return
+	}
+	if b.releasePending {
+		return
+	}
+	b.releasePending = true
+	time.AfterFunc(ready.Sub(now)+time.Millisecond, func() { s.retryReleaseActionBudget(playerID) })
+}
+
+// A player who reconnected keeps their budget; their next disconnect
+// schedules a new release.
+func (s *Server) retryReleaseActionBudget(playerID uint32) {
+	s.playersMu.RLock()
+	connected := len(s.players[playerID]) > 0
+	s.playersMu.RUnlock()
+
+	s.actionBucketsMu.Lock()
+	if b := s.actionBuckets[playerID]; b != nil {
+		b.releasePending = false
+	}
+	s.actionBucketsMu.Unlock()
+
+	if !connected {
+		s.releaseActionBudget(playerID, time.Now())
+	}
 }
 
 func (s *Server) suspendedUntil(playerID uint32, now time.Time) (time.Time, bool) {

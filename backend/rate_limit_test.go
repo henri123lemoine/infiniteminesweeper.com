@@ -284,3 +284,56 @@ func TestSuspendedPlayerIsDisconnectedAndCannotRejoin(t *testing.T) {
 	}
 	expectClose(c2)
 }
+
+func TestActionBudgetReleasedOnceFresh(t *testing.T) {
+	s := NewServer()
+	s.actionLimit = rateLimit{capacity: 2, refillEvery: 100 * time.Millisecond}
+	s.suspension = suspensionPolicy{strikes: 2, resetAfter: time.Second, duration: time.Hour}
+	t0 := time.Unix(1000, 0)
+	has := func(id uint32) bool {
+		s.actionBucketsMu.Lock()
+		defer s.actionBucketsMu.Unlock()
+		return s.actionBuckets[id] != nil
+	}
+
+	s.takeAction(1, t0)
+	s.releaseActionBudget(1, t0)
+	if !has(1) {
+		t.Fatal("a partly spent budget must survive disconnect")
+	}
+	s.releaseActionBudget(1, t0.Add(time.Second))
+	if has(1) {
+		t.Fatal("a refilled budget should be released")
+	}
+
+	for range 4 {
+		s.takeAction(2, t0)
+	}
+	s.releaseActionBudget(2, t0.Add(30*time.Minute))
+	if !has(2) {
+		t.Fatal("a suspension must survive disconnect")
+	}
+	s.releaseActionBudget(2, t0.Add(2*time.Hour))
+	if has(2) {
+		t.Fatal("an expired suspension should be released")
+	}
+}
+
+func TestActionBudgetReleaseRetriesAfterRefill(t *testing.T) {
+	s := NewServer()
+	s.actionLimit = rateLimit{capacity: 1, refillEvery: 20 * time.Millisecond}
+	s.takeAction(1, time.Now())
+	s.releaseActionBudget(1, time.Now())
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s.actionBucketsMu.Lock()
+		gone := s.actionBuckets[1] == nil
+		s.actionBucketsMu.Unlock()
+		if gone {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("budget was never released after refilling")
+}

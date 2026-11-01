@@ -156,6 +156,23 @@ type actionBudget struct {
 	strikes        int
 	lastStrike     time.Time
 	suspendedUntil time.Time
+	releasePending bool
+}
+
+// freshAt is when this budget becomes indistinguishable from a new one, so it
+// can be dropped without letting a reconnect skip a refill or suspension.
+func (b *actionBudget) freshAt(resetAfter time.Duration) time.Time {
+	t := b.suspendedUntil
+	tb := b.bucket
+	if full := tb.lastRefill.Add(time.Duration(tb.capacity-tb.tokens) * tb.refillEvery); full.After(t) {
+		t = full
+	}
+	if b.strikes > 0 {
+		if r := b.lastStrike.Add(resetAfter); r.After(t) {
+			t = r
+		}
+	}
+	return t
 }
 
 func newTokenBucket(l rateLimit) TokenBucket {
