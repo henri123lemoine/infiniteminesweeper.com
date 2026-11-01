@@ -173,6 +173,7 @@ func TestMemoryUsageUnderLoad(t *testing.T) {
 func TestChunkGenerationPerformance(t *testing.T) {
 	server, wsURL, cleanup := setupTestServer(t)
 	defer cleanup()
+	server.actionLimit.capacity = 1 << 20
 
 	client := NewTestClient(t, wsURL, "perftest")
 	defer client.Close()

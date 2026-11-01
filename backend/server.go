@@ -83,7 +83,15 @@ type Server struct {
 	// Ephemeral spectator IDs (separate space, no identity/state persisted)
 	nextSpectatorID uint32
 	sessionTokens   map[string]uint32 // session_token -> playerID
-	botIDs          map[uint32]bool   // track which player IDs are bots
+
+	// Keyed by player ID rather than connection so reconnecting doesn't
+	// refill the budget.
+	actionBucketsMu sync.Mutex
+	actionBuckets   map[uint32]*actionBudget
+	actionLimit     rateLimit
+	suspension      suspensionPolicy
+	chunkLimit      rateLimit
+	botIDs          map[uint32]bool // track which player IDs are bots
 
 	// Seed cache for performance
 	seedCache   map[ChunkID]uint64
@@ -178,6 +186,10 @@ func NewServer() *Server {
 		unlockedFlags:        make(map[uint32]map[uint32]bool),
 		advSyncLast:          make(map[uint32]time.Time),
 		sessionTokens:        make(map[string]uint32), // Initialize the new map
+		actionBuckets:        make(map[uint32]*actionBudget),
+		actionLimit:          defaultActionLimit,
+		suspension:           defaultSuspension,
+		chunkLimit:           defaultChunkLimit,
 		botIDs:               make(map[uint32]bool),
 		seedCache:            make(map[ChunkID]uint64),
 		densityCache:         make(map[ChunkID]float64),

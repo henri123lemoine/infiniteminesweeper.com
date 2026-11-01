@@ -139,6 +139,9 @@ message RevealAck {
 
   // The user's current global rank (1-based). Only sent if `ok` is true.
   uint32 user_rank = 7;
+
+  // Set with ok=false when the action was dropped by the per-player rate limit.
+  bool rate_limited = 8;
 }
 
 // Authoritative state update for a chunk, sent to all subscribers.

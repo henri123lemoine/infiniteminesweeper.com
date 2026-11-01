@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -86,14 +87,13 @@ type PlayerView struct {
 }
 
 type Player struct {
-	ID          uint32
-	Conn        *websocket.Conn
-	Send        chan []byte
-	Mailbox     chan func(*Player) // actor channel
-	TokenBucket TokenBucket
-	Name        string
-	FlagID      uint32
-	View        PlayerView
+	ID      uint32
+	Conn    *websocket.Conn
+	Send    chan []byte
+	Mailbox chan func(*Player) // actor channel
+	Name    string
+	FlagID  uint32
+	View    PlayerView
 
 	// FSM state - determines what messages this client can send/receive
 	State ClientState
@@ -107,39 +107,110 @@ type Player struct {
 	// outbound-drop counter (closes WS after 32 consecutive drops)
 	dropMisses int
 
+	// Readpump-owned: chunk subscription budget and the last view rect it
+	// fully covered, so repeated identical ViewUpdates skip the state lock.
+	chunkBucket   TokenBucket
+	lastViewRect  [4]int64
+	lastViewValid bool
+
+	// Set when a newer login for the same player takes over this connection.
+	displaced atomic.Bool
+
 	done chan struct{} // closed when player is fully removed
 }
 
-// TokenBucket for rate limiting seed requests (200/min). Only touched from
-// the owning connection's readPump goroutine, so no locking.
+// TokenBucket is not safe for concurrent use; the owner provides locking.
 type TokenBucket struct {
-	tokens     int
-	lastRefill time.Time
+	capacity    int
+	refillEvery time.Duration
+	tokens      int
+	lastRefill  time.Time
 }
 
-const (
-	seedRequestBucketCap = 200
-	seedRequestRefillPer = time.Minute / seedRequestBucketCap
+type rateLimit struct {
+	capacity    int
+	refillEvery time.Duration
+}
+
+// Reveals, flags and chords each cost one action token. Chunk tokens are
+// spent per newly subscribed chunk; the burst covers one full
+// max-zoom-out view (56x56 chunks).
+var (
+	defaultActionLimit = rateLimit{capacity: 40, refillEvery: time.Second / 10}
+	defaultChunkLimit  = rateLimit{capacity: 4096, refillEvery: time.Second / 400}
 )
 
-// take refills based on elapsed time, then consumes one token. Returns false
-// when the bucket is empty (caller should drop the request).
-func (tb *TokenBucket) take(now time.Time) bool {
+// Rate-limited actions are strikes; a streak of strikes with no quiet gap of
+// resetAfter suspends the player. A human needs >10 clicks/s sustained well
+// past the burst to get anywhere near this.
+type suspensionPolicy struct {
+	strikes    int
+	resetAfter time.Duration
+	duration   time.Duration
+}
+
+var defaultSuspension = suspensionPolicy{strikes: 100, resetAfter: 10 * time.Second, duration: time.Hour}
+
+type actionBudget struct {
+	bucket         TokenBucket
+	strikes        int
+	lastStrike     time.Time
+	suspendedUntil time.Time
+	releasePending bool
+}
+
+// freshAt is when this budget becomes indistinguishable from a new one, so it
+// can be dropped without letting a reconnect skip a refill or suspension.
+func (b *actionBudget) freshAt(resetAfter time.Duration) time.Time {
+	t := b.suspendedUntil
+	tb := b.bucket
+	if full := tb.lastRefill.Add(time.Duration(tb.capacity-tb.tokens) * tb.refillEvery); full.After(t) {
+		t = full
+	}
+	if b.strikes > 0 {
+		if r := b.lastStrike.Add(resetAfter); r.After(t) {
+			t = r
+		}
+	}
+	return t
+}
+
+func newTokenBucket(l rateLimit) TokenBucket {
+	return TokenBucket{capacity: l.capacity, refillEvery: l.refillEvery, tokens: l.capacity}
+}
+
+func (tb *TokenBucket) refill(now time.Time) {
 	if tb.lastRefill.IsZero() {
 		tb.lastRefill = now
+		return
 	}
-	if refill := int(now.Sub(tb.lastRefill) / seedRequestRefillPer); refill > 0 {
-		tb.tokens += refill
-		if tb.tokens > seedRequestBucketCap {
-			tb.tokens = seedRequestBucketCap
-		}
-		tb.lastRefill = tb.lastRefill.Add(time.Duration(refill) * seedRequestRefillPer)
+	n := int(now.Sub(tb.lastRefill) / tb.refillEvery)
+	if n <= 0 {
+		return
 	}
-	if tb.tokens <= 0 {
-		return false
+	tb.tokens = min(tb.tokens+n, tb.capacity)
+	if tb.tokens == tb.capacity {
+		tb.lastRefill = now
+	} else {
+		tb.lastRefill = tb.lastRefill.Add(time.Duration(n) * tb.refillEvery)
 	}
-	tb.tokens--
-	return true
+}
+
+// take consumes one token, or returns false when the bucket is empty.
+func (tb *TokenBucket) take(now time.Time) bool {
+	return tb.takeUpTo(now, 1) == 1
+}
+
+// takeUpTo consumes as many of n tokens as are available and returns how
+// many it got.
+func (tb *TokenBucket) takeUpTo(now time.Time, n int) int {
+	tb.refill(now)
+	got := min(n, tb.tokens)
+	if got < 0 {
+		got = 0
+	}
+	tb.tokens -= got
+	return got
 }
 
 // Convert internal ClientState to protobuf ClientState

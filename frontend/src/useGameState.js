@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import pako from "pako";
 import { ms as PB } from "./gen/messages_pb.js";
 import {
@@ -206,6 +206,7 @@ export const useGameState = () => {
     at: 0,
   });
   const MIN_VIEW_SEND_INTERVAL_MS = 220;
+  const lastViewParamsRef = useRef(null);
   const [leaderboard, setLeaderboard] = useState([]);
   const [playerScore, setPlayerScore] = useState(0);
   const [playerStreak, setPlayerStreak] = useState(0);
@@ -219,6 +220,11 @@ export const useGameState = () => {
     useState(0);
   const [updateError, setUpdateError] = useState("");
   const [joinError, setJoinError] = useState("");
+  // True after the server closed us because this player logged in elsewhere.
+  const [displaced, setDisplaced] = useState(false);
+  const displacedRef = useRef(false);
+  // Unix ms the bot-suspension ends, or 0.
+  const [suspendedUntil, setSuspendedUntil] = useState(0);
   // Advancements: lifetime stats + unlock sets synced on join, toasts on unlock
   const [advStats, setAdvStats] = useState(null);
   const [unlockedAdvIds, setUnlockedAdvIds] = useState([]);
@@ -673,6 +679,8 @@ export const useGameState = () => {
   }, []);
   const playerFlagsRef = useRef(new Map());
   const optimisticActions = useRef(new Map());
+  const lastActionPosRef = useRef(null);
+  const lastRateLimitPopupRef = useRef(0);
   // Strictly increasing request IDs: two clicks in the same millisecond must
   // not share an optimisticActions key (the wire type is uint64).
   const lastRequestIdRef = useRef(0);
@@ -1059,6 +1067,7 @@ export const useGameState = () => {
             return;
           }
           if (__DEV__) console.log("OUTGOING(viewUpdate)", p);
+          lastViewParamsRef.current = p;
           s.send(
             encodeMsg({
               viewUpdate: {
@@ -1073,6 +1082,24 @@ export const useGameState = () => {
       };
     })()
   );
+
+  // The server trims ViewUpdates that exceed its chunk budget; resending the
+  // unchanged view lets it finish loading. Unchanged, fully loaded views are
+  // a no-op server-side.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const p = lastViewParamsRef.current;
+      if (p)
+        sendViewUpdate.current(
+          p.chunkX,
+          p.chunkY,
+          p.cell,
+          p.widthCells,
+          p.heightCells
+        );
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // Return true if all chunks intersecting a Chebyshev radius (default 2) are known (we have their seed)
   const isRadiusFullyKnown = useCallback(
@@ -1180,6 +1207,7 @@ export const useGameState = () => {
         return;
       }
 
+      lastActionPosRef.current = { worldX, worldY };
       lastRequestIdRef.current = Math.max(
         Date.now(),
         lastRequestIdRef.current + 1
@@ -1450,6 +1478,17 @@ export const useGameState = () => {
       if (!didJoinAck) {
         setUsername("");
       }
+      // Reconnecting would log the other session out in turn.
+      if (event.code === 4001) {
+        connectionEnabledRef.current = false;
+        displacedRef.current = true;
+        setDisplaced(true);
+      }
+      if (event.code === 4002) {
+        connectionEnabledRef.current = false;
+        displacedRef.current = true;
+        setSuspendedUntil(Number(event.reason) * 1000 || Date.now());
+      }
       if (connectionEnabledRef.current) {
         const retryDelay = Math.min(
           10000,
@@ -1661,6 +1700,15 @@ export const useGameState = () => {
 
         // 2) Clean up optimistic record
         optimisticActions.current.delete(requestId);
+
+        if (data.rateLimited) {
+          const pos = lastActionPosRef.current;
+          const now = performance.now();
+          if (pos && now - lastRateLimitPopupRef.current > 1000) {
+            lastRateLimitPopupRef.current = now;
+            pushHintPopup(pos.worldX, pos.worldY, "Slow down! Too many clicks");
+          }
+        }
 
         // 3) If the server accepted, apply the canonical change
         if (ok) {
@@ -2002,6 +2050,13 @@ export const useGameState = () => {
     [ws, connected]
   );
 
+  const reclaimSession = useCallback(() => {
+    displacedRef.current = false;
+    setDisplaced(false);
+    setSuspendedUntil(0);
+    connectWebSocket();
+  }, [connectWebSocket]);
+
   const disconnect = useCallback(() => {
     connectionEnabledRef.current = false;
     clearTimeout(reconnectTimerRef.current);
@@ -2079,7 +2134,7 @@ export const useGameState = () => {
 
   // Handle page visibility changes for mobile reconnection
   const handleVisibilityChange = useCallback(() => {
-    if (document.visibilityState === "visible") {
+    if (document.visibilityState === "visible" && !displacedRef.current) {
       // Page became visible - check if we need to reconnect
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
         // Only reconnect if we have stored credentials (user was previously connected)
@@ -2127,6 +2182,9 @@ export const useGameState = () => {
     joinError,
     serverFlagID,
     disconnect,
+    displaced,
+    suspendedUntil,
+    reclaimSession,
     // Advancements
     advStats,
     unlockedAdvIds,

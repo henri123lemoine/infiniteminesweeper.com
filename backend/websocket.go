@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -39,6 +40,13 @@ func clampInt(v, lo, hi int) int {
 	}
 	if v > hi {
 		return hi
+	}
+	return v
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
 	}
 	return v
 }
@@ -180,7 +188,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Conn:        conn,
 		Send:        make(chan []byte, SendBufSize),
 		Mailbox:     make(chan func(*Player), 64),
-		TokenBucket: TokenBucket{tokens: 200},
+		chunkBucket: newTokenBucket(s.chunkLimit),
 		Name:        "", // no identity in spectator mode
 		FlagID:      0,
 		Score:       0,
@@ -228,6 +236,10 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	if join.SessionToken != "" {
 		// Try to reconnect to existing identity
 		pid, ok := s.sessionTokens[join.SessionToken]
+		if until, suspended := s.suspendedUntil(pid, time.Now()); ok && suspended {
+			go closeSuspended(player.Conn, until)
+			return
+		}
 		if ok {
 			playerID = pid
 			sessionToken = join.SessionToken
@@ -346,38 +358,25 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 			delete(s.players, oldID)
 		}
 	}
-	if s.players[playerID] == nil {
-		s.players[playerID] = make(map[*Player]struct{})
+	// One live connection per player: the newest login wins.
+	var displaced []*Player
+	for other := range s.players[playerID] {
+		other.displaced.Store(true)
+		displaced = append(displaced, other)
 	}
-	s.players[playerID][player] = struct{}{}
+	s.players[playerID] = map[*Player]struct{}{player: {}}
 	player.ID = playerID
+	player.lastViewValid = false
 	s.playersMu.Unlock()
 
-	// Clear spectator ID's accumulated state (we hold stateMu here).
-	if _, exists := s.playerViews[oldID]; exists {
-		delete(s.playerViews, oldID)
-		s.playerViewsVersion++
-	}
-	delete(s.playerSubs, oldID)
-	delete(s.playerSubLastSeen, oldID)
-	delete(s.minimapPlayerRes, oldID)
-	delete(s.minimapSubCount, oldID)
-	for cid, set := range s.subs {
-		if _, ok := set[oldID]; ok {
-			delete(set, oldID)
-			if len(set) == 0 {
-				delete(s.subs, cid)
-			}
+	s.clearSubscriptionsLocked(oldID)
+	if len(displaced) > 0 {
+		s.clearSubscriptionsLocked(playerID)
+		for _, other := range displaced {
+			delete(s.overviewSubs, other)
+			go closeDisplaced(other.Conn)
 		}
-	}
-	for cid, set := range s.minimapSubs {
-		if _, ok := set[oldID]; ok {
-			delete(set, oldID)
-			if len(set) == 0 {
-				delete(s.minimapSubs, cid)
-				delete(s.minimapTiles, cid)
-			}
-		}
+		log.Printf("Player %d logged in elsewhere; closed %d older connection(s)", playerID, len(displaced))
 	}
 
 	s.lbDirty = true
@@ -575,7 +574,7 @@ func (s *Server) readPump(player *Player) {
 
 	for {
 		_, data, err := player.Conn.ReadMessage()
-		if err != nil {
+		if err != nil || player.displaced.Load() {
 			break
 		}
 
@@ -639,9 +638,19 @@ func (s *Server) readPump(player *Player) {
 				continue
 			}
 			chunkID := ChunkID{X: r.ChunkId.X, Y: r.ChunkId.Y}
+			if ok, until := s.takeAction(player.ID, time.Now()); !ok {
+				// ok=false makes the client roll back its optimistic update.
+				s.sendRevealAck(player.ID, r.RequestId, false, &pb.RevealAck{RateLimited: true}, 0, chunkID, r.Cell)
+				if !until.IsZero() {
+					closeSuspended(player.Conn, until)
+					return
+				}
+				continue
+			}
 
 			// Serialize all actions from this player through the per-player mailbox for ordering.
-			player.Mailbox <- func(*Player) {
+			select {
+			case player.Mailbox <- func(*Player) {
 				s.handleReveal(
 					player.ID,
 					r.RequestId,
@@ -650,12 +659,15 @@ func (s *Server) readPump(player *Player) {
 					r.IsRightClick,
 					r.IsChord,
 				)
+			}:
+			case <-player.done:
 			}
 		case *pb.Msg_Subscribe:
 			m := t.Subscribe
-			if m.ChunkId == nil {
+			if m.ChunkId == nil || !player.chunkBucket.take(time.Now()) {
 				continue
 			}
+			player.lastViewValid = false // LRU eviction may drop in-view chunks
 			s.subscribeToChunk(player.ID, ChunkID{X: m.ChunkId.X, Y: m.ChunkId.Y})
 
 		case *pb.Msg_Unsubscribe:
@@ -663,6 +675,7 @@ func (s *Server) readPump(player *Player) {
 			if m.ChunkId == nil {
 				continue
 			}
+			player.lastViewValid = false
 			s.unsubscribeFromChunk(player.ID, ChunkID{X: m.ChunkId.X, Y: m.ChunkId.Y})
 
 		case *pb.Msg_ViewUpdate:
@@ -715,6 +728,11 @@ func (s *Server) readPump(player *Player) {
 			endX := startX + int64(chunksWide) - 1
 			endY := startY + int64(chunksHigh) - 1
 
+			rect := [4]int64{startX, startY, endX, endY}
+			if player.lastViewValid && player.lastViewRect == rect {
+				continue
+			}
+
 			// Build new desired set (viewport)
 			newSet := make(map[ChunkID]struct{}, chunksWide*chunksHigh)
 			for cy := startY; cy <= endY; cy++ {
@@ -740,17 +758,34 @@ func (s *Server) readPump(player *Player) {
 			adds := make([]ChunkID, 0)
 			for cid := range newSet {
 				if _, ok := current[cid]; !ok {
-					// Subscribe to this chunk
-					if s.subs[cid] == nil {
-						s.subs[cid] = make(map[uint32]struct{})
-					}
-					s.subs[cid][player.ID] = struct{}{}
-					current[cid] = struct{}{}
 					adds = append(adds, cid)
 				}
-				// Update recency for everything in view
-				s.subTick++
-				lastSeen[cid] = s.subTick
+			}
+			// Over budget: load nearest-to-center first. The rest stay
+			// unsubscribed and are picked up by the client's next ViewUpdate.
+			granted := player.chunkBucket.takeUpTo(time.Now(), len(adds))
+			player.lastViewRect = rect
+			player.lastViewValid = granted == len(adds)
+			if granted < len(adds) {
+				dist := func(c ChunkID) int64 {
+					return abs64(c.X-centerChunkX) + abs64(c.Y-centerChunkY)
+				}
+				sort.Slice(adds, func(i, j int) bool { return dist(adds[i]) < dist(adds[j]) })
+				adds = adds[:granted]
+			}
+			for _, cid := range adds {
+				if s.subs[cid] == nil {
+					s.subs[cid] = make(map[uint32]struct{})
+				}
+				s.subs[cid][player.ID] = struct{}{}
+				current[cid] = struct{}{}
+			}
+			// Update recency for everything subscribed in view
+			for cid := range newSet {
+				if _, ok := current[cid]; ok {
+					s.subTick++
+					lastSeen[cid] = s.subTick
+				}
 			}
 
 			// Drop subscriptions well outside the view rect. A stale far sub
@@ -872,7 +907,7 @@ func (s *Server) readPump(player *Player) {
 			}
 		case *pb.Msg_SeedRequest:
 			m := t.SeedRequest
-			if m != nil && player.TokenBucket.take(time.Now()) {
+			if m != nil && player.chunkBucket.take(time.Now()) {
 				s.handleSeedRequest(player.ID, m.ChunkIds)
 			}
 		}
@@ -1213,12 +1248,11 @@ func (s *Server) unsubscribeFromChunk(playerID uint32, chunkID ChunkID) {
 
 func (s *Server) removePlayer(p *Player) {
 	s.playersMu.Lock()
+	inSet := false
 	hasRemainingConnections := false
 	if set, ok := s.players[p.ID]; ok {
 		if _, exists := set[p]; exists {
-			// Signal all producers/consumers to stop. Send and Mailbox are
-			// deliberately left open (see handleWebSocket).
-			close(p.done)
+			inSet = true
 			delete(set, p)
 			if len(set) == 0 {
 				delete(s.players, p.ID)
@@ -1227,47 +1261,156 @@ func (s *Server) removePlayer(p *Player) {
 			}
 		}
 	}
+	// Signal all producers/consumers to stop. Send and Mailbox are
+	// deliberately left open (see handleWebSocket). A displaced connection
+	// was already dropped from the set by handleJoin but still owns p.done.
+	if inSet || p.displaced.Load() {
+		close(p.done)
+	}
 	s.playersMu.Unlock()
 
-	// Only clear subscriptions if no other connections remain for this playerID
-	if !hasRemainingConnections {
-		s.stateMu.Lock()
-		for chunkID, subs := range s.subs {
-			if _, exists := subs[p.ID]; exists {
-				delete(subs, p.ID)
-				if len(subs) == 0 {
-					delete(s.subs, chunkID)
-				}
-			}
-		}
-		for chunkID, subs := range s.minimapSubs {
-			if _, exists := subs[p.ID]; exists {
-				delete(subs, p.ID)
-				if len(subs) == 0 {
-					delete(s.minimapSubs, chunkID)
-					delete(s.minimapTiles, chunkID)
-					delete(s.minimapDirtyTiles, chunkID)
-				}
-			}
-		}
-		// Clear reverse index for this player so next connection starts fresh
-		delete(s.playerSubs, p.ID)
-		delete(s.playerSubLastSeen, p.ID)
-		delete(s.minimapPlayerRes, p.ID)
-		delete(s.minimapSubCount, p.ID)
-		delete(s.overviewSubs, p)
-		if _, exists := s.playerViews[p.ID]; exists {
-			delete(s.playerViews, p.ID)
-			s.playerViewsVersion++
-		}
-		s.stateMu.Unlock()
-	} else {
-		s.stateMu.Lock()
-		delete(s.overviewSubs, p)
-		s.stateMu.Unlock()
+	s.stateMu.Lock()
+	delete(s.overviewSubs, p)
+	// Per-ID state belongs to the newer connection once this one is displaced.
+	lastConnection := inSet && !hasRemainingConnections
+	if lastConnection {
+		s.clearSubscriptionsLocked(p.ID)
+	}
+	s.stateMu.Unlock()
+	if lastConnection {
+		s.releaseActionBudget(p.ID, time.Now())
 	}
 
 	log.Printf("Player %d disconnected", p.ID)
+}
+
+// clearSubscriptionsLocked drops every chunk/minimap subscription and the
+// view position held under id. Caller holds stateMu.
+func (s *Server) clearSubscriptionsLocked(id uint32) {
+	for chunkID, subs := range s.subs {
+		if _, exists := subs[id]; exists {
+			delete(subs, id)
+			if len(subs) == 0 {
+				delete(s.subs, chunkID)
+			}
+		}
+	}
+	for chunkID, subs := range s.minimapSubs {
+		if _, exists := subs[id]; exists {
+			delete(subs, id)
+			if len(subs) == 0 {
+				delete(s.minimapSubs, chunkID)
+				delete(s.minimapTiles, chunkID)
+				delete(s.minimapDirtyTiles, chunkID)
+			}
+		}
+	}
+	delete(s.playerSubs, id)
+	delete(s.playerSubLastSeen, id)
+	delete(s.minimapPlayerRes, id)
+	delete(s.minimapSubCount, id)
+	if _, exists := s.playerViews[id]; exists {
+		delete(s.playerViews, id)
+		s.playerViewsVersion++
+	}
+}
+
+// closeDisplacedCode tells the client it was logged in elsewhere, so it
+// must not auto-reconnect (which would displace the other session back).
+const closeDisplacedCode = 4001
+
+func closeDisplaced(conn *websocket.Conn) {
+	msg := websocket.FormatCloseMessage(closeDisplacedCode, "logged in elsewhere")
+	_ = conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
+	conn.Close()
+}
+
+// closeSuspendedCode tells the client it was suspended for botting; the
+// close reason carries the expiry as unix seconds.
+const closeSuspendedCode = 4002
+
+func closeSuspended(conn *websocket.Conn, until time.Time) {
+	msg := websocket.FormatCloseMessage(closeSuspendedCode, strconv.FormatInt(until.Unix(), 10))
+	_ = conn.WriteControl(websocket.CloseMessage, msg, time.Now().Add(time.Second))
+	conn.Close()
+}
+
+// takeAction spends one reveal/flag/chord token from playerID's budget. A
+// non-zero until means the player is (now) suspended.
+func (s *Server) takeAction(playerID uint32, now time.Time) (ok bool, until time.Time) {
+	s.actionBucketsMu.Lock()
+	defer s.actionBucketsMu.Unlock()
+	b := s.actionBuckets[playerID]
+	if b == nil {
+		b = &actionBudget{bucket: newTokenBucket(s.actionLimit)}
+		s.actionBuckets[playerID] = b
+	}
+	if now.Before(b.suspendedUntil) {
+		return false, b.suspendedUntil
+	}
+	if b.bucket.take(now) {
+		return true, time.Time{}
+	}
+	if now.Sub(b.lastStrike) > s.suspension.resetAfter {
+		b.strikes = 0
+	}
+	b.strikes++
+	b.lastStrike = now
+	if b.strikes < s.suspension.strikes {
+		return false, time.Time{}
+	}
+	b.strikes = 0
+	b.suspendedUntil = now.Add(s.suspension.duration)
+	log.Printf("Player %d suspended for botting until %s", playerID, b.suspendedUntil.Format(time.RFC3339))
+	return false, b.suspendedUntil
+}
+
+// releaseActionBudget drops a disconnected player's budget once it is fresh,
+// or schedules a retry for when it will be.
+func (s *Server) releaseActionBudget(playerID uint32, now time.Time) {
+	s.actionBucketsMu.Lock()
+	defer s.actionBucketsMu.Unlock()
+	b := s.actionBuckets[playerID]
+	if b == nil {
+		return
+	}
+	ready := b.freshAt(s.suspension.resetAfter)
+	if now.After(ready) {
+		delete(s.actionBuckets, playerID)
+		return
+	}
+	if b.releasePending {
+		return
+	}
+	b.releasePending = true
+	time.AfterFunc(ready.Sub(now)+time.Millisecond, func() { s.retryReleaseActionBudget(playerID) })
+}
+
+// A player who reconnected keeps their budget; their next disconnect
+// schedules a new release.
+func (s *Server) retryReleaseActionBudget(playerID uint32) {
+	s.playersMu.RLock()
+	connected := len(s.players[playerID]) > 0
+	s.playersMu.RUnlock()
+
+	s.actionBucketsMu.Lock()
+	if b := s.actionBuckets[playerID]; b != nil {
+		b.releasePending = false
+	}
+	s.actionBucketsMu.Unlock()
+
+	if !connected {
+		s.releaseActionBudget(playerID, time.Now())
+	}
+}
+
+func (s *Server) suspendedUntil(playerID uint32, now time.Time) (time.Time, bool) {
+	s.actionBucketsMu.Lock()
+	defer s.actionBucketsMu.Unlock()
+	if b := s.actionBuckets[playerID]; b != nil && now.Before(b.suspendedUntil) {
+		return b.suspendedUntil, true
+	}
+	return time.Time{}, false
 }
 
 // runPlayerPositionBroadcaster periodically sends nearby player positions to each client.

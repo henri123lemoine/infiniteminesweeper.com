@@ -433,6 +433,9 @@ function App() {
     joinError,
     serverFlagID,
     disconnect,
+    displaced,
+    suspendedUntil,
+    reclaimSession,
     leaderboard,
     scorePopups,
     hintPopups,
@@ -1335,6 +1338,35 @@ function App() {
               setShowMinimapOverlay(false);
             }}
           />
+        </div>
+      )}
+      {displaced && (
+        <div className="home-backdrop displaced-backdrop">
+          <div className="home-modal displaced-modal">
+            <h1 className="home-title">Playing elsewhere</h1>
+            <p className="home-subtitle">
+              You logged in from another tab or device, so this one was
+              disconnected.
+            </p>
+            <button className="join-button" onClick={reclaimSession}>
+              Play here
+            </button>
+          </div>
+        </div>
+      )}
+      {suspendedUntil > 0 && (
+        <div className="home-backdrop displaced-backdrop">
+          <div className="home-modal displaced-modal">
+            <h1 className="home-title">Account suspended</h1>
+            <p className="home-subtitle">
+              Too many actions were rate limited in a row, which looks like
+              automated play. You can play again after{" "}
+              {new Date(suspendedUntil).toLocaleString()}.
+            </p>
+            <button className="join-button" onClick={reclaimSession}>
+              Try again
+            </button>
+          </div>
         </div>
       )}
       {showHomeOverlay && (
