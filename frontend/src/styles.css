@@ -67,6 +67,15 @@ body {
   box-sizing: border-box;
 }
 
+.displaced-backdrop {
+  z-index: 30;
+}
+
+.displaced-modal {
+  height: auto;
+  max-width: 420px;
+}
+
 .home-title {
   margin: 0 0 4px;
   font-family: var(--ms-mono);
