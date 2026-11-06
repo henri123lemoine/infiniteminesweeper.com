@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/netip"
 	"slices"
 	"time"
 
@@ -142,6 +143,7 @@ type Player struct {
 	Name        string
 	FlagID      uint32
 	View        PlayerView
+	IP          netip.Addr
 
 	// FSM state - determines what messages this client can send/receive
 	State ClientState

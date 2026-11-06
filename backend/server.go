@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -150,6 +151,9 @@ type Server struct {
 	overviewWireBytes  uint64
 
 	statsPage statsPageCache
+
+	banned    atomic.Pointer[banList]
+	banFileMu sync.Mutex
 }
 
 func NewServer() *Server {
@@ -302,7 +306,11 @@ type leaderboardEntry struct {
 // caller can sort after releasing the lock. Caller must hold s.stateMu.
 func (s *Server) collectLeaderboardLocked() []leaderboardEntry {
 	bestByName := make(map[string]leaderboardEntry)
+	bans := s.bans()
 	for pid, sc := range s.scores {
+		if bans.bannedPlayer(pid) {
+			continue
+		}
 		name := s.playerNames[pid]
 		e := leaderboardEntry{Name: name, Score: sc, FlagID: s.playerFlags[pid]}
 		if prev, ok := bestByName[name]; !ok || e.Score > prev.Score {
@@ -382,7 +390,7 @@ func (s *Server) handleProfileUpdate(w http.ResponseWriter, r *http.Request) {
 	defer s.stateMu.Unlock()
 
 	pid, ok := s.sessionTokens[token]
-	if !ok {
+	if !ok || s.isPlayerBanned(pid) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_ = json.NewEncoder(w).Encode(profileUpdateResp{OK: false, Error: "invalid session token"})
 		return

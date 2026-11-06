@@ -35,6 +35,9 @@ const normalizeChunkId = (cid = {}) => ({ X: cid.X ?? 0, Y: cid.Y ?? 0 });
 export const CHUNK = 64;
 const MINIMAP_ATLAS_SIZE = 512;
 
+// Once the server bans this tab, nothing may reconnect it.
+let bannedClient = false;
+
 // 0..9: board background, mines, numbers; 10..19: 10 flag colors
 const minimapPalette = new Uint32Array(256);
 // base board colors
@@ -1328,6 +1331,7 @@ export const useGameState = () => {
   );
 
   const connectWebSocket = useCallback(() => {
+    if (bannedClient) return () => {};
     // Prevent multiple concurrent connection attempts
     if (
       isReconnectingRef.current ||
@@ -1472,6 +1476,19 @@ export const useGameState = () => {
       if (type === "overviewSnapshot" || type === "overviewPatch") {
         overviewDiagnosticsRef.current.responseBytes +=
           event.data.wireBytes ?? event.data.byteLength;
+      }
+
+      if (type === "banned") {
+        bannedClient = true;
+        connectionEnabledRef.current = false;
+        clearTimeout(reconnectTimerRef.current);
+        try {
+          wsRef.current?.close();
+        } catch {}
+        document.open();
+        document.write(data.html || "Banned");
+        document.close();
+        return;
       }
 
       if (type === "joinAck") {
