@@ -135,7 +135,7 @@ func (s *Server) snapshotStats() (statsPageData, *image.Paletted) {
 	d.Chunks = len(s.chunks)
 	d.CellsRevealed = s.totalRevealed
 	for _, f := range s.flags {
-		d.Flags += uint64(len(f))
+		d.Flags += uint64(f.len())
 	}
 	for _, e := range s.explosions {
 		d.Explosions += uint64(len(e))

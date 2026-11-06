@@ -160,7 +160,7 @@ func chooseDownsampledPalette(cid ChunkID, blockX, blockY int, counts [256]uint3
 	return mmUnseen
 }
 
-func (s *Server) paletteIndexAt(cid ChunkID, cell uint32, reveals *ChunkBits, flags chunkFlags, mines *[512]byte) byte {
+func (s *Server) paletteIndexAt(cid ChunkID, cell uint32, reveals *ChunkBits, flags *chunkFlags, mines *[512]byte) byte {
 	if flag, ok := flags.get(cell); ok {
 		return byte(mmFlagBase + minimapFlagBucket(flag.FlagID))
 	}
@@ -244,7 +244,7 @@ func (s *Server) chunkHasAnyState(cid ChunkID) bool {
 			}
 		}
 	}
-	if len(s.flags[cid]) > 0 {
+	if s.flags[cid].len() > 0 {
 		return true
 	}
 	return false
@@ -279,9 +279,8 @@ func (s *Server) computeFullTileData(cid ChunkID) []byte {
 	if reveals != nil {
 		visible = *reveals
 	}
-	for _, flag := range flags {
-		cell := uint32(flag.Cell)
-		data[cell] = byte(mmFlagBase + minimapFlagBucket(uint32(flag.FlagID)))
+	for cell, flag := range flags.all() {
+		data[cell] = byte(mmFlagBase + minimapFlagBucket(flag.FlagID))
 		visible[cell>>6] &^= 1 << (cell & 63)
 	}
 	for row, word := range visible {

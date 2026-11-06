@@ -567,7 +567,7 @@ func (s *Server) setCellRevealed(chunkID ChunkID, cell uint32, playerID uint32, 
 // cell leaves every cell in the chunk revealed (mines included) or flagged.
 // Reveals and flags are disjoint, so the sum is the resolved-cell count.
 func (s *Server) creditChunkClearLocked(chunkID ChunkID, stats *PlayerStats) {
-	resolved := len(s.flags[chunkID])
+	resolved := s.flags[chunkID].len()
 	if chunk := s.chunks[chunkID]; chunk != nil {
 		for _, word := range chunk {
 			resolved += bits.OnesCount64(word)
@@ -657,8 +657,7 @@ func (s *Server) isCellRevealed(chunkID ChunkID, cell uint32) bool {
 }
 
 func (s *Server) isCellFlagged(chunkID ChunkID, cell uint32) bool {
-	_, ok := s.flags[chunkID].get(cell)
-	return ok
+	return s.flags[chunkID].has(cell)
 }
 
 func (s *Server) countAdjacentFlags(chunkID ChunkID, cell uint32) int {

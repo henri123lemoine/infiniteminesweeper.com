@@ -31,15 +31,15 @@ func TestMemoryBreakdown(t *testing.T) {
 
 	nFlags, nChunksWithFlags := 0, 0
 	for _, fm := range s.flags {
-		nFlags += len(fm)
+		nFlags += fm.len()
 		nChunksWithFlags++
 	}
 
 	// Cost attribution: rebuild each structure fresh and measure the delta.
 	before := heapMB()
-	flagsCopy := make(map[ChunkID]chunkFlags, len(s.flags))
+	flagsCopy := make(map[ChunkID]*chunkFlags, len(s.flags))
 	for cid, fm := range s.flags {
-		flagsCopy[cid] = append(chunkFlags(nil), fm...)
+		flagsCopy[cid] = fm.clone()
 	}
 	flagsMB := heapMB() - before
 
