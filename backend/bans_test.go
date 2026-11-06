@@ -19,7 +19,7 @@ func TestParseBanList(t *testing.T) {
 	b := newBanList()
 	err := parseBanList(strings.NewReader(`
 # comment
-7509   # mr bones
+1234   # example
 203.0.113.7
 2001:db8:1234::/48
 not-an-entry
@@ -27,7 +27,7 @@ not-an-entry
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !b.bannedPlayer(7509) || b.bannedPlayer(7510) {
+	if !b.bannedPlayer(1234) || b.bannedPlayer(1235) {
 		t.Fatalf("player bans wrong: %v", b.players)
 	}
 	cases := map[string]bool{
@@ -116,7 +116,7 @@ func TestBannedPlayerRejoinGetsBanPageAndIPBan(t *testing.T) {
 	defer cleanup()
 	hdr := onFlyFrom(t, "203.0.113.9")
 
-	first := joinAs(t, wsURL, hdr, "", "Bones").GetJoinAck()
+	first := joinAs(t, wsURL, hdr, "", "Tester").GetJoinAck()
 	if first == nil || !first.Ok {
 		t.Fatalf("initial join failed: %v", first)
 	}
@@ -125,7 +125,7 @@ func TestBannedPlayerRejoinGetsBanPageAndIPBan(t *testing.T) {
 	srv.stateMu.RUnlock()
 
 	writeBans(t, srv, strconv.FormatUint(uint64(pid), 10)+"\n")
-	m := joinAs(t, wsURL, hdr, first.SessionToken, "Bones")
+	m := joinAs(t, wsURL, hdr, first.SessionToken, "Tester")
 	if m.GetBanned() == nil || !strings.Contains(m.GetBanned().Html, "personal project") {
 		t.Fatalf("banned rejoin got %v", m)
 	}
