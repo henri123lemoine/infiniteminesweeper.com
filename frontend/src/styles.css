@@ -117,6 +117,42 @@ a.home-tab {
   font-weight: 600;
 }
 
+.settings-panel {
+  max-width: 480px;
+  margin: 0 auto;
+  text-align: left;
+}
+
+.settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.settings-label {
+  font-weight: 600;
+}
+
+.settings-control {
+  font-family: var(--ms-font);
+  font-size: 15px;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+@media not all and (any-pointer: coarse) {
+  .settings-touch-only {
+    display: none;
+  }
+}
+
+.settings-hint {
+  font-size: 12px;
+  color: #666;
+}
+
 .join-input {
   font-family: var(--ms-font);
   font-size: 15px;
