@@ -12,13 +12,14 @@ SNAPFREE       ?= 0
 SNAPSHOT_FILE  ?= data/snapshot.gob.gz
 WAL_FILE       ?= data/wal.log
 
-.PHONY: help proto deps frontend-build go-build go-run docker-build docker-run deploy clean fmt lint check dash
+.PHONY: help proto deps frontend-build go-build go-run docker-build docker-run ci deploy clean fmt lint check dash
 
 help:
 	@echo "Targets:"
 	@echo "  go-run        - Build & run with Go (uses MODE=$(MODE))"
 	@echo "  docker-run    - Build image & run container (MODE=$(MODE))"
-	@echo "  deploy        - Run tests & fly deploy"
+	@echo "  ci            - Run the same tests as GitHub CI"
+	@echo "  deploy        - Run ci, then fly deploy the committed HEAD"
 	@echo "Use MODE=production for a prod bundle; default is development."
 
 # sprite generation ── output into src/assets so Vite bundles the files
@@ -114,10 +115,18 @@ snapshot-from-prod:
 	fly ssh sftp get /data/wal.log       data/wal.log       --app infiniteminesweeper || true
 	@echo "Done. Run 'make go-run' to boot with prod state."
 
-# deploy / clean
-deploy:
-	go test ./...
-	fly deploy
+# Mirrors .github/workflows/ci.yml.
+ci: proto
+	RUN_COMPRESSION_BENCH=0 go test -tags=integration ./...
+	node frontend/tests/run-frontend-tests.mjs
+	node frontend/tests/unit-helpers.mjs
+
+# Ships tracked files at HEAD only, like CI did, so local scratch and
+# uncommitted edits never reach the remote builder.
+deploy: ci
+	@git diff --quiet HEAD || { echo "Uncommitted changes: commit or stash first."; exit 1; }
+	@d=$$(mktemp -d) && git archive HEAD | tar -x -C "$$d" && \
+		(cd "$$d" && fly deploy --remote-only --ha=false); s=$$?; rm -rf "$$d"; exit $$s
 
 clean:
 	rm -rf backend/dist
