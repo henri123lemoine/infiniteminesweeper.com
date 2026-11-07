@@ -51,4 +51,10 @@ Server-authoritative real-time multiplayer using WebSockets with single-mutex st
 - S3 (production) or local disk storage
 - Recovery: Load snapshot → Replay WAL → Rebuild state
 
+**purge.go** - Offline cleanup of banned players (`run-app purge`)
+
+- Dry run by default; `-apply` writes `snapshot.purged.gob.gz` next to the input and never overwrites it
+- Unreveals the 8×8 territory blocks a player dominates and drops their flags and explosion records
+- Refuses `-apply` while `wal.log` is non-empty (the WAL would replay the reveals back); disk snapshots only
+
 **types.go** - Core types
