@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/netip"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -94,6 +95,7 @@ type Player struct {
 	Name        string
 	FlagID      uint32
 	View        PlayerView
+	IP          netip.Addr
 
 	// FSM state - determines what messages this client can send/receive
 	State ClientState

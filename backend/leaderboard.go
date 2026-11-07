@@ -34,8 +34,9 @@ func formatScore(n int32) string {
 // allocation-free. Assumes caller holds s.stateMu (read lock).
 func (s *Server) getUserRankUnsafe(playerScore int32) uint32 {
 	rank := uint32(1)
-	for _, sc := range s.scores {
-		if sc > playerScore {
+	bans := s.bans()
+	for pid, sc := range s.scores {
+		if sc > playerScore && !bans.bannedPlayer(pid) {
 			rank++
 		}
 	}
@@ -48,7 +49,11 @@ func (s *Server) buildLeaderboardUnsafe() {
 	entries := make([]lbEntry, 0, len(s.scores))
 	// Deduplicate by name at the source to avoid duplicates caused by identity glitches
 	bestByName := make(map[string]lbEntry)
+	bans := s.bans()
 	for pid, sc := range s.scores {
+		if bans.bannedPlayer(pid) {
+			continue
+		}
 		name := s.playerNames[pid]
 		e := lbEntry{PlayerID: pid, Name: name, Score: sc, FlagID: s.playerFlags[pid]}
 		if prev, ok := bestByName[name]; !ok || e.Score > prev.Score {

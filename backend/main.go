@@ -55,6 +55,10 @@ func main() {
 
 	server := NewServer()
 	server.initPersistence()
+	if err := server.loadBans(); err != nil {
+		log.Printf("[bans] initial load failed: %v", err)
+	}
+	go server.runBanReloader()
 
 	if os.Getenv("MODE") == "development" {
 		server.devRevealOriginArea(30)
@@ -156,5 +160,5 @@ func main() {
 	}
 
 	fmt.Printf("Server running at: http://%s/\n", addr)
-	log.Fatal(http.ListenAndServe(addr, canonicalHost(http.DefaultServeMux)))
+	log.Fatal(http.ListenAndServe(addr, canonicalHost(server.banGate(http.DefaultServeMux))))
 }

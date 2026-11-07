@@ -193,6 +193,11 @@ message UpdateAck {
   sint32 score = 5;
 }
 
+// Sent to a banned client, which replaces the page with `html`.
+message Banned {
+  string html = 1;
+}
+
 // Server hint for where to spawn/center camera
 message SpawnHint {
   ChunkID chunkId = 1;
@@ -308,6 +313,8 @@ message Msg {
     OverviewRelease overviewRelease = 31;
     OverviewSnapshot overviewSnapshot = 32;
     OverviewPatch overviewPatch = 33;
+
+    Banned banned = 34;
   }
 }
 

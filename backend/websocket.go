@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -148,6 +149,12 @@ func (s *Server) sendToPlayer(playerID uint32, data []byte) {
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if entry, banned := s.checkBan(r); banned {
+		log.Printf("[bans] refused connection from IP=%s (%s)", ip, entry)
+		s.refuseBannedSocket(w, r, entry)
+		return
+	}
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("WebSocket upgrade error: %v", err)
@@ -181,6 +188,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Send:        make(chan []byte, SendBufSize),
 		Mailbox:     make(chan func(*Player), 64),
 		TokenBucket: TokenBucket{tokens: 200},
+		IP:          ip,
 		Name:        "", // no identity in spectator mode
 		FlagID:      0,
 		Score:       0,
@@ -228,6 +236,12 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 	if join.SessionToken != "" {
 		// Try to reconnect to existing identity
 		pid, ok := s.sessionTokens[join.SessionToken]
+		if ok && s.isPlayerBanned(pid) {
+			log.Printf("[bans] refused join for banned ID=%d Name=%s IP=%s", pid, s.playerNames[pid], player.IP)
+			s.autoBanIP(player.IP, "p"+strconv.FormatUint(uint64(pid), 10))
+			s.sendBannedAndClose(player)
+			return
+		}
 		if ok {
 			playerID = pid
 			sessionToken = join.SessionToken
@@ -416,7 +430,7 @@ func (s *Server) handleJoin(player *Player, join *pb.Join) {
 		player.LastLBVersion = lbVer
 	}
 
-	log.Printf("Client %d transitioned to PLAYER state: ID=%d, Name=%s", player.ID, playerID, chosenName)
+	log.Printf("Client %d transitioned to PLAYER state: ID=%d, Name=%s, IP=%s", player.ID, playerID, chosenName, player.IP)
 }
 
 // handleUpdateProfile processes an UpdateProfile message from a PLAYER state client
