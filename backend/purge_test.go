@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,18 +26,21 @@ func isRevealed(cb *ChunkBits, cell uint32) bool {
 	return cb != nil && cb[cell/64]&(1<<(cell%64)) != 0
 }
 
-// purgeFixture: chunk A holds a bot-owned block (0,0), a block (1,0) owned by
-// another player, and a bot-owned block with a legitimate reveal mixed in.
+// purgeFixture: chunk A holds two blocks only the bot revealed, (0,0) and
+// (7,7), a block (1,0) owned by another player, and a block (2,0) the bot
+// dominates but someone else also revealed in.
 func purgeFixture() snapshotData {
 	a := ChunkID{X: 0, Y: 0}
 	cb := &ChunkBits{}
 	setRevealed(cb,
 		cellAt(0, 0), cellAt(7, 7), cellAt(3, 4), // bot block (0,0)
 		cellAt(8, 0), cellAt(15, 7), // other player's block (1,0)
-		cellAt(63, 63), // bot block (7,7), last cell
+		cellAt(63, 63),                              // bot block (7,7), last cell
+		cellAt(16, 0), cellAt(17, 0), cellAt(18, 0), // shared block (2,0)
 	)
 	ct := &chunkTerritory{}
-	ct[0] = TerritoryBlock{Owner: botID, Votes: 5}
+	ct[0] = TerritoryBlock{Owner: botID, Votes: 3}
+	ct[2] = TerritoryBlock{Owner: botID, Votes: 1}
 	ct[1] = TerritoryBlock{Owner: otherID, Votes: 2}
 	ct[63] = TerritoryBlock{Owner: botID, Votes: 1}
 
@@ -60,9 +64,8 @@ func purgeFixture() snapshotData {
 		},
 		Explosions: map[ChunkID][]ExplosionEntry{
 			a: {
-				{Cell: uint16(cellAt(3, 4)), Owner: botID},    // bot's own, in its block
-				{Cell: uint16(cellAt(7, 7)), Owner: otherID},  // other's, but its cell gets unrevealed
-				{Cell: uint16(cellAt(15, 7)), Owner: otherID}, // other's, untouched block
+				{Cell: uint16(cellAt(3, 4)), Owner: botID},
+				{Cell: uint16(cellAt(15, 7)), Owner: otherID},
 			},
 		},
 		Scores:      map[uint32]int32{botID: 9000, otherID: 10},
@@ -82,18 +85,21 @@ func TestPurgeUnrevealsOnlyDominatedBlocks(t *testing.T) {
 			t.Errorf("cell %d in a bot block is still revealed", c)
 		}
 	}
-	for _, c := range []uint32{cellAt(8, 0), cellAt(15, 7)} {
+	for _, c := range []uint32{cellAt(8, 0), cellAt(15, 7), cellAt(16, 0), cellAt(17, 0), cellAt(18, 0)} {
 		if !isRevealed(cb, c) {
-			t.Errorf("cell %d in another player's block was unrevealed", c)
+			t.Errorf("cell %d in a block someone else revealed in was unrevealed", c)
 		}
+	}
+	if ct := data.Territory[a]; ct[2] != (TerritoryBlock{Owner: botID, Votes: 1}) {
+		t.Errorf("shared block territory changed: %+v", ct[2])
 	}
 	if ct := data.Territory[a]; ct[0] != (TerritoryBlock{}) || ct[63] != (TerritoryBlock{}) || ct[1].Owner != otherID {
 		t.Errorf("territory not reset correctly: %+v %+v %+v", ct[0], ct[63], ct[1])
 	}
 
 	st := rep.Players[botID]
-	if st == nil || st.Blocks != 3 || st.Revealed != 5 || st.Flags != 2 || st.Explosions != 1 {
-		t.Errorf("bot stats = %+v, want blocks=3 revealed=5 flags=2 explosions=1", st)
+	if st == nil || st.Blocks != 3 || st.Shared != 1 || st.Revealed != 5 || st.Flags != 2 || st.Explosions != 1 {
+		t.Errorf("bot stats = %+v, want blocks=3 shared=1 revealed=5 flags=2 explosions=1", st)
 	}
 	if _, ok := rep.Players[otherID]; ok {
 		t.Error("report lists a player that was not purged")
@@ -121,10 +127,6 @@ func TestPurgeUnrevealsOnlyDominatedBlocks(t *testing.T) {
 	if len(ex) != 1 || ex[0].Cell != uint16(cellAt(15, 7)) {
 		t.Errorf("remaining explosions = %+v, want only the untouched one", ex)
 	}
-	if rep.StaleExplosions != 1 {
-		t.Errorf("StaleExplosions = %d, want 1", rep.StaleExplosions)
-	}
-
 	if data.Scores[botID] != 9000 {
 		t.Error("purge must not alter scores")
 	}
@@ -136,7 +138,7 @@ func TestPurgeDoesNotTouchAnythingWithoutMatch(t *testing.T) {
 
 	rep := purgePlayers(&data, map[uint32]struct{}{999: {}})
 
-	if len(rep.Players) != 0 || rep.StaleExplosions != 0 || rep.EmptyChunks != 0 {
+	if len(rep.Players) != 0 || rep.EmptyChunks != 0 {
 		t.Errorf("unexpected report: %+v", rep)
 	}
 	assertSnapshotEqual(t, want, data)
@@ -193,8 +195,8 @@ func TestPurgedSnapshotRoundtripsAndLoadsIntoServer(t *testing.T) {
 	if !s.isCellRevealed(a, cellAt(8, 0)) {
 		t.Error("legitimate cell lost after load")
 	}
-	if s.totalRevealed != 2 {
-		t.Errorf("totalRevealed = %d, want 2", s.totalRevealed)
+	if s.totalRevealed != 5 {
+		t.Errorf("totalRevealed = %d, want 5", s.totalRevealed)
 	}
 	if s.isCellFlagged(a, cellAt(20, 20)) || !s.isCellFlagged(a, cellAt(21, 20)) {
 		t.Error("flags after load do not match the purge")
@@ -320,5 +322,46 @@ func TestRunPurgeRejectsBadUsage(t *testing.T) {
 
 	if _, stdout, stderr := runPurgeCmd("-data", dir, "-ids", "7,4242"); !strings.Contains(stderr, "4242") || stdout == "" {
 		t.Errorf("unknown ID should warn but proceed; stderr=%q", stderr)
+	}
+}
+
+func TestRunPurgePreviewMarksRemovedBlocks(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureSnapshot(t, dir)
+	out := filepath.Join(dir, "preview")
+
+	if code, _, stderr := runPurgeCmd("-data", dir, "-ids", "7", "-preview", out); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	// The fixture's chunks (0,0) and (5,-5) fall in different regions.
+	if _, err := os.Stat(filepath.Join(out, "region_0_-96.png")); err != nil {
+		t.Errorf("no image for the second changed region: %v", err)
+	}
+	f, err := os.Open(filepath.Join(out, "region_0_0.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const panel = previewRegionChunks*territoryBlocksSide + previewPanelGap
+	lit := func(p, bx, by int) bool {
+		r, _, _, _ := img.At(p*panel+bx, by).RGBA()
+		return r>>8 > 20
+	}
+	isRed := func(bx, by int) bool {
+		r, g, _, _ := img.At(2*panel+bx, by).RGBA()
+		return r>>8 == 230 && g>>8 == 60
+	}
+	if !isRed(0, 0) || !isRed(7, 7) {
+		t.Error("blocks only the bot revealed are not marked as removed")
+	}
+	if isRed(1, 0) || isRed(2, 0) {
+		t.Error("another player's block or the shared block is marked as removed")
+	}
+	if !lit(0, 0, 0) || lit(1, 0, 0) || !lit(1, 1, 0) {
+		t.Error("before/after panels do not show the bot block vanishing and the other block staying")
 	}
 }

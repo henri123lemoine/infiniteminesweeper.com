@@ -17,15 +17,15 @@ const purgedSnapshotName = "snapshot.purged.gob.gz"
 
 type purgeStats struct {
 	Blocks     int
+	Shared     int
 	Revealed   int
 	Flags      int
 	Explosions int
 }
 
 type purgeReport struct {
-	Players         map[uint32]*purgeStats
-	StaleExplosions int
-	EmptyChunks     int
+	Players     map[uint32]*purgeStats
+	EmptyChunks int
 }
 
 func (r *purgeReport) stats(id uint32) *purgeStats {
@@ -38,14 +38,17 @@ func (r *purgeReport) stats(id uint32) *purgeStats {
 }
 
 // purgePlayers removes the banned players' flags and explosion records, and
-// unreveals every 8×8 territory block they dominate. Reveals have no per-cell
-// author, so block ownership (a majority vote) is the closest attribution.
+// unreveals the 8×8 territory blocks they revealed entirely alone. Reveals
+// have no per-cell author, but a block casts one vote per revealed cell and
+// any other revealer costs the owner votes, so votes == revealed cells
+// proves nobody else's reveal is in the block. Shared blocks are left alone.
 func purgePlayers(data *snapshotData, banned map[uint32]struct{}) purgeReport {
 	rep := purgeReport{Players: make(map[uint32]*purgeStats)}
 	touched := make(map[ChunkID]struct{})
 
 	for cid, ct := range data.Territory {
-		if ct == nil {
+		cb := data.Chunks[cid]
+		if ct == nil || cb == nil {
 			continue
 		}
 		for i := range ct {
@@ -54,16 +57,13 @@ func purgePlayers(data *snapshotData, banned map[uint32]struct{}) purgeReport {
 				continue
 			}
 			st := rep.stats(blk.Owner)
-			st.Blocks++
-			if cb := data.Chunks[cid]; cb != nil {
-				bx, by := i%territoryBlocksSide, i/territoryBlocksSide
-				mask := uint64(1<<territoryBlockSize-1) << (bx * territoryBlockSize)
-				for dy := range territoryBlockSize {
-					row := &cb[by*territoryBlockSize+dy]
-					st.Revealed += bits.OnesCount64(*row & mask)
-					*row &^= mask
-				}
+			if blockRevealed(cb, i) != int(blk.Votes) {
+				st.Shared++
+				continue
 			}
+			st.Blocks++
+			st.Revealed += int(blk.Votes)
+			clearBlock(cb, i)
 			*blk = TerritoryBlock{}
 			touched[cid] = struct{}{}
 		}
@@ -72,18 +72,12 @@ func purgePlayers(data *snapshotData, banned map[uint32]struct{}) purgeReport {
 	purgeFlags(data, banned, &rep, touched)
 
 	for cid, entries := range data.Explosions {
-		_, wasTouched := touched[cid]
-		cb := data.Chunks[cid]
 		kept := slices.DeleteFunc(slices.Clone(entries), func(e ExplosionEntry) bool {
-			if _, ok := banned[e.Owner]; ok {
-				rep.stats(e.Owner).Explosions++
-				return true
+			if _, ok := banned[e.Owner]; !ok {
+				return false
 			}
-			if wasTouched && (cb == nil || cb[e.Cell/64]&(1<<(e.Cell%64)) == 0) {
-				rep.StaleExplosions++
-				return true
-			}
-			return false
+			rep.stats(e.Owner).Explosions++
+			return true
 		})
 		if len(kept) == len(entries) {
 			continue
@@ -104,6 +98,27 @@ func purgePlayers(data *snapshotData, banned map[uint32]struct{}) purgeReport {
 		}
 	}
 	return rep
+}
+
+func blockMask(block int) (firstRow int, mask uint64) {
+	bx, by := block%territoryBlocksSide, block/territoryBlocksSide
+	return by * territoryBlockSize, uint64(1<<territoryBlockSize-1) << (bx * territoryBlockSize)
+}
+
+func blockRevealed(cb *ChunkBits, block int) int {
+	row, mask := blockMask(block)
+	n := 0
+	for dy := range territoryBlockSize {
+		n += bits.OnesCount64(cb[row+dy] & mask)
+	}
+	return n
+}
+
+func clearBlock(cb *ChunkBits, block int) {
+	row, mask := blockMask(block)
+	for dy := range territoryBlockSize {
+		cb[row+dy] &^= mask
+	}
 }
 
 // purgeFlags handles all three snapshot flag encodings; old snapshots carry
@@ -201,29 +216,6 @@ func parsePlayerIDs(list string) (map[uint32]struct{}, error) {
 	return ids, nil
 }
 
-func writeSnapshotFile(path string, data *snapshotData) error {
-	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-	if err := encodeSnapshot(f, data); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
 func printPurgeReport(w io.Writer, rep purgeReport, names map[uint32]string) {
 	ids := make([]uint32, 0, len(rep.Players))
 	for id := range rep.Players {
@@ -232,19 +224,20 @@ func printPurgeReport(w io.Writer, rep purgeReport, names map[uint32]string) {
 	slices.Sort(ids)
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tNAME\tBLOCKS\tREVEALED CELLS\tFLAGS\tEXPLOSIONS")
+	fmt.Fprintln(tw, "ID\tNAME\tBLOCKS\tREVEALED CELLS\tFLAGS\tEXPLOSIONS\tSHARED BLOCKS KEPT")
 	var total purgeStats
 	for _, id := range ids {
 		st := rep.Players[id]
-		fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%d\t%d\n", id, names[id], st.Blocks, st.Revealed, st.Flags, st.Explosions)
+		fmt.Fprintf(tw, "%d\t%s\t%d\t%d\t%d\t%d\t%d\n", id, names[id], st.Blocks, st.Revealed, st.Flags, st.Explosions, st.Shared)
 		total.Blocks += st.Blocks
 		total.Revealed += st.Revealed
 		total.Flags += st.Flags
 		total.Explosions += st.Explosions
+		total.Shared += st.Shared
 	}
-	fmt.Fprintf(tw, "total\t\t%d\t%d\t%d\t%d\n", total.Blocks, total.Revealed, total.Flags, total.Explosions)
+	fmt.Fprintf(tw, "total\t\t%d\t%d\t%d\t%d\t%d\n", total.Blocks, total.Revealed, total.Flags, total.Explosions, total.Shared)
 	tw.Flush()
-	fmt.Fprintf(w, "also dropped %d explosion records on newly unrevealed cells and %d emptied chunks\n", rep.StaleExplosions, rep.EmptyChunks)
+	fmt.Fprintf(w, "%d chunks end up empty and are dropped\n", rep.EmptyChunks)
 }
 
 // runPurge implements `run-app purge`. It never modifies the input snapshot.
@@ -256,10 +249,11 @@ func runPurge(args []string, stdout, stderr io.Writer) int {
 	useBans := fs.Bool("banned", false, "also purge every player ID listed in bans.txt and bans-auto.txt")
 	apply := fs.Bool("apply", false, "write the purged snapshot (default: dry run)")
 	out := fs.String("out", "", "output path (default: <data>/"+purgedSnapshotName+")")
+	preview := fs.String("preview", "", "directory to write before/after images of every changed region into")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: run-app purge [-data DIR] [-ids 1,2] [-banned] [-apply] [-out PATH]")
-		fmt.Fprintln(stderr, "Unreveals the 8x8 blocks the given players dominate and removes their flags and")
-		fmt.Fprintln(stderr, "explosion records. Reveals from before territory tracking cannot be attributed.")
+		fmt.Fprintln(stderr, "usage: run-app purge [-data DIR] [-ids 1,2] [-banned] [-preview DIR] [-apply] [-out PATH]")
+		fmt.Fprintln(stderr, "Unreveals the 8x8 blocks the given players revealed entirely alone and removes")
+		fmt.Fprintln(stderr, "their flags and explosion records. Blocks anyone else revealed in are kept.")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -324,8 +318,20 @@ func runPurge(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	var before map[ChunkID]*ChunkBits
+	if *preview != "" {
+		before = cloneChunks(data.Chunks)
+	}
 	rep := purgePlayers(&data, banned)
 	printPurgeReport(stdout, rep, data.PlayerNames)
+	if *preview != "" {
+		n, err := writePurgePreview(*preview, before, data.Chunks)
+		if err != nil {
+			fmt.Fprintf(stderr, "preview: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "wrote %d region images (before | after | removed in red) to %s\n", n, *preview)
+	}
 
 	if !*apply {
 		fmt.Fprintln(stdout, "dry run: nothing written; rerun with -apply to write the purged snapshot")
