@@ -121,6 +121,10 @@ type Server struct {
 	// threshold. Buffered size 1 + non-blocking send = signals are coalesced
 	// and writers never block.
 	walFlushSignal chan struct{}
+	snapshotSignal chan struct{}
+	// Consecutive failed WAL flushes; reveals are refused past
+	// walFailuresBeforeReadOnly so play that can't be saved isn't accepted.
+	walFlushFailures atomic.Int32
 	// Serializes appends and trims of the disk WAL file.
 	walFileMu        sync.Mutex
 	snapshotMu       sync.Mutex
@@ -192,6 +196,7 @@ func NewServer() *Server {
 		chunkSyncCache:       make(map[ChunkID]*chunkSyncEntry),
 		mineBitmaps:          make(map[ChunkID]*[512]byte),
 		walFlushSignal:       make(chan struct{}, 1),
+		snapshotSignal:       make(chan struct{}, 1),
 		nextPlayerID:         1,
 		nextSpectatorID:      1,
 		dataDir:              "data",

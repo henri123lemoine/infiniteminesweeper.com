@@ -87,15 +87,16 @@ type PlayerView struct {
 }
 
 type Player struct {
-	ID          uint32
-	Conn        *websocket.Conn
-	Send        chan []byte
-	Mailbox     chan func(*Player) // actor channel
-	TokenBucket TokenBucket
-	Name        string
-	FlagID      uint32
-	View        PlayerView
-	IP          netip.Addr
+	ID           uint32
+	Conn         *websocket.Conn
+	Send         chan []byte
+	Mailbox      chan func(*Player) // actor channel
+	TokenBucket  TokenBucket
+	RevealBucket TokenBucket
+	Name         string
+	FlagID       uint32
+	View         PlayerView
+	IP           netip.Addr
 
 	// FSM state - determines what messages this client can send/receive
 	State ClientState
@@ -112,30 +113,45 @@ type Player struct {
 	done chan struct{} // closed when player is fully removed
 }
 
-// TokenBucket for rate limiting seed requests (200/min). Only touched from
-// the owning connection's readPump goroutine, so no locking.
+// TokenBucket rate limits one kind of request per connection. Only touched
+// from the owning connection's readPump goroutine, so no locking.
 type TokenBucket struct {
 	tokens     int
 	lastRefill time.Time
+	cap        int
+	refillPer  time.Duration
 }
 
 const (
 	seedRequestBucketCap = 200
 	seedRequestRefillPer = time.Minute / seedRequestBucketCap
+
+	// Far above human play (one message per click); stops scripted clients
+	// from flooding the WAL.
+	revealBucketCap = 200
+	revealRefillPer = time.Second / 40
 )
 
+func newTokenBucket(capacity int, refillPer time.Duration) TokenBucket {
+	return TokenBucket{tokens: capacity, cap: capacity, refillPer: refillPer}
+}
+
 // take refills based on elapsed time, then consumes one token. Returns false
-// when the bucket is empty (caller should drop the request).
+// when the bucket is empty (caller should drop the request). The zero value
+// never limits.
 func (tb *TokenBucket) take(now time.Time) bool {
+	if tb.refillPer <= 0 {
+		return true
+	}
 	if tb.lastRefill.IsZero() {
 		tb.lastRefill = now
 	}
-	if refill := int(now.Sub(tb.lastRefill) / seedRequestRefillPer); refill > 0 {
+	if refill := int(now.Sub(tb.lastRefill) / tb.refillPer); refill > 0 {
 		tb.tokens += refill
-		if tb.tokens > seedRequestBucketCap {
-			tb.tokens = seedRequestBucketCap
+		if tb.tokens > tb.cap {
+			tb.tokens = tb.cap
 		}
-		tb.lastRefill = tb.lastRefill.Add(time.Duration(refill) * seedRequestRefillPer)
+		tb.lastRefill = tb.lastRefill.Add(time.Duration(refill) * tb.refillPer)
 	}
 	if tb.tokens <= 0 {
 		return false

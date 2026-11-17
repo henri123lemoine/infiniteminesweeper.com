@@ -86,6 +86,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		{"go_memstats_gc_cycles_total", "Number of completed GC cycles.", "counter", uint64(ms.NumGC)},
 		{"ims_uptime_seconds", "Process uptime in seconds.", "gauge", uint64(uptime)},
 		{"ims_snapshot_age_seconds", "Seconds since a snapshot was last saved or loaded; well past the snapshot interval means saves are failing.", "gauge", uint64(max(snapshotAge, 0))},
+		{"ims_wal_flush_failures", "Consecutive failed WAL flushes; reveals are refused from 4.", "gauge", uint64(s.walFlushFailures.Load())},
 		{"ims_wal_buffered_entries", "WAL entries not yet flushed; keeps growing while flushes fail.", "gauge", uint64(walBuffered)},
 		{"ims_players_connected", "Currently connected players (including spectators).", "gauge", uint64(players)},
 		{"ims_chunks_with_state", "Chunks with at least one revealed cell stored.", "gauge", uint64(chunks)},

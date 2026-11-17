@@ -54,6 +54,10 @@ const (
 	// bounds peak WAL memory near 2 MB, versus potentially tens of MB across
 	// the whole 2-minute tick window under load.
 	walBufferFlushThreshold = 10000
+
+	minSnapshotSpacing = time.Minute
+
+	walFailuresBeforeReadOnly = 4
 )
 
 // WAL entry types
@@ -172,7 +176,7 @@ func (s *Server) flushWAL() error {
 	// we don't momentarily hold 2× the WAL in memory during the flush. The
 	// buffer is reallocated fresh with modest capacity; a heavy burst will
 	// grow it back naturally via append.
-	entries := s.walBuffer
+	entries := compactWALEntries(s.walBuffer)
 	s.walBuffer = make([]WALEntry, 0, 1024)
 	s.walMutex.Unlock()
 
@@ -222,8 +226,52 @@ func (s *Server) flushWAL() error {
 			return err
 		}
 		log.Printf("WAL: flushed %d entries to disk", len(entries))
+		if s.walDiskSize() >= walSnapshotTriggerBytes {
+			select {
+			case s.snapshotSignal <- struct{}{}:
+			default:
+			}
+		}
 	}
 	return nil
+}
+
+// compactWALEntries drops score_update and stats_update records superseded
+// later in the same batch: both carry a player's full values, so replay only
+// needs the last one. Stats records that unlock something are always kept.
+func compactWALEntries(entries []WALEntry) []WALEntry {
+	type key struct {
+		entryType string
+		playerID  uint32
+	}
+	seen := make(map[key]bool)
+	keep := make([]bool, len(entries))
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Type != "score_update" && e.Type != "stats_update" {
+			keep[i] = true
+			continue
+		}
+		var d struct {
+			PlayerID   uint32   `json:"player_id"`
+			NewUnlocks []string `json:"new_unlocks"`
+		}
+		if json.Unmarshal(e.Data, &d) != nil {
+			keep[i] = true
+			continue
+		}
+		k := key{e.Type, d.PlayerID}
+		keep[i] = !seen[k] || len(d.NewUnlocks) > 0
+		seen[k] = true
+	}
+	out := entries[:0]
+	for i, e := range entries {
+		if keep[i] {
+			out = append(out, e)
+		}
+	}
+	clear(entries[len(out):])
+	return out
 }
 
 // appendWALToDisk writes entries as one batch and rolls a failed write back,
@@ -472,9 +520,18 @@ func (s *Server) periodicWALFlush() {
 		case <-s.walFlushSignal:
 		}
 		if err := s.flushWAL(); err != nil {
+			if n := s.walFlushFailures.Add(1); n == walFailuresBeforeReadOnly {
+				log.Printf("[wal] %d flushes failed in a row: refusing reveals until one succeeds", n)
+			}
 			log.Printf("[wal] flush error: %v", err)
+		} else {
+			s.walFlushFailures.Store(0)
 		}
 	}
+}
+
+func (s *Server) persistenceFailing() bool {
+	return s.walFlushFailures.Load() >= walFailuresBeforeReadOnly
 }
 
 func (s *Server) replayWAL() error {
@@ -1072,7 +1129,17 @@ func (s *Server) persistOnShutdown() {
 func (s *Server) periodicSnapshotLoop() {
 	ticker := time.NewTicker(snapshotInterval)
 	defer ticker.Stop()
-	for range ticker.C {
+	var lastAttempt time.Time
+	for {
+		select {
+		case <-ticker.C:
+		case <-s.snapshotSignal:
+			// A failing snapshot would otherwise be retried on every WAL flush.
+			if time.Since(lastAttempt) < minSnapshotSpacing {
+				continue
+			}
+		}
+		lastAttempt = time.Now()
 		var err error
 		if s.useS3 {
 			err = s.saveSnapshotToS3()
