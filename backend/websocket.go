@@ -588,6 +588,7 @@ func (s *Server) readPump(player *Player) {
 	readBuf := bufferPool.Get().(*bytes.Buffer)
 	defer bufferPool.Put(readBuf)
 
+	botBanned := false
 	for {
 		_, data, err := player.Conn.ReadMessage()
 		if err != nil {
@@ -654,6 +655,14 @@ func (s *Server) readPump(player *Player) {
 				continue
 			}
 			chunkID := ChunkID{X: r.ChunkId.X, Y: r.ChunkId.Y}
+			if botBanned {
+				continue
+			}
+			if s.overHumanRate(player.ID, time.Now()) {
+				botBanned = true
+				s.banBot(player)
+				continue
+			}
 			if s.persistenceFailing() || !player.RevealBucket.take(time.Now()) {
 				// Failed ack so the client rolls back its optimistic update.
 				s.sendRevealAck(player.ID, r.RequestId, false, nil, 0, chunkID, r.Cell)

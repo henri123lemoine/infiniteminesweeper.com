@@ -113,8 +113,8 @@ type Player struct {
 	done chan struct{} // closed when player is fully removed
 }
 
-// TokenBucket rate limits one kind of request per connection. Only touched
-// from the owning connection's readPump goroutine, so no locking.
+// TokenBucket rate limits one kind of request. It does no locking: the
+// per-connection ones are only touched from that connection's readPump.
 type TokenBucket struct {
 	tokens     int
 	lastRefill time.Time
@@ -130,6 +130,12 @@ const (
 	// from flooding the WAL.
 	revealBucketCap = 200
 	revealRefillPer = time.Second / 40
+
+	// Draining this bans the player. Fast humans sustain about 2 reveals/s,
+	// so it takes minutes above 5/s; one click is one message however many
+	// cells it opens.
+	botBucketCap = 600
+	botRefillPer = time.Second / 5
 )
 
 func newTokenBucket(capacity int, refillPer time.Duration) TokenBucket {

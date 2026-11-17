@@ -225,3 +225,102 @@ func TestBannedPlayerHiddenFromLeaderboards(t *testing.T) {
 		t.Fatalf("rank=%d want 1 with the banned score excluded", r)
 	}
 }
+
+// playAs joins and sends n reveals in bursts small enough that the acks
+// don't trip the server's back-pressure disconnect. It reports the session
+// token and whether the server answered with Banned.
+func playAs(t *testing.T, wsURL string, hdr http.Header, token string, n int) (string, bool) {
+	t.Helper()
+	c, _, err := websocket.DefaultDialer.Dial(wsURL, hdr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+	join := &pb.Msg{Payload: &pb.Msg_Join{Join: &pb.Join{SessionToken: token, Name: "Clicker"}}}
+	if err := c.WriteMessage(websocket.BinaryMessage, mustProto(join)); err != nil {
+		t.Fatal(err)
+	}
+	joined := make(chan string, 1)
+	banned := make(chan struct{})
+	go func() {
+		c.SetReadDeadline(time.Now().Add(10 * time.Second))
+		for {
+			_, data, err := c.ReadMessage()
+			if err != nil {
+				return
+			}
+			m := decodePBMsg(t, data)
+			if a := m.GetJoinAck(); a != nil {
+				joined <- a.SessionToken
+			}
+			if m.GetBanned() != nil {
+				close(banned)
+				return
+			}
+		}
+	}()
+	select {
+	case token = <-joined:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no JoinAck")
+	}
+	for i := range n {
+		m := &pb.Msg{Payload: &pb.Msg_Reveal{Reveal: &pb.Reveal{
+			RequestId: uint64(i), ChunkId: &pb.ChunkID{}, Cell: uint32(i % 4096),
+		}}}
+		if err := c.WriteMessage(websocket.BinaryMessage, mustProto(m)); err != nil {
+			t.Fatalf("reveal %d: %v", i, err)
+		}
+		if i%50 == 49 {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	select {
+	case <-banned:
+		return token, true
+	case <-time.After(500 * time.Millisecond):
+		return token, false
+	}
+}
+
+func TestSustainedRevealRateGetsBannedAcrossReconnects(t *testing.T) {
+	srv, wsURL, cleanup := startTestServer(t)
+	defer cleanup()
+	srv.dataDir = t.TempDir()
+	hdr := onFlyFrom(t, "203.0.113.20")
+
+	token, banned := playAs(t, wsURL, hdr, "", botBucketCap/2)
+	if banned {
+		t.Fatalf("banned after only %d reveals", botBucketCap/2)
+	}
+	if _, banned = playAs(t, wsURL, hdr, token, botBucketCap/2+10); !banned {
+		t.Fatal("no Banned message after draining the allowance over two connections")
+	}
+	srv.stateMu.RLock()
+	pid := srv.sessionTokens[token]
+	srv.stateMu.RUnlock()
+
+	got := autoBans(t, srv)
+	if !strings.Contains(got, strconv.FormatUint(uint64(pid), 10)+" # bot") || !strings.Contains(got, "203.0.113.20/32 # bot") {
+		t.Fatalf("bot not auto-banned by ID and IP: %q", got)
+	}
+	if !srv.isPlayerBanned(pid) {
+		t.Fatal("ban list not reloaded")
+	}
+}
+
+func TestHumanRevealRateNeverDrainsBotBucket(t *testing.T) {
+	now := time.Now()
+	tb := newTokenBucket(botBucketCap, botRefillPer)
+	for i := range 4 * 3600 {
+		if !tb.take(now.Add(time.Duration(i) * time.Second / 4)) {
+			t.Fatalf("4 reveals/s drained the bucket after %d reveals", i)
+		}
+	}
+	for i := range 10 * 180 {
+		if !tb.take(now.Add(time.Hour + time.Duration(i)*time.Second/10)) {
+			return
+		}
+	}
+	t.Fatal("10 reveals/s for 3 minutes was not caught")
+}
