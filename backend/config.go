@@ -14,6 +14,10 @@ import (
 var (
 	walFlushInterval time.Duration = 15 * time.Second
 	snapshotInterval time.Duration = 30 * time.Minute
+
+	// A disk WAL this large forces a snapshot early, so a burst of play
+	// can't fill the volume between interval snapshots.
+	walSnapshotTriggerBytes int64 = 64 << 20
 )
 
 // Loads .env.shared, .env.development, or .env.production

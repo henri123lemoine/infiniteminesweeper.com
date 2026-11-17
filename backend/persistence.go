@@ -46,6 +46,7 @@ const (
 	snapshotFileName = "snapshot.gob.gz"
 	snapshotTmpName  = "snapshot.tmp.gz"
 	walFileName      = "wal.log"
+	walTmpName       = "wal.tmp"
 
 	// Nudge the flush worker to drain the WAL once the in-memory buffer
 	// holds this many entries, regardless of the wall-clock flush tick. Caps
@@ -53,6 +54,10 @@ const (
 	// bounds peak WAL memory near 2 MB, versus potentially tens of MB across
 	// the whole 2-minute tick window under load.
 	walBufferFlushThreshold = 10000
+
+	minSnapshotSpacing = time.Minute
+
+	walFailuresBeforeReadOnly = 4
 )
 
 // WAL entry types
@@ -171,7 +176,7 @@ func (s *Server) flushWAL() error {
 	// we don't momentarily hold 2× the WAL in memory during the flush. The
 	// buffer is reallocated fresh with modest capacity; a heavy burst will
 	// grow it back naturally via append.
-	entries := s.walBuffer
+	entries := compactWALEntries(s.walBuffer)
 	s.walBuffer = make([]WALEntry, 0, 1024)
 	s.walMutex.Unlock()
 
@@ -216,33 +221,105 @@ func (s *Server) flushWAL() error {
 
 		log.Printf("WAL: flushed %d entries to S3 segment %s", len(entries), key)
 	} else {
-		if err := os.MkdirAll(s.dataDir, 0o755); err != nil {
-			requeue()
-			return err
-		}
-		path := filepath.Join(s.dataDir, walFileName)
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
-			requeue()
-			return err
-		}
-		defer f.Close()
-		enc := json.NewEncoder(f)
-		for _, entry := range entries {
-			if err := enc.Encode(entry); err != nil {
-				requeue()
-				return err
-			}
-		}
-		// Without fsync, a machine kill right after "flush" can still truncate
-		// the tail of the file mid-record.
-		if err := f.Sync(); err != nil {
+		if err := s.appendWALToDisk(entries); err != nil {
 			requeue()
 			return err
 		}
 		log.Printf("WAL: flushed %d entries to disk", len(entries))
+		if s.walDiskSize() >= walSnapshotTriggerBytes {
+			select {
+			case s.snapshotSignal <- struct{}{}:
+			default:
+			}
+		}
 	}
 	return nil
+}
+
+// compactWALEntries drops score_update and stats_update records superseded
+// later in the same batch: both carry a player's full values, so replay only
+// needs the last one. Stats records that unlock something are always kept.
+func compactWALEntries(entries []WALEntry) []WALEntry {
+	type key struct {
+		entryType string
+		playerID  uint32
+	}
+	seen := make(map[key]bool)
+	keep := make([]bool, len(entries))
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Type != "score_update" && e.Type != "stats_update" {
+			keep[i] = true
+			continue
+		}
+		var d struct {
+			PlayerID   uint32   `json:"player_id"`
+			NewUnlocks []string `json:"new_unlocks"`
+		}
+		if json.Unmarshal(e.Data, &d) != nil {
+			keep[i] = true
+			continue
+		}
+		k := key{e.Type, d.PlayerID}
+		keep[i] = !seen[k] || len(d.NewUnlocks) > 0
+		seen[k] = true
+	}
+	out := entries[:0]
+	for i, e := range entries {
+		if keep[i] {
+			out = append(out, e)
+		}
+	}
+	clear(entries[len(out):])
+	return out
+}
+
+// appendWALToDisk writes entries as one batch and rolls a failed write back,
+// so a full disk can't leave half a record in the middle of the log.
+func (s *Server) appendWALToDisk(entries []WALEntry) error {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	for _, entry := range entries {
+		if err := enc.Encode(entry); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(s.dataDir, 0o755); err != nil {
+		return err
+	}
+
+	s.walFileMu.Lock()
+	defer s.walFileMu.Unlock()
+	f, err := os.OpenFile(filepath.Join(s.dataDir, walFileName), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	size, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+	data := buf.Bytes()
+	if size > 0 {
+		// A hard kill can leave a partial record at the tail; end its line
+		// so the next record doesn't merge into it.
+		var last [1]byte
+		if _, err := f.ReadAt(last[:], size-1); err != nil {
+			return err
+		}
+		if last[0] != '\n' {
+			data = append([]byte{'\n'}, data...)
+		}
+	}
+	if _, err := f.WriteAt(data, size); err != nil {
+		if terr := f.Truncate(size); terr != nil {
+			log.Printf("[wal] failed to roll back partial append: %v", terr)
+		}
+		return err
+	}
+	// Without fsync, a machine kill right after "flush" can still truncate
+	// the tail of the file mid-record.
+	return f.Sync()
 }
 
 // readWALFromS3 streams every WAL entry to visit. Segments are sorted
@@ -271,29 +348,35 @@ func (s *Server) readWALObjectFromS3(key string, visit func(WALEntry)) error {
 	}
 	defer result.Body.Close()
 
-	n, err := decodeWAL(result.Body, visit)
-	if err != nil {
-		// Best-effort: keep everything decoded so far rather than
-		// discarding the whole segment over one corrupt record.
-		log.Printf("[wal] segment %s corrupt after %d entries, replaying prefix: %v", key, n, err)
+	n, skipped, err := decodeWAL(result.Body, visit)
+	if skipped > 0 {
+		log.Printf("[wal] segment %s: skipped %d corrupt records, replayed %d", key, skipped, n)
 	}
-	return nil
+	return err
 }
 
 // decodeWAL streams entries rather than collecting them: a WAL left behind by
-// a failed snapshot can be far larger than the world it rebuilds.
-func decodeWAL(r io.Reader, visit func(WALEntry)) (int, error) {
-	decoder := json.NewDecoder(r)
-	n := 0
+// a failed snapshot can be far larger than the world it rebuilds. Records are
+// independent lines, so a corrupt one is skipped instead of hiding every
+// record appended after it.
+func decodeWAL(r io.Reader, visit func(WALEntry)) (n, skipped int, err error) {
+	br := bufio.NewReaderSize(r, 1<<20)
 	for {
-		var entry WALEntry
-		if err := decoder.Decode(&entry); err == io.EOF {
-			return n, nil
-		} else if err != nil {
-			return n, err
+		line, err := br.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) > 0 {
+			var entry WALEntry
+			if json.Unmarshal(line, &entry) != nil {
+				skipped++
+			} else {
+				visit(entry)
+				n++
+			}
 		}
-		visit(entry)
-		n++
+		if err == io.EOF {
+			return n, skipped, nil
+		} else if err != nil {
+			return n, skipped, err
+		}
 	}
 }
 
@@ -333,28 +416,65 @@ func (s *Server) readWALFromDisk(visit func(WALEntry)) error {
 	}
 	defer f.Close()
 
-	n, err := decodeWAL(bufio.NewReaderSize(f, 1<<20), visit)
-	if err != nil {
-		// A crash mid-append leaves a truncated trailing record; replay
-		// the intact prefix instead of dropping the whole log.
-		log.Printf("[wal] log corrupt after %d entries, replaying prefix: %v", n, err)
+	n, skipped, err := decodeWAL(f, visit)
+	if skipped > 0 {
+		log.Printf("[wal] skipped %d corrupt records, replayed %d", skipped, n)
 	}
-	return nil
+	return err
 }
 
-func (s *Server) truncateWAL() error {
-	if s.useS3 {
-		segments, err := s.listWALSegments()
-		if err != nil {
-			return fmt.Errorf("failed to list WAL segments for truncate: %v", err)
-		}
-		return s.deleteWALSegments(segments)
+// walDiskSize is the WAL's current length; 0 if it doesn't exist.
+func (s *Server) walDiskSize() int64 {
+	s.walFileMu.Lock()
+	defer s.walFileMu.Unlock()
+	fi, err := os.Stat(filepath.Join(s.dataDir, walFileName))
+	if err != nil {
+		return 0
 	}
+	return fi.Size()
+}
+
+// trimWALPrefix drops the first covered bytes of the disk WAL and keeps the
+// rest: records flushed while a snapshot was being written aren't in it.
+func (s *Server) trimWALPrefix(covered int64) error {
+	s.walFileMu.Lock()
+	defer s.walFileMu.Unlock()
 	path := filepath.Join(s.dataDir, walFileName)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
 		return err
 	}
-	return nil
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if fi.Size() <= covered {
+		return os.Remove(path)
+	}
+	if _, err := f.Seek(covered, io.SeekStart); err != nil {
+		return err
+	}
+	tmpPath := filepath.Join(s.dataDir, walTmpName)
+	tmp, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+	if _, err = io.Copy(tmp, f); err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmpPath, path)
+	}
+	if err != nil {
+		os.Remove(tmpPath)
+	}
+	return err
 }
 
 func (s *Server) deleteWALSegments(segments []string) error {
@@ -400,9 +520,18 @@ func (s *Server) periodicWALFlush() {
 		case <-s.walFlushSignal:
 		}
 		if err := s.flushWAL(); err != nil {
+			if n := s.walFlushFailures.Add(1); n == walFailuresBeforeReadOnly {
+				log.Printf("[wal] %d flushes failed in a row: refusing reveals until one succeeds", n)
+			}
 			log.Printf("[wal] flush error: %v", err)
+		} else {
+			s.walFlushFailures.Store(0)
 		}
 	}
+}
+
+func (s *Server) persistenceFailing() bool {
+	return s.walFlushFailures.Load() >= walFailuresBeforeReadOnly
 }
 
 func (s *Server) replayWAL() error {
@@ -729,6 +858,9 @@ func (s *Server) captureSnapshotData() snapshotData {
 }
 
 func (s *Server) saveSnapshotToS3() error {
+	s.snapshotMu.Lock()
+	defer s.snapshotMu.Unlock()
+
 	// List segments BEFORE capturing state: entries flushed while the upload
 	// is in flight are not in this snapshot, so their segments must survive
 	// the truncate. Anything listed here is fully covered by the capture.
@@ -765,22 +897,47 @@ func (s *Server) saveSnapshotToS3() error {
 		// Don't fail the snapshot operation for this
 	}
 
+	s.lastSnapshotUnix.Store(time.Now().Unix())
 	return nil
 }
 
 func (s *Server) saveSnapshotToDisk() error {
+	// The periodic and shutdown snapshots share one tmp file.
+	s.snapshotMu.Lock()
+	defer s.snapshotMu.Unlock()
+
 	if err := os.MkdirAll(s.dataDir, 0o755); err != nil {
 		return err
 	}
 
+	// Measure BEFORE capturing state: anything on disk by now is in the
+	// capture, anything flushed later may not be and must survive the trim.
+	covered := s.walDiskSize()
 	data := s.captureSnapshotData()
 
 	tmpPath := filepath.Join(s.dataDir, snapshotTmpName)
-	f, err := os.Create(tmpPath)
+	if err := writeSnapshotFile(tmpPath, &data); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	finalPath := filepath.Join(s.dataDir, snapshotFileName)
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		return err
+	}
+
+	if err := s.trimWALPrefix(covered); err != nil {
+		log.Printf("[wal] failed to truncate WAL after snapshot: %v", err)
+	}
+	s.lastSnapshotUnix.Store(time.Now().Unix())
+	return nil
+}
+
+func writeSnapshotFile(path string, data *snapshotData) error {
+	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	if err := encodeSnapshot(f, &data); err != nil {
+	if err := encodeSnapshot(f, data); err != nil {
 		f.Close()
 		return err
 	}
@@ -790,18 +947,7 @@ func (s *Server) saveSnapshotToDisk() error {
 		f.Close()
 		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	finalPath := filepath.Join(s.dataDir, snapshotFileName)
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return err
-	}
-
-	if err := s.truncateWAL(); err != nil {
-		log.Printf("[wal] failed to truncate WAL after snapshot: %v", err)
-	}
-	return nil
+	return f.Close()
 }
 
 func (s *Server) restoreSnapshotData(data snapshotData) {
@@ -935,6 +1081,7 @@ func (s *Server) loadSnapshotFromS3() error {
 	}
 
 	s.restoreSnapshotData(data)
+	s.lastSnapshotUnix.Store(time.Now().Unix())
 	return nil
 }
 
@@ -953,6 +1100,7 @@ func (s *Server) loadSnapshotFromDisk() error {
 	}
 
 	s.restoreSnapshotData(data)
+	s.lastSnapshotUnix.Store(time.Now().Unix())
 	log.Printf("[snapshot] loaded from disk: %d chunks", len(s.chunks))
 	return nil
 }
@@ -981,7 +1129,17 @@ func (s *Server) persistOnShutdown() {
 func (s *Server) periodicSnapshotLoop() {
 	ticker := time.NewTicker(snapshotInterval)
 	defer ticker.Stop()
-	for range ticker.C {
+	var lastAttempt time.Time
+	for {
+		select {
+		case <-ticker.C:
+		case <-s.snapshotSignal:
+			// A failing snapshot would otherwise be retried on every WAL flush.
+			if time.Since(lastAttempt) < minSnapshotSpacing {
+				continue
+			}
+		}
+		lastAttempt = time.Now()
 		var err error
 		if s.useS3 {
 			err = s.saveSnapshotToS3()

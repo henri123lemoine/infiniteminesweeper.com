@@ -183,17 +183,18 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		s.players[sid] = make(map[*Player]struct{})
 	}
 	player := &Player{
-		ID:          sid,
-		Conn:        conn,
-		Send:        make(chan []byte, SendBufSize),
-		Mailbox:     make(chan func(*Player), 64),
-		TokenBucket: TokenBucket{tokens: 200},
-		IP:          ip,
-		Name:        "", // no identity in spectator mode
-		FlagID:      0,
-		Score:       0,
-		State:       ClientStateSpectator, // FSM: start in spectator state
-		done:        make(chan struct{}),
+		ID:           sid,
+		Conn:         conn,
+		Send:         make(chan []byte, SendBufSize),
+		Mailbox:      make(chan func(*Player), 64),
+		TokenBucket:  newTokenBucket(seedRequestBucketCap, seedRequestRefillPer),
+		RevealBucket: newTokenBucket(revealBucketCap, revealRefillPer),
+		IP:           ip,
+		Name:         "", // no identity in spectator mode
+		FlagID:       0,
+		Score:        0,
+		State:        ClientStateSpectator, // FSM: start in spectator state
+		done:         make(chan struct{}),
 	}
 	s.players[sid][player] = struct{}{}
 	s.playersMu.Unlock()
@@ -653,6 +654,11 @@ func (s *Server) readPump(player *Player) {
 				continue
 			}
 			chunkID := ChunkID{X: r.ChunkId.X, Y: r.ChunkId.Y}
+			if s.persistenceFailing() || !player.RevealBucket.take(time.Now()) {
+				// Failed ack so the client rolls back its optimistic update.
+				s.sendRevealAck(player.ID, r.RequestId, false, nil, 0, chunkID, r.Cell)
+				continue
+			}
 
 			// Serialize all actions from this player through the per-player mailbox for ordering.
 			player.Mailbox <- func(*Player) {
