@@ -121,6 +121,10 @@ type Server struct {
 	// threshold. Buffered size 1 + non-blocking send = signals are coalesced
 	// and writers never block.
 	walFlushSignal chan struct{}
+	// Serializes appends and trims of the disk WAL file.
+	walFileMu        sync.Mutex
+	snapshotMu       sync.Mutex
+	lastSnapshotUnix atomic.Int64
 
 	// Gameplay rules
 	// Chebyshev distance for proximity-limited actions (reveal/flag).
