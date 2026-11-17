@@ -249,9 +249,10 @@ func runPurge(args []string, stdout, stderr io.Writer) int {
 	useBans := fs.Bool("banned", false, "also purge every player ID listed in bans.txt and bans-auto.txt")
 	apply := fs.Bool("apply", false, "write the purged snapshot (default: dry run)")
 	out := fs.String("out", "", "output path (default: <data>/"+purgedSnapshotName+")")
-	preview := fs.String("preview", "", "directory to write before/after images of every changed region into")
+	preview := fs.String("preview", "", "directory to write before/after images into: the whole map, plus every changed region in detail")
+	view := fs.String("view", "", "with -preview: chunk rectangle x0,y0,x1,y1 to draw as the map (default: the whole world)")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: run-app purge [-data DIR] [-ids 1,2] [-banned] [-preview DIR] [-apply] [-out PATH]")
+		fmt.Fprintln(stderr, "usage: run-app purge [-data DIR] [-ids 1,2] [-banned] [-preview DIR [-view x0,y0,x1,y1]] [-apply] [-out PATH]")
 		fmt.Fprintln(stderr, "Unreveals the 8x8 blocks the given players revealed entirely alone and removes")
 		fmt.Fprintln(stderr, "their flags and explosion records. Blocks anyone else revealed in are kept.")
 		fs.PrintDefaults()
@@ -325,12 +326,10 @@ func runPurge(args []string, stdout, stderr io.Writer) int {
 	rep := purgePlayers(&data, banned)
 	printPurgeReport(stdout, rep, data.PlayerNames)
 	if *preview != "" {
-		n, err := writePurgePreview(*preview, before, data.Chunks)
-		if err != nil {
+		if err := writePurgePreviews(stdout, *preview, *view, before, data.Chunks); err != nil {
 			fmt.Fprintf(stderr, "preview: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "wrote %d region images (before | after | removed in red) to %s\n", n, *preview)
 	}
 
 	if !*apply {
@@ -344,6 +343,33 @@ func runPurge(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "wrote %s\n", outPath)
 	fmt.Fprintf(stdout, "to use it: stop the server, back up %s, then move the new file over it and restart\n", inPath)
 	return 0
+}
+
+func writePurgePreviews(stdout io.Writer, dir, view string, before, after map[ChunkID]*ChunkBits) error {
+	rect, ok := chunksBounds(before)
+	if !ok {
+		return fmt.Errorf("the snapshot has no chunks to draw")
+	}
+	if view != "" {
+		var err error
+		if rect, err = parseChunkRect(view); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	scale, err := writePurgeMap(dir, before, after, rect)
+	if err != nil {
+		return err
+	}
+	regions, err := writePurgeRegions(dir, before, after)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "wrote map_before.png, map_after.png, map_removed.png (chunks %d,%d to %d,%d; one pixel = %dx%d blocks) and %d region images to %s\n",
+		rect.X0, rect.Y0, rect.X1, rect.Y1, scale, scale, regions, dir)
+	return nil
 }
 
 func envOr(key, fallback string) string {
