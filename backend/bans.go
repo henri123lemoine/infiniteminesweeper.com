@@ -211,21 +211,27 @@ func (s *Server) autoBanIP(ip netip.Addr, reason string) {
 	s.appendAutoBansLocked("evaded "+reason, p.String())
 }
 
-// overHumanRate counts one reveal against the player's allowance. It is keyed
-// by player, not connection, so reconnecting does not refill it.
+type botWatch struct {
+	bucket   TokenBucket
+	lastSeen time.Time
+}
+
+// overHumanRate counts one reveal against the player's allowance and reports
+// whether it is spent. Any pause refills it, so only fast play that never
+// stops gets there. Keyed by player so reconnecting does not refill it.
 func (s *Server) overHumanRate(id uint32, now time.Time) bool {
 	s.botMu.Lock()
 	defer s.botMu.Unlock()
-	tb := s.botBuckets[id]
-	if tb == nil {
-		nb := newTokenBucket(botBucketCap, botRefillPer)
-		tb = &nb
-		if s.botBuckets == nil {
-			s.botBuckets = make(map[uint32]*TokenBucket)
+	w := s.botWatch[id]
+	if w == nil || now.Sub(w.lastSeen) >= botPauseReset {
+		w = &botWatch{bucket: newTokenBucket(botBucketCap, botRefillPer)}
+		if s.botWatch == nil {
+			s.botWatch = make(map[uint32]*botWatch)
 		}
-		s.botBuckets[id] = tb
+		s.botWatch[id] = w
 	}
-	return !tb.take(now)
+	w.lastSeen = now
+	return !w.bucket.take(now)
 }
 
 // banBot bans the player and the address they played from. The ID alone is
