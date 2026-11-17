@@ -162,6 +162,10 @@ type Server struct {
 
 	banned    atomic.Pointer[banList]
 	banFileMu sync.Mutex
+	autoBans  atomic.Uint64
+
+	botMu      sync.Mutex
+	botBuckets map[uint32]*TokenBucket
 }
 
 func NewServer() *Server {

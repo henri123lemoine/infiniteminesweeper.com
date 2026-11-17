@@ -158,10 +158,49 @@ func (s *Server) loadBansLocked() error {
 	return nil
 }
 
-// autoBanIP bans the address a banned identity just showed up from. IPv6
-// clients rotate within their /64, so the whole /64 goes.
-func (s *Server) autoBanIP(ip netip.Addr, reason string) {
+// ipBanPrefix is the range to ban for an address. IPv6 clients rotate within
+// their /64, so the whole /64 goes.
+func ipBanPrefix(ip netip.Addr) (netip.Prefix, bool) {
 	if !ip.IsValid() || ip.IsLoopback() {
+		return netip.Prefix{}, false
+	}
+	bits := 32
+	if ip.Is6() {
+		bits = 64
+	}
+	p, err := ip.Prefix(bits)
+	return p, err == nil
+}
+
+// appendAutoBansLocked requires banFileMu.
+func (s *Server) appendAutoBansLocked(note string, entries ...string) {
+	var lines strings.Builder
+	stamp := time.Now().UTC().Format(time.RFC3339)
+	for _, e := range entries {
+		fmt.Fprintf(&lines, "%s # %s, %s\n", e, note, stamp)
+	}
+	f, err := os.OpenFile(filepath.Join(s.dataDir, autoBansFileName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err == nil {
+		_, err = f.WriteString(lines.String())
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil {
+		log.Printf("[bans] auto-ban %v (%s) failed: %v", entries, note, err)
+		return
+	}
+	s.autoBans.Add(uint64(len(entries)))
+	log.Printf("[bans] auto-banned %v (%s)", entries, note)
+	if err := s.loadBansLocked(); err != nil {
+		log.Printf("[bans] reload after auto-ban failed: %v", err)
+	}
+}
+
+// autoBanIP bans the address a banned identity just showed up from.
+func (s *Server) autoBanIP(ip netip.Addr, reason string) {
+	p, ok := ipBanPrefix(ip)
+	if !ok {
 		return
 	}
 	s.banFileMu.Lock()
@@ -169,27 +208,37 @@ func (s *Server) autoBanIP(ip netip.Addr, reason string) {
 	if s.bans().bannedIP(ip) {
 		return
 	}
-	bits := 32
-	if ip.Is6() {
-		bits = 64
+	s.appendAutoBansLocked("evaded "+reason, p.String())
+}
+
+// overHumanRate counts one reveal against the player's allowance. It is keyed
+// by player, not connection, so reconnecting does not refill it.
+func (s *Server) overHumanRate(id uint32, now time.Time) bool {
+	s.botMu.Lock()
+	defer s.botMu.Unlock()
+	tb := s.botBuckets[id]
+	if tb == nil {
+		nb := newTokenBucket(botBucketCap, botRefillPer)
+		tb = &nb
+		if s.botBuckets == nil {
+			s.botBuckets = make(map[uint32]*TokenBucket)
+		}
+		s.botBuckets[id] = tb
 	}
-	p, _ := ip.Prefix(bits)
-	line := fmt.Sprintf("%s # evaded %s, %s\n", p, reason, time.Now().UTC().Format(time.RFC3339))
-	f, err := os.OpenFile(filepath.Join(s.dataDir, autoBansFileName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		log.Printf("[bans] auto-ban %s failed: %v", p, err)
-		return
+	return !tb.take(now)
+}
+
+// banBot bans the player and the address they played from. The ID alone is
+// not enough: a fresh one is a reconnect away.
+func (s *Server) banBot(p *Player) {
+	entries := []string{strconv.FormatUint(uint64(p.ID), 10)}
+	s.banFileMu.Lock()
+	if prefix, ok := ipBanPrefix(p.IP); ok && !s.bans().bannedIP(p.IP) {
+		entries = append(entries, prefix.String())
 	}
-	_, err = f.WriteString(line)
-	f.Close()
-	if err != nil {
-		log.Printf("[bans] auto-ban %s failed: %v", p, err)
-		return
-	}
-	log.Printf("[bans] auto-banned %s (evaded %s)", p, reason)
-	if err := s.loadBansLocked(); err != nil {
-		log.Printf("[bans] reload after auto-ban failed: %v", err)
-	}
+	s.appendAutoBansLocked("bot: sustained reveal rate", entries...)
+	s.banFileMu.Unlock()
+	s.sendBannedAndClose(p)
 }
 
 // checkBan returns the ban entry covering this request: a listed IP, or a
