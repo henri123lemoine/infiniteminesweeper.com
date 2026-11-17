@@ -364,4 +364,42 @@ func TestRunPurgePreviewMarksRemovedBlocks(t *testing.T) {
 	if !lit(0, 0, 0) || lit(1, 0, 0) || !lit(1, 1, 0) {
 		t.Error("before/after panels do not show the bot block vanishing and the other block staying")
 	}
+
+	// The whole-world map spans chunks (0,-5) to (5,0) at one pixel per block.
+	mf, err := os.Open(filepath.Join(out, "map_removed.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mf.Close()
+	m, err := png.Decode(mf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Bounds().Size(); got.X != 6*territoryBlocksSide || got.Y != 6*territoryBlocksSide {
+		t.Errorf("map size = %v, want 48x48", got)
+	}
+	if r, g, _, _ := m.At(0, 5*territoryBlocksSide).RGBA(); r>>8 != 230 || g>>8 != 60 {
+		t.Error("map does not mark the bot block of chunk (0,0) as removed")
+	}
+	for _, name := range []string{"map_before.png", "map_after.png"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Errorf("missing %s: %v", name, err)
+		}
+	}
+
+	if code, _, _ := runPurgeCmd("-data", dir, "-ids", "7", "-preview", out, "-view", "1,2,3"); code == 0 {
+		t.Error("a malformed -view should fail")
+	}
+	small := filepath.Join(dir, "small")
+	if code, _, stderr := runPurgeCmd("-data", dir, "-ids", "7", "-preview", small, "-view", "0,0,0,0"); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	sf, err := os.Open(filepath.Join(small, "map_before.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sf.Close()
+	if cfg, err := png.DecodeConfig(sf); err != nil || cfg.Width != territoryBlocksSide {
+		t.Errorf("-view 0,0,0,0 map width = %d (%v), want %d", cfg.Width, err, territoryBlocksSide)
+	}
 }

@@ -54,7 +54,7 @@ Server-authoritative real-time multiplayer using WebSockets with single-mutex st
 **purge.go** - Offline cleanup of banned players (`run-app purge`)
 
 - Dry run by default; `-apply` writes `snapshot.purged.gob.gz` next to the input and never overwrites it
-- Unreveals only the 8×8 territory blocks a player revealed entirely alone (votes == revealed cells) and drops their flags and explosion records; `-preview DIR` draws before/after maps
+- Unreveals only the 8×8 territory blocks a player revealed entirely alone (votes == revealed cells) and drops their flags and explosion records; `-preview DIR` draws before/after/removed maps of the world (or a `-view` rectangle) and of each changed region
 - Refuses `-apply` while `wal.log` is non-empty (the WAL would replay the reveals back); disk snapshots only
 
 **types.go** - Core types
