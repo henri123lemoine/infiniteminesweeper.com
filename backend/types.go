@@ -131,11 +131,12 @@ const (
 	revealBucketCap = 200
 	revealRefillPer = time.Second / 40
 
-	// Draining this bans the player. Fast humans sustain about 2 reveals/s,
-	// so it takes minutes above 5/s; one click is one message however many
-	// cells it opens.
-	botBucketCap = 600
-	botRefillPer = time.Second / 5
+	// Draining this bans the player: minutes above 5 reveals/s without one
+	// pause. Fast humans sustain about 2/s and stop every few seconds; one
+	// click is one message however many cells it opens.
+	botBucketCap  = 600
+	botRefillPer  = time.Second / 5
+	botPauseReset = 2 * time.Second
 )
 
 func newTokenBucket(capacity int, refillPer time.Duration) TokenBucket {

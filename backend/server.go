@@ -164,8 +164,8 @@ type Server struct {
 	banFileMu sync.Mutex
 	autoBans  atomic.Uint64
 
-	botMu      sync.Mutex
-	botBuckets map[uint32]*TokenBucket
+	botMu    sync.Mutex
+	botWatch map[uint32]*botWatch
 }
 
 func NewServer() *Server {

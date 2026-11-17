@@ -309,18 +309,21 @@ func TestSustainedRevealRateGetsBannedAcrossReconnects(t *testing.T) {
 	}
 }
 
-func TestHumanRevealRateNeverDrainsBotBucket(t *testing.T) {
+func TestOnlyUninterruptedFastPlayIsOverHumanRate(t *testing.T) {
+	srv := &Server{}
 	now := time.Now()
-	tb := newTokenBucket(botBucketCap, botRefillPer)
-	for i := range 4 * 3600 {
-		if !tb.take(now.Add(time.Duration(i) * time.Second / 4)) {
-			t.Fatalf("4 reveals/s drained the bucket after %d reveals", i)
+	const perSecond = 10
+	for i := range perSecond * 3600 {
+		at := now.Add(time.Duration(i) * time.Second / perSecond)
+		at = at.Add(time.Duration(i/(perSecond*60)) * botPauseReset)
+		if srv.overHumanRate(1, at) {
+			t.Fatalf("%d reveals/s with a pause each minute was flagged after %d reveals", perSecond, i)
 		}
 	}
-	for i := range 10 * 180 {
-		if !tb.take(now.Add(time.Hour + time.Duration(i)*time.Second/10)) {
+	for i := range perSecond * 180 {
+		if srv.overHumanRate(2, now.Add(time.Duration(i)*time.Second/perSecond)) {
 			return
 		}
 	}
-	t.Fatal("10 reveals/s for 3 minutes was not caught")
+	t.Fatalf("%d reveals/s for 3 minutes without a pause was not flagged", perSecond)
 }
