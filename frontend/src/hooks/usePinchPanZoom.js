@@ -9,6 +9,7 @@ export function usePinchPanZoom({
   minZoom = 0.1,
   maxZoom = 5,
   dragDelayMs = 150,
+  longPressMs = 200,
   enableRightClick = true,
   useIncrementalPan = false,
   elementRef = null,
@@ -118,7 +119,7 @@ export function usePinchPanZoom({
           const world = getPointToWorld(e.clientX, e.clientY);
           onLongPress(world.x, world.y);
           resetDragState();
-        }, 200);
+        }, longPressMs);
       } else if (e.pointerType === "mouse") {
         dragTimeoutRef.current = setTimeout(() => {
           dragStateRef.current.isDragging = true;
@@ -131,7 +132,7 @@ export function usePinchPanZoom({
 
       e.currentTarget.setPointerCapture(e.pointerId);
     },
-    [getPointToWorld, onLongPress, dragDelayMs]
+    [getPointToWorld, onLongPress, dragDelayMs, longPressMs]
   );
 
   const onPointerMove = useCallback(

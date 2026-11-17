@@ -11,6 +11,8 @@ import { overviewPreviewForView } from "./overviewGeometry.js";
 import { useGameState, CHUNK } from "./useGameState.js";
 import { CanvasRenderer } from "./CanvasRenderer.js";
 import FlagSelector from "./FlagSelector.jsx";
+import SettingsPanel from "./SettingsPanel.jsx";
+import { loadSettings, saveSettings, actionFor } from "./settings.js";
 import { usePinchPanZoom } from "./hooks/usePinchPanZoom.js";
 import { CELL_REVEALED } from "./cellStore.js";
 import { initSprites, getFlagIds, drawSprite } from "./sprites/index.js";
@@ -410,6 +412,11 @@ function App() {
   const [nameInput, setNameInput] = useState(storedName);
   const [hotspotInfo, setHotspotInfo] = useState(null);
   const [activeTab, setActiveTab] = useState("play"); // play | leaderboard | advancements
+  const [settings, setSettings] = useState(loadSettings);
+  const updateSettings = useCallback((next) => {
+    setSettings(next);
+    saveSettings(next);
+  }, []);
   const [showMinimapOverlay, setShowMinimapOverlay] = useState(false);
   const [fullLeaderboard, setFullLeaderboard] = useState(null);
   const [lbLoading, setLbLoading] = useState(false);
@@ -1142,17 +1149,19 @@ function App() {
     onLongPress: (worldX, worldY, isLongPress) => {
       if (!connected) return;
 
-      if (isLongPress === false) {
-        // This was a tap/click - reveal cell or chord
-        const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
-        const isRevealed =
-          (revealedCellsRef.current.get(chunkX, chunkY, cell) &
-            CELL_REVEALED) !==
-          0;
-        handleCellClick(worldX, worldY, false, isRevealed);
-      } else {
-        // This was a right-click or long press - place flag
+      const isTap = isLongPress === false;
+      const { chunkX, chunkY, cell } = worldToChunk(worldX, worldY);
+      const isRevealed =
+        (revealedCellsRef.current.get(chunkX, chunkY, cell) & CELL_REVEALED) !==
+        0;
+      // A plain tap on a number always chords, whichever action taps are mapped to.
+      if (
+        actionFor(isTap, settings.swapClicks) === "flag" &&
+        !(isTap && isRevealed)
+      ) {
         handleCellClick(worldX, worldY, true);
+      } else {
+        handleCellClick(worldX, worldY, false, isRevealed);
       }
 
       // Commit final view
@@ -1165,6 +1174,7 @@ function App() {
     minZoom: 0.1,
     maxZoom: 5,
     dragDelayMs: 150,
+    longPressMs: settings.longPressMs,
   });
 
   // Fetch hotspot metadata (no auto-centering; user must drag to move the camera)
@@ -1385,6 +1395,7 @@ function App() {
                 { k: "leaderboard", label: "Leaderboard" },
                 { k: "minimap", label: "Minimap" },
                 { k: "advancements", label: "Advancements" },
+                { k: "settings", label: "Settings" },
               ].map((t) => (
                 <button
                   key={t.k}
@@ -1464,6 +1475,10 @@ function App() {
                   </div>
                 )}
               </>
+            )}
+
+            {activeTab === "settings" && (
+              <SettingsPanel settings={settings} onChange={updateSettings} />
             )}
 
             {activeTab === "leaderboard" && (

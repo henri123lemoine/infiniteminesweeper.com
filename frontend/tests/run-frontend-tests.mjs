@@ -37,6 +37,7 @@ try {
   execFileSync(process.execPath, [path.join(repoRoot, 'frontend', 'tests', 'cellstore-test.mjs')], { stdio: 'inherit' })
   execFileSync(process.execPath, [path.join(repoRoot, 'frontend', 'tests', 'overview-cache-test.mjs')], { stdio: 'inherit' })
   execFileSync(process.execPath, [path.join(repoRoot, 'frontend', 'tests', 'overview-requests-test.mjs')], { stdio: 'inherit' })
+  execFileSync(process.execPath, [path.join(repoRoot, 'frontend', 'tests', 'settings-test.mjs')], { stdio: 'inherit' })
 } catch {
   process.exitCode = 1
 }
