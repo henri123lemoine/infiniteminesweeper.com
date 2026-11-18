@@ -658,9 +658,9 @@ func (s *Server) readPump(player *Player) {
 			if botBanned {
 				continue
 			}
-			if s.overHumanRate(player.ID, time.Now()) {
+			if run, over := s.overHumanRate(player.ID, time.Now()); over {
 				botBanned = true
-				s.banBot(player)
+				s.banBot(player, run)
 				continue
 			}
 			if s.persistenceFailing() || !player.RevealBucket.take(time.Now()) {
