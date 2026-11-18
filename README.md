@@ -6,6 +6,8 @@ A real-time multiplayer infinite minesweeper game built with Go backend and Reac
 
 Can be played at [infiniteminesweeper.com](https://infiniteminesweeper.com).
 
+Questions, bugs or ideas: email [henri123lemoine@gmail.com](mailto:henri123lemoine@gmail.com).
+
 **No bots.** Automated play on the live site is not allowed: accounts that use bots or scripts are banned and what they revealed is removed. To experiment with a solver, run your own server locally (see Quick Start).
 
 ## Features
