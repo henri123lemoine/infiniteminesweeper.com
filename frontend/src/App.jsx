@@ -1726,6 +1726,9 @@ function App() {
               Website by Henri Lemoine
               <br />
               Art by Johara Goni
+              <br />
+              Contact:{" "}
+              <a href="mailto:henri123lemoine@gmail.com">henri123lemoine@gmail.com</a>
             </div>
           </div>
         )}
