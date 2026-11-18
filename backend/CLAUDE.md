@@ -56,5 +56,6 @@ Server-authoritative real-time multiplayer using WebSockets with single-mutex st
 - Dry run by default; `-apply` writes `snapshot.purged.gob.gz` next to the input and never overwrites it
 - Unreveals only the 8×8 territory blocks a player revealed entirely alone (votes == revealed cells) and drops their flags and explosion records; `-preview DIR` draws before/after/removed maps of the world (or a `-view` rectangle) and of each changed region
 - Refuses `-apply` while `wal.log` is non-empty (the WAL would replay the reveals back); disk snapshots only
+- Applying on the live server (`purge_boot.go`): put player IDs in `<data>/purge.txt` and restart. Boot keeps the pre-purge world as `snapshot.before-purge.gob.gz`, purges, and renames the request to `purge.txt.applied`. `unpurge.txt` with the same IDs puts back exactly what was removed, keeping play since
 
 **types.go** - Core types
