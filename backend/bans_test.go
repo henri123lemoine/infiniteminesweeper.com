@@ -293,7 +293,7 @@ func TestSustainedRevealRateGetsBannedAcrossReconnects(t *testing.T) {
 	if banned {
 		t.Fatalf("banned after only %d reveals", botBucketCap/2)
 	}
-	if _, banned = playAs(t, wsURL, hdr, token, botBucketCap/2+10); !banned {
+	if _, banned = playAs(t, wsURL, hdr, token, botBucketCap/2+150); !banned {
 		t.Fatal("no Banned message after draining the allowance over two connections")
 	}
 	srv.stateMu.RLock()
@@ -309,21 +309,33 @@ func TestSustainedRevealRateGetsBannedAcrossReconnects(t *testing.T) {
 	}
 }
 
-func TestOnlyUninterruptedFastPlayIsOverHumanRate(t *testing.T) {
+func TestOnlyBeyondHumanUninterruptedPlayIsOverHumanRate(t *testing.T) {
 	srv := &Server{}
 	now := time.Now()
-	const perSecond = 10
-	for i := range perSecond * 3600 {
-		at := now.Add(time.Duration(i) * time.Second / perSecond)
-		at = at.Add(time.Duration(i/(perSecond*60)) * botPauseReset)
-		if srv.overHumanRate(1, at) {
-			t.Fatalf("%d reveals/s with a pause each minute was flagged after %d reveals", perSecond, i)
+	// Faster than any human clicks, held for an hour: still not flagged.
+	for i := range 15 * 3600 {
+		if _, over := srv.overHumanRate(1, now.Add(time.Duration(i)*time.Second/15)); over {
+			t.Fatalf("15 reveals/s was flagged after %d reveals", i)
 		}
 	}
-	for i := range perSecond * 180 {
-		if srv.overHumanRate(2, now.Add(time.Duration(i)*time.Second/perSecond)) {
+	// The rate limit's ceiling, but with a pause every minute.
+	for i := range 40 * 600 {
+		at := now.Add(time.Duration(i) * time.Second / 40).Add(time.Duration(i/(40*50)) * botPauseReset)
+		if _, over := srv.overHumanRate(2, at); over {
+			t.Fatalf("40 reveals/s with a pause every 50s was flagged after %d reveals", i)
+		}
+	}
+	for i := range 40 * 90 {
+		at := now.Add(time.Duration(i) * time.Second / 40)
+		if run, over := srv.overHumanRate(3, at); over {
+			if at.Sub(now) < 55*time.Second {
+				t.Fatalf("40 reveals/s flagged after only %v", at.Sub(now))
+			}
+			if !strings.Contains(run, "reveals in 60s") {
+				t.Fatalf("run description = %q", run)
+			}
 			return
 		}
 	}
-	t.Fatalf("%d reveals/s for 3 minutes without a pause was not flagged", perSecond)
+	t.Fatal("40 reveals/s for 90s without a pause was not flagged")
 }

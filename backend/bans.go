@@ -213,36 +213,43 @@ func (s *Server) autoBanIP(ip netip.Addr, reason string) {
 
 type botWatch struct {
 	bucket   TokenBucket
+	started  time.Time
 	lastSeen time.Time
+	reveals  int
 }
 
 // overHumanRate counts one reveal against the player's allowance and reports
-// whether it is spent. Any pause refills it, so only fast play that never
-// stops gets there. Keyed by player so reconnecting does not refill it.
-func (s *Server) overHumanRate(id uint32, now time.Time) bool {
+// whether it is spent, with the run that spent it. Any pause refills it, so
+// only fast play that never stops gets there. Keyed by player so reconnecting
+// does not refill it.
+func (s *Server) overHumanRate(id uint32, now time.Time) (run string, over bool) {
 	s.botMu.Lock()
 	defer s.botMu.Unlock()
 	w := s.botWatch[id]
 	if w == nil || now.Sub(w.lastSeen) >= botPauseReset {
-		w = &botWatch{bucket: newTokenBucket(botBucketCap, botRefillPer)}
+		w = &botWatch{bucket: newTokenBucket(botBucketCap, botRefillPer), started: now}
 		if s.botWatch == nil {
 			s.botWatch = make(map[uint32]*botWatch)
 		}
 		s.botWatch[id] = w
 	}
 	w.lastSeen = now
-	return !w.bucket.take(now)
+	w.reveals++
+	if w.bucket.take(now) {
+		return "", false
+	}
+	return fmt.Sprintf("%d reveals in %.0fs without a %s pause", w.reveals, now.Sub(w.started).Seconds(), botPauseReset), true
 }
 
 // banBot bans the player and the address they played from. The ID alone is
 // not enough: a fresh one is a reconnect away.
-func (s *Server) banBot(p *Player) {
+func (s *Server) banBot(p *Player, run string) {
 	entries := []string{strconv.FormatUint(uint64(p.ID), 10)}
 	s.banFileMu.Lock()
 	if prefix, ok := ipBanPrefix(p.IP); ok && !s.bans().bannedIP(p.IP) {
 		entries = append(entries, prefix.String())
 	}
-	s.appendAutoBansLocked("bot: sustained reveal rate", entries...)
+	s.appendAutoBansLocked("bot: "+run, entries...)
 	s.banFileMu.Unlock()
 	s.sendBannedAndClose(p)
 }

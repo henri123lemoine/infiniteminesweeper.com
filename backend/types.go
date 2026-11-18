@@ -131,11 +131,12 @@ const (
 	revealBucketCap = 200
 	revealRefillPer = time.Second / 40
 
-	// Draining this bans the player: minutes above 5 reveals/s without one
-	// pause. Fast humans sustain about 2/s and stop every few seconds; one
-	// click is one message however many cells it opens.
-	botBucketCap  = 600
-	botRefillPer  = time.Second / 5
+	// Draining this bans the player: a minute or more above 20 reveals/s
+	// without one pause. The fastest human clicking on record is under that
+	// even for a few seconds, and it is not aimed at a new cell each time.
+	// One click is one message however many cells it opens.
+	botBucketCap  = 1200
+	botRefillPer  = time.Second / 20
 	botPauseReset = 2 * time.Second
 )
 
