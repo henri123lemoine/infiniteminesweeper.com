@@ -400,6 +400,7 @@ const banPageHTML = `<!doctype html>
   main { max-width: 34em; }
   h1 { font-size: 1.6em; margin: 0 0 .6em; }
   p { margin: 0 0 1em; color: #c4c4c4; }
+  a { color: #8ab4f8; }
 </style>
 </head>
 <body>
@@ -407,6 +408,7 @@ const banPageHTML = `<!doctype html>
   <h1>You've been banned</h1>
   <p>Infinite Minesweeper is a personal project. It runs on servers I pay for with my own money.</p>
   <p>Bots and automated play are not allowed. This account, browser, and network have been banned for using them.</p>
+  <p>If you think this is a mistake, email <a href="mailto:henri123lemoine@gmail.com">henri123lemoine@gmail.com</a>.</p>
 </main>
 </body>
 </html>
