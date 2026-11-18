@@ -775,6 +775,7 @@ func (s *Server) initPersistence() {
 				log.Printf("[wal] failed to replay WAL: %v", err)
 			} else {
 				log.Printf("[wal] successfully replayed WAL")
+				s.applyPurgeRequests()
 				s.logStartupSummary("boot (disk, snapshot + WAL)")
 			}
 		}
